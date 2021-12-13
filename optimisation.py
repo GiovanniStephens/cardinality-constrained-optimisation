@@ -55,6 +55,23 @@ def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     return log_returns
 
 
+# Function to run cardinality constrained optimisation.
+    # i.e., it needs to find a subset of stocks that will 
+    # maximise the Sharpe ratio subject to a max number of stocks.
+        # Being a combinatorial problem, I could try a number of 
+        # different algorithms for this: 
+            # Branch and cut to get the exact solution. 
+            # With just 5-stock portfolios and 279 stocks, the number of
+            # combinations is 279 choose 5 = 13.589 billion.
+            # I could try a genetic algorithm to find the best solution.
+            # I could try a simulated annealing algorithm to find the best
+            # solution. Maybe a combination of the two.
+            # Particle swarm optimization or another natural selection 
+            # algorithm could also work. Worth checking the speed of each.   
+
+
+# Main function to run the program.
+
 if __name__ == '__main__':
     prices_df = load_data('ETF_Prices.csv')
     prices_df = prices_df.drop(prices_df.columns[0], axis=1)
