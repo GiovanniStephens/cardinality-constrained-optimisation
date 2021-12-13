@@ -3,7 +3,7 @@ import pandas as pd
 import scipy.optimize as opt
 
 
-def sharpe_ratio(weights, returns):
+def sharpe_ratio(weights: np.array, returns: pd.DataFrame) -> float:
     """
     Calculates the Sharpe ratio of a portfolio.
 
@@ -16,7 +16,7 @@ def sharpe_ratio(weights, returns):
     return -p_returns/p_volatility
 
 
-def load_data(filename):
+def load_data(filename: str) -> pd.DataFrame:
     """
     Loads the data from a CSV file.
 
@@ -26,7 +26,8 @@ def load_data(filename):
     return pd.read_csv(filename)
 
 
-def optimize(data, initial_weights):
+def optimize(data: pd.DataFrame, initial_weights: np.array,
+             max_weight: float=0.5) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -35,14 +36,13 @@ def optimize(data, initial_weights):
     :return: numpy array of optimized weights.
     """
     cons = ({'type': 'eq', 'fun': lambda x: 1 - np.sum(x)})
-    bounds = tuple((0, 0.5) for x in range(len(initial_weights)))
+    bounds = tuple((0, max_weight) for x in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio, initial_weights, args=(data),
                        method='SLSQP', bounds=bounds, constraints=cons)
-    print(sol)
-    return sol['fun']
+    return -sol['fun']
 
 
-def calculate_returns(data):
+def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates the log returns of the data.
 
