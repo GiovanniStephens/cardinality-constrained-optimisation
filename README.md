@@ -17,3 +17,9 @@ The objective function is defined as:
 obj = E(R)/Std(R)
 
 where E(R) is the stock's expected return and Std(R) is the standard deviation of the returns.
+
+# Plan
+
+I want to be able to solve the cardinality constrained problem quickly, so an approximate solution like evolutionalry or particle swarm algorithms could be used. An alternative would be to use mixed integer programming to solve the problem, but I have not been able to work out how to do that yet. 
+
+First, I am going to try create a genetic algorithm, and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see!
