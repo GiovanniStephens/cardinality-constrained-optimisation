@@ -26,8 +26,42 @@ def load_data(filename):
     return pd.read_csv(filename)
 
 
-if __name__ == '__main__':
-    # Load the data
-    data = load_data('ETF_Prices.csv')
+def optimize(data, initial_weights):
+    """
+    Optimizes the portfolio using the Sharpe ratio.
 
-    print(data.head())
+    :data: pandas dataframe of the data.
+    :initial_weights: numpy array of initial weights.
+    :return: numpy array of optimized weights.
+    """
+    cons = ({'type': 'eq', 'fun': lambda x: 1 - np.sum(x)})
+    bounds = tuple((0, 0.5) for x in range(len(initial_weights)))
+    sol = opt.minimize(sharpe_ratio, initial_weights, args=(data),
+                       method='SLSQP', bounds=bounds, constraints=cons)
+    print(sol)
+    return sol['fun']
+
+
+def calculate_returns(data):
+    """
+    Calculates the log returns of the data.
+
+    :data: pandas dataframe of the data.
+    :return: pandas dataframe of the log returns.
+    """
+    log_returns = np.log(data/data.shift(1))
+    log_returns = log_returns.dropna()
+    log_returns = log_returns.replace([np.inf, -np.inf], 0)
+    return log_returns
+
+
+if __name__ == '__main__':
+    prices_df = load_data('ETF_Prices.csv')
+    prices_df = prices_df.drop(prices_df.columns[0], axis=1)
+    log_returns = calculate_returns(prices_df)
+    num_holdings = 50
+    weights = np.array(np.random.random(j))
+    weights = weights/np.sum(weights)
+    starting_ticker_index = 50
+    sol = optimize(log_returns.iloc[:,starting_ticker_index:starting_ticker_index+num_holdings], weights)
+    print(sol)
