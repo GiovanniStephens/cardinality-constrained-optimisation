@@ -29,7 +29,7 @@ def load_data(filename: str) -> pd.DataFrame:
 
 
 def optimize(data: pd.DataFrame, initial_weights: np.array,
-             max_weight: float=0.5) -> float:
+             max_weight: float=0.9) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -71,7 +71,7 @@ def fitness(individual, data):
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool),:]
         fitness = optimize(subset.transpose(), random_weights)
-    print(fitness)
+    # print(fitness)
     return fitness
 
 
@@ -84,7 +84,7 @@ def mutate(individual):
     """
     mutate_index = np.random.randint(0, len(individual))
     if individual[mutate_index] == 0:
-        individual[mutate_index] = np.random.binomial(1,0.5)
+        individual[mutate_index] = np.random.binomial(1,0.8)
     else:
         individual[mutate_index] = 0
 
@@ -95,10 +95,10 @@ def create_individual(data):
 
 def cardinality_constrained_optimisation(data: pd.DataFrame):
     ga = pyeasyga.GeneticAlgorithm(data.transpose(),
-                                   population_size=2000,
-                                   generations=50,
+                                   population_size=1000,
+                                   generations=3,
                                    crossover_probability=0.85,
-                                   mutation_probability=0.9,
+                                   mutation_probability=0.1,
                                    elitism=True,
                                    maximise_fitness=True)
     ga.fitness_function = fitness
@@ -113,4 +113,6 @@ if __name__ == '__main__':
     prices_df = prices_df.drop(prices_df.columns[0], axis=1)
     log_returns = calculate_returns(prices_df)
     best_individual = cardinality_constrained_optimisation(log_returns)
-    print(best_individual)
+    print(best_individual[0])
+    print(prices_df.iloc[:,np.array(best_individual[1]).astype(bool)].columns)
+    # print(best_individual)
