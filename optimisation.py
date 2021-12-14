@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import scipy.optimize as opt
+from pyeasyga import pyeasyga
 
+MAX_NUM_STOCKS = 10
 
 def sharpe_ratio(weights: np.array, returns: pd.DataFrame) -> float:
     """
@@ -55,30 +57,60 @@ def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     return log_returns
 
 
-# Function to run cardinality constrained optimisation.
-    # i.e., it needs to find a subset of stocks that will 
-    # maximise the Sharpe ratio subject to a max number of stocks.
-        # Being a combinatorial problem, I could try a number of 
-        # different algorithms for this: 
-            # Branch and cut to get the exact solution. 
-            # With just 5-stock portfolios and 279 stocks, the number of
-            # combinations is 279 choose 5 = 13.589 billion.
-            # I could try a genetic algorithm to find the best solution.
-            # I could try a simulated annealing algorithm to find the best
-            # solution. Maybe a combination of the two.
-            # Particle swarm optimization or another natural selection 
-            # algorithm could also work. Worth checking the speed of each.   
+def fitness(individual, data):
+    """
+    Fitness function for the genetic algorithm.
+
+    :individual: binary array.
+    :data: pandas dataframe of the data.
+    :return: float of the fitness (i.e. Sharpe Ratio)
+    """
+    fitness = 0
+    if individual.count(1) <= MAX_NUM_STOCKS:
+        random_weights = np.random.random(individual.count(1))
+        random_weights /= np.sum(random_weights)
+        subset = data.iloc[np.array(individual).astype(bool),:]
+        fitness = optimize(subset.transpose(), random_weights)
+    print(fitness)
+    return fitness
 
 
-# Main function to run the program.
+def mutate(individual):
+    """
+    Mutates a random bit in an individual.
+
+    :individual: numpy array of weights.
+    :return: numpy array of mutated weights.
+    """
+    mutate_index = np.random.randint(0, len(individual))
+    if individual[mutate_index] == 0:
+        individual[mutate_index] = np.random.binomial(1,0.5)
+    else:
+        individual[mutate_index] = 0
+
+
+def create_individual(data):
+    return [np.random.binomial(1,0.05) for _ in range(len(data))]
+
+
+def cardinality_constrained_optimisation(data: pd.DataFrame):
+    ga = pyeasyga.GeneticAlgorithm(data.transpose(),
+                                   population_size=2000,
+                                   generations=50,
+                                   crossover_probability=0.85,
+                                   mutation_probability=0.9,
+                                   elitism=True,
+                                   maximise_fitness=True)
+    ga.fitness_function = fitness
+    ga.mutate_function = mutate
+    ga.create_individual = create_individual
+    ga.run()
+    return ga.best_individual()
+
 
 if __name__ == '__main__':
     prices_df = load_data('ETF_Prices.csv')
     prices_df = prices_df.drop(prices_df.columns[0], axis=1)
     log_returns = calculate_returns(prices_df)
-    num_holdings = 50
-    weights = np.array(np.random.random(j))
-    weights = weights/np.sum(weights)
-    starting_ticker_index = 50
-    sol = optimize(log_returns.iloc[:,starting_ticker_index:starting_ticker_index+num_holdings], weights)
-    print(sol)
+    best_individual = cardinality_constrained_optimisation(log_returns)
+    print(best_individual)
