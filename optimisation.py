@@ -5,6 +5,7 @@ from pyeasyga import pyeasyga
 
 MAX_NUM_STOCKS = 10
 
+
 def sharpe_ratio(weights: np.array, returns: pd.DataFrame) -> float:
     """
     Calculates the Sharpe ratio of a portfolio.
@@ -14,13 +15,15 @@ def sharpe_ratio(weights: np.array, returns: pd.DataFrame) -> float:
     :return: float of the negative Sharpe ratio.
     """
     p_returns = np.sum((returns.mean()*weights*252))
-    p_volatility = np.sqrt(np.dot(weights.T, np.dot(returns.cov()*252, weights)))
+    p_volatility = np.sqrt(np.dot(weights.T,
+                                  np.dot(returns.cov()*252,
+                                         weights)))
     return -p_returns/p_volatility
 
 
 def load_data(filename: str) -> pd.DataFrame:
     """
-    Loads the data from a CSV file.
+    Loads the data from a CSV file in the local directory.
 
     :filename: string of the filename.
     :return: pandas dataframe of the data.
@@ -29,12 +32,13 @@ def load_data(filename: str) -> pd.DataFrame:
 
 
 def optimize(data: pd.DataFrame, initial_weights: np.array,
-             max_weight: float=0.3333) -> float:
+             max_weight: float = 0.3333) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
-    :data: pandas dataframe of the data.
+    :data: pandas dataframe of the log returns data.
     :initial_weights: numpy array of initial weights.
+    :max_weight: float of the maximum weight of any single stock.
     :return: numpy array of optimized weights.
     """
     cons = ({'type': 'eq', 'fun': lambda x: 1 - np.sum(x)})
@@ -47,6 +51,7 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
 def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     """
     Calculates the log returns of the data.
+    (Note that it replaces inf returns with 0.)
 
     :data: pandas dataframe of the data.
     :return: pandas dataframe of the log returns.
@@ -62,16 +67,15 @@ def fitness(individual, data):
     Fitness function for the genetic algorithm.
 
     :individual: binary array.
-    :data: pandas dataframe of the data.
+    :data: pandas dataframe of the returns data.
     :return: float of the fitness (i.e. Sharpe Ratio)
     """
     fitness = 0
     if individual.count(1) <= MAX_NUM_STOCKS and individual.count(1) > 1:
         random_weights = np.random.random(individual.count(1))
         random_weights /= np.sum(random_weights)
-        subset = data.iloc[np.array(individual).astype(bool),:]
+        subset = data.iloc[np.array(individual).astype(bool), :]
         fitness = optimize(subset.transpose(), random_weights, max_weight=0.2)
-    # print(fitness)
     return fitness
 
 
@@ -84,16 +88,31 @@ def mutate(individual):
     """
     mutate_index = np.random.randint(0, len(individual))
     if individual[mutate_index] == 0:
-        individual[mutate_index] = np.random.binomial(1,0.8)
+        individual[mutate_index] = np.random.binomial(1, 0.8)
     else:
         individual[mutate_index] = 0
 
 
 def create_individual(data):
-    return [np.random.binomial(1,0.05) for _ in range(len(data))]
+    """
+    Creates an individual.
+
+    :data: pandas dataframe of the returns data.
+    :return: a binary array of the individual.
+    """
+    individual = np.zeros(data.shape[0])
+    for i in range(len(individual)):
+        individual[i] = np.random.binomial(1, 0.5)
+    return individual
 
 
 def cardinality_constrained_optimisation(data: pd.DataFrame):
+    """
+    Performs the cardinality constrained optimisation.
+
+    :data: pandas dataframe of the returns data.
+    :return: the best Sharpe Ratio and the individual (portfolio).
+    """
     ga = pyeasyga.GeneticAlgorithm(data.transpose(),
                                    population_size=200,
                                    generations=8,
@@ -116,5 +135,5 @@ if __name__ == '__main__':
     log_returns = calculate_returns(prices_df)
     best_individual = cardinality_constrained_optimisation(log_returns)
     print(best_individual[0])
-    print(prices_df.iloc[:,np.array(best_individual[1]).astype(bool)].columns)
+    print(prices_df.iloc[:, np.array(best_individual[1]).astype(bool)].columns)
     # print(best_individual)
