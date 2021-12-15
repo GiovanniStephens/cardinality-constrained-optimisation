@@ -3,13 +3,13 @@ import numpy as np
 import yfinance as yf
 
 
-def load_etfs() -> pd.DataFrame:
+def load_etfs(filename: str) -> pd.DataFrame:
     """
     Loads the list of ETFs from my local file.
 
     :returns: list of ETFs as a pandas DataFrame 
     """
-    etfs = pd.read_csv('ETFs.csv')
+    etfs = pd.read_csv(filename)
     return etfs
 
 
@@ -40,7 +40,7 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
-    etfs = load_etfs()
+    etfs = load_etfs('ETFs.csv')
     prices = download_data(etfs)
     save_to_csv(prices, 'ETF_Prices.csv')
 
