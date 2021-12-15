@@ -14,11 +14,11 @@ Lastly, if the user wants, he/she should be able to specify a minimum expected r
 
 I want to constrain the number of stocks that can be held in the portfolio so that transaction costs and the effort to rebalance the portfolio is manageable. The other reason for this is that the optimisation relys on a variance-covariance matrix that needs at least T = N time series obseravtions else the variance-covariance matrix cannot be invertible. 
 
-So, for a universe of 500 stocks, I would need at least 500 (2 years worth of ) observations to be able to acturately estimate the variance-covariance matrix. This poses a challenge when trying to pick an optimal portfolio from a universe of 500+ stocks. 
+So, for a universe of 500 stocks, I would need at least 500 (2 years worth of daily) observations to be able to acturately estimate the variance-covariance matrix. This poses a challenge when trying to pick an optimal portfolio from a universe of 500+ stocks. 
 
-In terms of ETFs, I have a set of around 1700 that I would like to pick from. So constraining the portfolio to a maximum number of ETFs is a necessary constraint.
+In terms of ETFs, I have a set of around 1700+ that I would like to pick from. So constraining the portfolio to a maximum number of ETFs is a necessary constraint.
 
-## Implcit Assumptions
+## Implicit Assumptions
 
 When running a mean-variance optimisation, it is assumed implicitly that the variance-covariance structure of the portfolio will remain constant. The same goes for the expected returns. 
 
