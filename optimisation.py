@@ -29,7 +29,7 @@ def load_data(filename: str) -> pd.DataFrame:
 
 
 def optimize(data: pd.DataFrame, initial_weights: np.array,
-             max_weight: float=0.9) -> float:
+             max_weight: float=0.3333) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -66,11 +66,11 @@ def fitness(individual, data):
     :return: float of the fitness (i.e. Sharpe Ratio)
     """
     fitness = 0
-    if individual.count(1) <= MAX_NUM_STOCKS:
+    if individual.count(1) <= MAX_NUM_STOCKS and individual.count(1) > 1:
         random_weights = np.random.random(individual.count(1))
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool),:]
-        fitness = optimize(subset.transpose(), random_weights)
+        fitness = optimize(subset.transpose(), random_weights, max_weight=0.2)
     # print(fitness)
     return fitness
 
@@ -95,8 +95,8 @@ def create_individual(data):
 
 def cardinality_constrained_optimisation(data: pd.DataFrame):
     ga = pyeasyga.GeneticAlgorithm(data.transpose(),
-                                   population_size=1000,
-                                   generations=3,
+                                   population_size=200,
+                                   generations=8,
                                    crossover_probability=0.85,
                                    mutation_probability=0.1,
                                    elitism=True,
@@ -111,6 +111,8 @@ def cardinality_constrained_optimisation(data: pd.DataFrame):
 if __name__ == '__main__':
     prices_df = load_data('ETF_Prices.csv')
     prices_df = prices_df.drop(prices_df.columns[0], axis=1)
+    # Remove columns with 50% or more null values
+    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
     log_returns = calculate_returns(prices_df)
     best_individual = cardinality_constrained_optimisation(log_returns)
     print(best_individual[0])
