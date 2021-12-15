@@ -38,6 +38,6 @@ An alternative is to use a tail risk objective function. For example conditional
 
 # Plan
 
-I want to be able to solve the cardinality constrained problem quickly, so an approximate solution like evolutionalry or particle swarm algorithms could be used. An alternative would be to use mixed integer programming to solve the problem, but I have not been able to work out how to do that yet. 
+I want to be able to solve the cardinality constrained problem quickly, so an approximate solution like evolutionalry (done) or particle swarm algorithms could be used. An alternative would be to use mixed integer programming to solve the problem, but I have not been able to work out how to do that yet. 
 
-First, I am going to try create a genetic algorithm, and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see. 
+First, I am going to try create a genetic algorithm (done), and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see. 
