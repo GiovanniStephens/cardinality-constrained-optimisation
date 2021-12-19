@@ -46,14 +46,18 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
     expected_returns = data.mean()*252
     cons = ({'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)},
-             {'type': 'eq',
-              'fun': lambda W: target_risk -
-                               np.sqrt(np.dot(W.T,
-                                              np.dot(cov,
-                                                     W)))})
+            {'type': 'eq',
+             'fun': lambda W: target_risk -
+                            np.sqrt(np.dot(W.T,
+                                           np.dot(cov,
+                                                  W)))})
     bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
-    sol = opt.minimize(sharpe_ratio, initial_weights, args=(expected_returns, cov),
-                       method='SLSQP', bounds=bounds, constraints=cons)
+    sol = opt.minimize(sharpe_ratio,
+                       initial_weights,
+                       args=(expected_returns, cov),
+                       method='SLSQP',
+                       bounds=bounds,
+                       constraints=cons)
     return -sol['fun']
 
 
@@ -80,7 +84,8 @@ def fitness(individual, data):
     :return: float of the fitness (i.e. Sharpe Ratio)
     """
     fitness = 0
-    if np.count_nonzero(individual) <= MAX_NUM_STOCKS and np.count_nonzero(individual) > 1:
+    if np.count_nonzero(individual) <= MAX_NUM_STOCKS \
+       and np.count_nonzero(individual) > 1:
         random_weights = np.random.random(np.count_nonzero(individual))
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool), :]
