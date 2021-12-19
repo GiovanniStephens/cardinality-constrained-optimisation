@@ -23,6 +23,7 @@ def set_up_driver():
     options.add_argument("disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-infobars")
+    options.add_argument("--disable-logging")
 
     driver = webdriver.Chrome(chrome_options=options)
     return driver
@@ -115,7 +116,7 @@ def get_ETFs(driver, url):
                                   attrs={'data-th': 'Asset Class'})
     etf_list = []
     for i in range(len(etfs)):
-        etf_list.append({'ETF': etfs[i].text,
+        etf_list.append({'Tickers': etfs[i].text,
                          'Name': etf_names[i].text,
                          'Asset Class': asset_classes[i].text})
     etf_df = pd.DataFrame(etf_list)
@@ -127,9 +128,7 @@ def main():
     Main function.
     """
     etf_df = get_all_ETFs()
-    etf_df.to_csv('etfs.csv', index=False)
-    etf_df = get_all_ETFs()
-    etf_df.to_csv('ETFs.csv')
+    etf_df.to_csv('ETFs.csv', index=False)
 
 
 if __name__ == '__main__':
