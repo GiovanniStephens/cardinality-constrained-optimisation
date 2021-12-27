@@ -21,7 +21,7 @@ def download_data(etfs: pd.DataFrame) -> pd.DataFrame:
     :returns: daily price data for the given list of ETFs.
     """
     tickers = ' '.join(etfs['Tickers'].to_list())
-    prices = yf.download(tickers, period='2y', interval='1d', group_by='ticker')
+    prices = yf.download(tickers, period='3y', interval='1d', group_by='ticker')
     adj_closing_prices = []
     for ticker in etfs['Tickers']:
         adj_closing_prices.append(prices[ticker]['Adj Close'].to_list())
@@ -40,9 +40,9 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
-    etfs = load_etfs('NZ_ETFs.csv')
+    etfs = load_etfs('ETFs.csv')
     prices = download_data(etfs)
-    save_to_csv(prices, 'NZ_ETF_Prices.csv')
+    save_to_csv(prices, 'ETF_Prices.csv')
 
 
 if __name__ == '__main__':
