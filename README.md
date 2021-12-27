@@ -34,7 +34,9 @@ where E(R) is the stock's expected return and Std(R) is the standard deviation o
 
 ## Alternative Objective Function
 
-An alternative is to use a tail risk objective function. For example conditional value at risk (CVaR) or conditional expected shortfall (CES). Although, these functions would likely need to be estimated using numerical estimations. 
+An alternative is to use a tail risk objective function. For example conditional value at risk (CVaR) or conditional expected shortfall (CES). Although, these functions would likely need to be estimated using numerical estimations.
+
+An issue with this alternative function is that it is slow to estimate. It cannot be repeated quickly for thousands of hypothetical portfolios. The Sharpe Ratio is a fast way to gauge whether the portfolio would be any good. 
 
 # Plan
 
@@ -44,6 +46,10 @@ First, I am going to try create a genetic algorithm (done), and then I will try 
 
 Next step will be to create a particle swarm optimisation algorithm to see how it compares to the genetic algorithm for speed and outcome.
 
-Try a different genetic algorithm to see if it is faster.
+Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative).
 
 I want to be able to run the optimisation on forward-looking variances and covariances and forecast returns. I am not sure how I would go about doing this, however. (Food for thought!)
+
+## Forecasting Returns
+
+One approach could be to fit multiple forecasting models to each of the ETFs to get a forecast of the returns. It would be quite slow, so I would need to pre-estimate all of the expected returns ahead of time and then run the optimisation.
