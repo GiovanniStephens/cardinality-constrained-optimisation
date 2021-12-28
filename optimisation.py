@@ -35,25 +35,37 @@ def load_data(filename: str) -> pd.DataFrame:
 
 
 def optimize(data: pd.DataFrame, initial_weights: np.array,
-             target_risk: float = 0.15,
+             target_risk: float = None,
+             target_return: float = None,
              max_weight: float = 0.3333) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
     :data: pandas dataframe of the log returns data.
     :initial_weights: numpy array of initial weights.
+    :target_risk: float of the target risk 
+                  (annualised portfolio standard deviation).
+    :target_return: float of the target return
+                    (annualised portfolio mean return).
     :max_weight: float of the maximum weight of any single stock.
-    :return: numpy array of optimized weights.
+    :return: pcipy optimization result.
     """
     cov = data.cov()*252
     expected_returns = data.mean()*252
     cons = ({'type': 'eq',
-             'fun': lambda x: 1 - np.sum(x)},
+             'fun': lambda x: 1 - np.sum(x)})
+    if target_risk is not None:
+        cons.append(
             {'type': 'eq',
              'fun': lambda W: target_risk -
-                            np.sqrt(np.dot(W.T,
-                                           np.dot(cov,
-                                                  W)))})
+                              np.sqrt(np.dot(W.T,
+                                             np.dot(cov,
+                                                    W)))})
+    if target_return is not None:
+        cons.append(
+            {'type': 'eq',
+             'fun': lambda W: target_return -
+                              np.sum(expected_returns*W)})
     bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio,
                        initial_weights,
@@ -61,7 +73,7 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
                        method='SLSQP',
                        bounds=bounds,
                        constraints=cons)
-    return -sol['fun']
+    return sol
 
 
 def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
@@ -92,7 +104,7 @@ def fitness(individual, data):
         random_weights = np.random.random(np.count_nonzero(individual))
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool), :]
-        fitness = optimize(subset.transpose(), random_weights, max_weight=0.2)
+        fitness = -optimize(subset.transpose(), random_weights, max_weight=0.2)['fun']
     else:
         fitness = -np.count_nonzero(individual)
     return fitness
@@ -194,7 +206,7 @@ def cardinality_constrained_optimisation_2():
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
     ga_instance = pygad.GA(num_generations=25,
-                  initial_population=np.array([create_individual(data) for _ in range(500)]),
+                  initial_population=np.array([create_individual(data) for _ in range(1000)]),
                   num_parents_mating=100,
                 #   sol_per_pop=3000,
                 #   num_genes=data.shape[0],
@@ -221,17 +233,39 @@ def cardinality_constrained_optimisation_2():
 
 
 if __name__ == '__main__':
+    # Load the data
     prices_df = load_data('ETF_Prices.csv')
+    # Drop the first index column
     prices_df = prices_df.drop(prices_df.columns[0], axis=1)
     # Remove columns with 50% or more null values
     prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
     # Fill the null values with the previous day's close price
     prices_df = prices_df.fillna(method='ffill')
+    # Calculate the returns
     log_returns = calculate_returns(prices_df)
+    # Set the global data variable
     data = log_returns.transpose()
+    # Run the cardinality constrained optimisation
     # best_individual = cardinality_constrained_optimisation(log_returns)
     best_individual = cardinality_constrained_optimisation_2()
-    # print(best_individual[0])
+    # Print the portfolio metrics for the best portfolio we could find.
+    best_portfolio_returns = log_returns.iloc[:, np.array(best_individual).astype(bool)]
+    random_weights = np.random.random(np.count_nonzero(best_individual))
+    random_weights /= np.sum(random_weights)
+    sol = optimize(best_portfolio_returns, random_weights)
+    # Print the optimal weights
+    print(sol.x)
+    best_weights = sol['x']
+    # Print the portfolio return
+    print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    cov = best_portfolio_returns.cov()*252
+    risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
+    # Print the portfolio standard deviation
+    print(risk)
+    # Print the Sharpe Ratio
     print(fitness(best_individual, log_returns.T))
-    print(prices_df.iloc[:, np.array(best_individual).astype(bool)].columns)
-    # print(best_individual)
+    # Print the portfolio constituents with their optimal allocations
+    stock_allocations = {ticker: weight for ticker, weight in
+                         zip(prices_df.iloc[:,
+                                            np.array(best_individual).astype(bool)].columns, sol.x)}
+    print(stock_allocations)
