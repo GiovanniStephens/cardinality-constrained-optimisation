@@ -42,14 +42,19 @@ An issue with this alternative function is that it is slow to estimate. It canno
 
 I want to be able to solve the cardinality constrained problem quickly, so an approximate solution like evolutionalry (done) or particle swarm algorithms could be used. An alternative would be to use mixed integer programming to solve the problem, but I have not been able to work out how to do that yet. 
 
-First, I am going to try create a genetic algorithm (done), and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see. 
+First, I am going to try create a genetic algorithm (done), and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see. (done. I used early termination to speed up the process)
 
 Next step will be to create a particle swarm optimisation algorithm to see how it compares to the genetic algorithm for speed and outcome.
 
-Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative).
+Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative). (done)
 
 I want to be able to run the optimisation on forward-looking variances and covariances and forecast returns. I am not sure how I would go about doing this, however. (Food for thought!)
 
 ## Forecasting Returns
 
 One approach could be to fit multiple forecasting models to each of the ETFs to get a forecast of the returns. It would be quite slow, so I would need to pre-estimate all of the expected returns ahead of time and then run the optimisation.
+
+## To do
+
+- [ ] I want to clean out the old genetic algorithm code because the new one is better.
+- [ ] I want to refactor some of the functions to make it cleaner.
