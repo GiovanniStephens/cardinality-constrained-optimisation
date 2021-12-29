@@ -43,7 +43,7 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
 
     :data: pandas dataframe of the log returns data.
     :initial_weights: numpy array of initial weights.
-    :target_risk: float of the target risk 
+    :target_risk: float of the target risk
                   (annualised portfolio standard deviation).
     :target_return: float of the target return
                     (annualised portfolio mean return).
@@ -52,20 +52,20 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
     """
     cov = data.cov()*252
     expected_returns = data.mean()*252
-    cons = ({'type': 'eq',
-             'fun': lambda x: 1 - np.sum(x)})
-    if target_risk is not None:
+    cons = [{'type': 'eq',
+             'fun': lambda x: 1 - np.sum(x)}]
+    if target_risk is not None and target_return is None:
         cons.append(
             {'type': 'eq',
              'fun': lambda W: target_risk -
-                              np.sqrt(np.dot(W.T,
-                                             np.dot(cov,
-                                                    W)))})
-    if target_return is not None:
+                           np.sqrt(np.dot(W.T,
+                                            np.dot(cov,
+                                                   W)))})
+    if target_return is not None and target_risk is None:
         cons.append(
             {'type': 'eq',
              'fun': lambda W: target_return -
-                              np.sum(expected_returns*W)})
+                            np.sum(expected_returns*W)})
     bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio,
                        initial_weights,
@@ -104,7 +104,10 @@ def fitness(individual, data):
         random_weights = np.random.random(np.count_nonzero(individual))
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool), :]
-        fitness = -optimize(subset.transpose(), random_weights, max_weight=0.2)['fun']
+        fitness = -optimize(subset.transpose(),
+                            random_weights,
+                            target_return=0.18,
+                            max_weight=0.2)['fun']
     else:
         fitness = -np.count_nonzero(individual)
     return fitness
@@ -121,20 +124,6 @@ def fitness_2(solution: np.array, solution_idx: int) -> float:
     return fit
 
 
-def mutate(individual):
-    """
-    Mutates a random bit in an individual.
-
-    :individual: numpy array of weights.
-    :return: numpy array of mutated weights.
-    """
-    mutate_index = np.random.randint(0, len(individual))
-    if individual[mutate_index] == 0:
-        individual[mutate_index] = np.random.binomial(1, 0.8)
-    else:
-        individual[mutate_index] = 0
-
-
 def create_individual(data):
     """
     Creates an individual.
@@ -148,43 +137,9 @@ def create_individual(data):
     return individual
 
 
-def crossover(parent_1, parent_2):
-    """
-    Crossover function for the genetic algorithm.
-
-    :parent_1: binary array.
-    :parent_2: binary array.
-    :return: a binary array of the offspring.
-    """
-    crossover_index = np.random.randint(0, len(parent_1))
-    child_1 = np.append(parent_1[:crossover_index], parent_2[crossover_index:])
-    child_2 = np.append(parent_2[crossover_index:], parent_1[:crossover_index])
-    return child_1, child_2
-
-
-def cardinality_constrained_optimisation(data: pd.DataFrame) -> list:
-    """
-    Performs the cardinality constrained optimisation.
-
-    :data: pandas dataframe of the returns data.
-    :return: the best Sharpe Ratio and the individual (portfolio).
-    """
-    ga = pyeasyga.GeneticAlgorithm(data.transpose(),
-                                   population_size=1000,
-                                   generations=3,
-                                   crossover_probability=0.85,
-                                   mutation_probability=0.01,
-                                   elitism=True,
-                                   maximise_fitness=True)
-    ga.fitness_function = fitness
-    ga.mutate_function = mutate
-    ga.create_individual = create_individual
-    ga.crossover_function = crossover
-    ga.run()
-    return ga.best_individual()
-
-
 last_fitness = 0
+
+
 def on_generation(ga_instance: pygad.GA) -> None:
     """
     On each generation in the GA, this function is called.
@@ -192,13 +147,19 @@ def on_generation(ga_instance: pygad.GA) -> None:
     :ga_instance: the GA instance.
     """
     global last_fitness
-    print("Generation = {generation}".format(generation=ga_instance.generations_completed))
-    print("Fitness    = {fitness}".format(fitness=ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]))
-    print("Change     = {change}".format(change=ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1] - last_fitness))
-    last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
+    print("Generation = {generation}".format(generation=
+                                             ga_instance.generations_completed))
+    print("Fitness    = {fitness}".format(fitness=
+                                          ga_instance.best_solution(pop_fitness=
+                                                                    ga_instance.last_generation_fitness)[1]))
+    print("Change     = {change}".format(change=
+                                         ga_instance.best_solution(pop_fitness=
+                                                                   ga_instance.last_generation_fitness)[1] - last_fitness))
+    last_fitness = ga_instance.best_solution(pop_fitness=
+                                             ga_instance.last_generation_fitness)[1]
 
 
-def cardinality_constrained_optimisation_2():
+def cardinality_constrained_optimisation():
     """
     Performs the cardinality constrained optimisation.
 
@@ -223,7 +184,7 @@ def cardinality_constrained_optimisation_2():
                   crossover_probability=0.85,
                   fitness_func=fitness_2,
                   on_generation=on_generation,
-                  stop_criteria='saturate_3')
+                  stop_criteria='saturate_4')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
     print("Parameters of the best solution : {solution}".format(solution=solution))
@@ -246,13 +207,12 @@ if __name__ == '__main__':
     # Set the global data variable
     data = log_returns.transpose()
     # Run the cardinality constrained optimisation
-    # best_individual = cardinality_constrained_optimisation(log_returns)
-    best_individual = cardinality_constrained_optimisation_2()
+    best_individual = cardinality_constrained_optimisation()
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, np.array(best_individual).astype(bool)]
     random_weights = np.random.random(np.count_nonzero(best_individual))
     random_weights /= np.sum(random_weights)
-    sol = optimize(best_portfolio_returns, random_weights)
+    sol = optimize(best_portfolio_returns, random_weights, target_return=0.18, max_weight=0.2)
     # Print the optimal weights
     print(sol.x)
     best_weights = sol['x']
