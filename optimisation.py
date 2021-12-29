@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import scipy.optimize as opt
-from pyeasyga import pyeasyga
 import pygad
 
 
@@ -58,14 +57,14 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
         cons.append(
             {'type': 'eq',
              'fun': lambda W: target_risk -
-                           np.sqrt(np.dot(W.T,
-                                            np.dot(cov,
-                                                   W)))})
+             np.sqrt(np.dot(W.T,
+                            np.dot(cov,
+                                   W)))})
     if target_return is not None and target_risk is None:
         cons.append(
             {'type': 'eq',
              'fun': lambda W: target_return -
-                            np.sum(expected_returns*W)})
+             np.sum(expected_returns*W)})
     bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio,
                        initial_weights,
@@ -147,16 +146,10 @@ def on_generation(ga_instance: pygad.GA) -> None:
     :ga_instance: the GA instance.
     """
     global last_fitness
-    print("Generation = {generation}".format(generation=
-                                             ga_instance.generations_completed))
-    print("Fitness    = {fitness}".format(fitness=
-                                          ga_instance.best_solution(pop_fitness=
-                                                                    ga_instance.last_generation_fitness)[1]))
-    print("Change     = {change}".format(change=
-                                         ga_instance.best_solution(pop_fitness=
-                                                                   ga_instance.last_generation_fitness)[1] - last_fitness))
-    last_fitness = ga_instance.best_solution(pop_fitness=
-                                             ga_instance.last_generation_fitness)[1]
+    print(f"Generation = {ga_instance.generations_completed}")
+    print(f"Fitness    = {ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]}")
+    print(f"Change     = {ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1] - last_fitness}")
+    last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
 
 
 def cardinality_constrained_optimisation():
@@ -167,29 +160,27 @@ def cardinality_constrained_optimisation():
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
     ga_instance = pygad.GA(num_generations=25,
-                  initial_population=np.array([create_individual(data) for _ in range(1000)]),
-                  num_parents_mating=100,
-                #   sol_per_pop=3000,
-                #   num_genes=data.shape[0],
-                  gene_type=int,
-                  init_range_low=0,
-                  init_range_high=2,
-                  mutation_probability=[0.9, 0.7],
-                  parent_selection_type='rank',
-                #   mutation_probability=0.1,
-                  random_mutation_min_val=-1,
-                  random_mutation_max_val=1,
-                  mutation_type="adaptive",
-                  crossover_type="single_point",
-                  crossover_probability=0.85,
-                  fitness_func=fitness_2,
-                  on_generation=on_generation,
-                  stop_criteria='saturate_4')
+                           initial_population=np.array([create_individual(data)
+                                                        for _ in range(1000)]),
+                           num_parents_mating=100,
+                           gene_type=int,
+                           init_range_low=0,
+                           init_range_high=2,
+                           mutation_probability=[0.9, 0.7],
+                           parent_selection_type='rank',
+                           random_mutation_min_val=-1,
+                           random_mutation_max_val=1,
+                           mutation_type="adaptive",
+                           crossover_type="single_point",
+                           crossover_probability=0.85,
+                           fitness_func=fitness_2,
+                           on_generation=on_generation,
+                           stop_criteria='saturate_4')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
-    print("Parameters of the best solution : {solution}".format(solution=solution))
-    print("Fitness value of the best solution = {solution_fitness}".format(solution_fitness=solution_fitness))
-    print("Index of the best solution : {solution_idx}".format(solution_idx=solution_idx))
+    print(f"Parameters of the best solution : {solution}")
+    print(f"Fitness value of the best solution = {solution_fitness}")
+    print(f"Index of the best solution : {solution_idx}")
     return solution
 
 
@@ -212,7 +203,10 @@ if __name__ == '__main__':
     best_portfolio_returns = log_returns.iloc[:, np.array(best_individual).astype(bool)]
     random_weights = np.random.random(np.count_nonzero(best_individual))
     random_weights /= np.sum(random_weights)
-    sol = optimize(best_portfolio_returns, random_weights, target_return=0.18, max_weight=0.2)
+    sol = optimize(best_portfolio_returns,
+                   random_weights,
+                   target_return=0.18,
+                   max_weight=0.2)
     # Print the optimal weights
     print(sol.x)
     best_weights = sol['x']
