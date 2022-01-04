@@ -5,6 +5,10 @@ import pygad
 
 
 MAX_NUM_STOCKS = 10
+TARGET_RETURN = 0.18
+TARGET_RISK = None
+MAX_WEIGHT = 0.2
+last_fitness = 0
 data = None
 
 
@@ -105,8 +109,9 @@ def fitness(individual, data):
         subset = data.iloc[np.array(individual).astype(bool), :]
         fitness = -optimize(subset.transpose(),
                             random_weights,
-                            target_return=0.18,
-                            max_weight=0.2)['fun']
+                            target_return=TARGET_RETURN,
+                            target_risk=TARGET_RISK,
+                            max_weight=MAX_WEIGHT)['fun']
     else:
         fitness = -np.count_nonzero(individual)
     return fitness
@@ -136,9 +141,6 @@ def create_individual(data):
     return individual
 
 
-last_fitness = 0
-
-
 def on_generation(ga_instance: pygad.GA) -> None:
     """
     On each generation in the GA, this function is called.
@@ -152,17 +154,17 @@ def on_generation(ga_instance: pygad.GA) -> None:
     last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
 
 
-def cardinality_constrained_optimisation():
+def cardinality_constrained_optimisation(num_children: int=1000):
     """
     Performs the cardinality constrained optimisation.
 
-    :data: pandas dataframe of the returns data.
+    :num_children: int of the number of children to create.
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
     ga_instance = pygad.GA(num_generations=25,
                            initial_population=np.array([create_individual(data)
-                                                        for _ in range(1000)]),
-                           num_parents_mating=100,
+                                                        for _ in range(num_children)]),
+                           num_parents_mating=num_children//10,
                            gene_type=int,
                            init_range_low=0,
                            init_range_high=2,
@@ -184,6 +186,18 @@ def cardinality_constrained_optimisation():
     return solution
 
 
+def create_portfolio() -> list:
+    """
+    Creates a cardinality constrained portfolio.
+
+    :return: pandas dataframe of the portfolio.
+    """
+    individual = cardinality_constrained_optimisation(num_children=30)
+    indices = np.array(individual).astype(bool)
+    portfolio = data.transpose().iloc[:, indices].columns
+    return portfolio
+
+
 if __name__ == '__main__':
     # Load the data
     prices_df = load_data('ETF_Prices.csv')
@@ -197,30 +211,34 @@ if __name__ == '__main__':
     log_returns = calculate_returns(prices_df)
     # Set the global data variable
     data = log_returns.transpose()
+
+    # Create the portfolio
+    portfolio = create_portfolio()
+    print(f"Portfolio = {portfolio}")
     # Run the cardinality constrained optimisation
-    best_individual = cardinality_constrained_optimisation()
-    indeces = np.array(best_individual).astype(bool)
-    # Print the portfolio metrics for the best portfolio we could find.
-    best_portfolio_returns = log_returns.iloc[:, indeces]
-    random_weights = np.random.random(np.count_nonzero(best_individual))
-    random_weights /= np.sum(random_weights)
-    sol = optimize(best_portfolio_returns,
-                   random_weights,
-                   target_return=0.18,
-                   max_weight=0.2)
-    # Print the optimal weights
-    print(sol.x)
-    best_weights = sol['x']
-    # Print the portfolio return
-    print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
-    cov = best_portfolio_returns.cov()*252
-    risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
-    # Print the portfolio standard deviation
-    print(risk)
-    # Print the Sharpe Ratio
-    print(fitness(best_individual, log_returns.T))
-    # Print the portfolio constituents with their optimal allocations
-    stock_allocations = {ticker: weight for ticker, weight in
-                         zip(prices_df.iloc[:, indeces].columns,
-                             sol.x)}
-    print(stock_allocations)
+    # best_individual = cardinality_constrained_optimisation(100)
+    # indeces = np.array(best_individual).astype(bool)
+    # # Print the portfolio metrics for the best portfolio we could find.
+    # best_portfolio_returns = log_returns.iloc[:, indeces]
+    # random_weights = np.random.random(np.count_nonzero(best_individual))
+    # random_weights /= np.sum(random_weights)
+    # sol = optimize(best_portfolio_returns,
+    #                random_weights,
+    #                target_return=0.18,
+    #                max_weight=0.2)
+    # # Print the optimal weights
+    # print(sol.x)
+    # best_weights = sol['x']
+    # # Print the portfolio return
+    # print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    # cov = best_portfolio_returns.cov()*252
+    # risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
+    # # Print the portfolio standard deviation
+    # print(risk)
+    # # Print the Sharpe Ratio
+    # print(fitness(best_individual, log_returns.T))
+    # # Print the portfolio constituents with their optimal allocations
+    # stock_allocations = {ticker: weight for ticker, weight in
+    #                      zip(prices_df.iloc[:, indeces].columns,
+    #                          sol.x)}
+    # print(stock_allocations)
