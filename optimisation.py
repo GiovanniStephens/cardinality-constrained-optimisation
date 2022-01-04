@@ -199,8 +199,9 @@ if __name__ == '__main__':
     data = log_returns.transpose()
     # Run the cardinality constrained optimisation
     best_individual = cardinality_constrained_optimisation()
+    indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
-    best_portfolio_returns = log_returns.iloc[:, np.array(best_individual).astype(bool)]
+    best_portfolio_returns = log_returns.iloc[:, indeces]
     random_weights = np.random.random(np.count_nonzero(best_individual))
     random_weights /= np.sum(random_weights)
     sol = optimize(best_portfolio_returns,
@@ -220,6 +221,6 @@ if __name__ == '__main__':
     print(fitness(best_individual, log_returns.T))
     # Print the portfolio constituents with their optimal allocations
     stock_allocations = {ticker: weight for ticker, weight in
-                         zip(prices_df.iloc[:,
-                                            np.array(best_individual).astype(bool)].columns, sol.x)}
+                         zip(prices_df.iloc[:, indeces].columns,
+                             sol.x)}
     print(stock_allocations)
