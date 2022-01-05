@@ -34,7 +34,14 @@ def load_data(filename: str) -> pd.DataFrame:
     :filename: string of the filename.
     :return: pandas dataframe of the data.
     """
-    return pd.read_csv(filename)
+    prices_df = pd.read_csv(filename)
+    # Drop the first index column.
+    prices_df = prices_df.drop(prices_df.columns[0], axis=1)
+    # Remove columns with 50% or more null values
+    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
+    # Fill the null values with the previous day's close price
+    prices_df = prices_df.fillna(method='ffill')
+    return prices_df
 
 
 def optimize(data: pd.DataFrame, initial_weights: np.array,
@@ -177,7 +184,7 @@ def cardinality_constrained_optimisation(num_children: int=1000):
                            crossover_probability=0.85,
                            fitness_func=fitness_2,
                            on_generation=on_generation,
-                           stop_criteria='saturate_4')
+                           stop_criteria='saturate_3')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
     print(f"Parameters of the best solution : {solution}")
@@ -186,13 +193,13 @@ def cardinality_constrained_optimisation(num_children: int=1000):
     return solution
 
 
-def create_portfolio() -> list:
+def create_portfolio(num_children=100) -> list:
     """
     Creates a cardinality constrained portfolio.
 
     :return: pandas dataframe of the portfolio.
     """
-    individual = cardinality_constrained_optimisation(num_children=30)
+    individual = cardinality_constrained_optimisation(num_children=num_children)
     indices = np.array(individual).astype(bool)
     portfolio = data.transpose().iloc[:, indices].columns
     return portfolio
@@ -201,44 +208,34 @@ def create_portfolio() -> list:
 if __name__ == '__main__':
     # Load the data
     prices_df = load_data('ETF_Prices.csv')
-    # Drop the first index column
-    prices_df = prices_df.drop(prices_df.columns[0], axis=1)
-    # Remove columns with 50% or more null values
-    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
-    # Fill the null values with the previous day's close price
-    prices_df = prices_df.fillna(method='ffill')
     # Calculate the returns
     log_returns = calculate_returns(prices_df)
     # Set the global data variable
     data = log_returns.transpose()
-
-    # Create the portfolio
-    portfolio = create_portfolio()
-    print(f"Portfolio = {portfolio}")
     # Run the cardinality constrained optimisation
-    # best_individual = cardinality_constrained_optimisation(100)
-    # indeces = np.array(best_individual).astype(bool)
-    # # Print the portfolio metrics for the best portfolio we could find.
-    # best_portfolio_returns = log_returns.iloc[:, indeces]
-    # random_weights = np.random.random(np.count_nonzero(best_individual))
-    # random_weights /= np.sum(random_weights)
-    # sol = optimize(best_portfolio_returns,
-    #                random_weights,
-    #                target_return=0.18,
-    #                max_weight=0.2)
-    # # Print the optimal weights
-    # print(sol.x)
-    # best_weights = sol['x']
-    # # Print the portfolio return
-    # print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
-    # cov = best_portfolio_returns.cov()*252
-    # risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
-    # # Print the portfolio standard deviation
-    # print(risk)
-    # # Print the Sharpe Ratio
-    # print(fitness(best_individual, log_returns.T))
-    # # Print the portfolio constituents with their optimal allocations
-    # stock_allocations = {ticker: weight for ticker, weight in
-    #                      zip(prices_df.iloc[:, indeces].columns,
-    #                          sol.x)}
-    # print(stock_allocations)
+    best_individual = cardinality_constrained_optimisation(100)
+    indeces = np.array(best_individual).astype(bool)
+    # Print the portfolio metrics for the best portfolio we could find.
+    best_portfolio_returns = log_returns.iloc[:, indeces]
+    random_weights = np.random.random(np.count_nonzero(best_individual))
+    random_weights /= np.sum(random_weights)
+    sol = optimize(best_portfolio_returns,
+                   random_weights,
+                   target_return=0.18,
+                   max_weight=0.2)
+    # Print the optimal weights
+    print(sol.x)
+    best_weights = sol['x']
+    # Print the portfolio return
+    print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    cov = best_portfolio_returns.cov()*252
+    risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
+    # Print the portfolio standard deviation
+    print(risk)
+    # Print the Sharpe Ratio
+    print(fitness(best_individual, log_returns.T))
+    # Print the portfolio constituents with their optimal allocations
+    stock_allocations = {ticker: weight for ticker, weight in
+                         zip(prices_df.iloc[:, indeces].columns,
+                             sol.x)}
+    print(stock_allocations)
