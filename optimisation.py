@@ -202,7 +202,7 @@ def create_portfolio(num_children=100) -> list:
     individual = cardinality_constrained_optimisation(num_children=num_children)
     indices = np.array(individual).astype(bool)
     portfolio = data.transpose().iloc[:, indices].columns
-    return portfolio
+    return list(portfolio)
 
 
 if __name__ == '__main__':
