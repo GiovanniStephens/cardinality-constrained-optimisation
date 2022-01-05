@@ -90,3 +90,10 @@ Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/p
 
 - [x] I want to clean out the old genetic algorithm code because the new one is better.
 - [ ] I want to refactor some of the functions to make it cleaner.
+- [ ] Run the backtest on the last year of data.
+    - [ ] Parallellise the creation of cardinality-constrained portfolios.
+    - [ ] Formally test the difference in means of the samples.
+    - [ ] Plot the histograms of the samples.
+- [ ] Update the GA to have a flag about whether we want to print the progress of the GA.
+- [ ] Tidy the backtest code.
+- [ ] Comment the backtest functions.
