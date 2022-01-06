@@ -48,7 +48,7 @@ Next step will be to create a particle swarm optimisation algorithm to see how i
 
 Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative). (done)
 
-I want to be able to run the optimisation on forward-looking variances and covariances and forecast returns. I am not sure how I would go about doing this, however. (Food for thought!)
+Using historical variances, covariances, and mean returns, the average out-of-sample Sharpe Ratio is significantly greater for optimised cardinality-constrained portfolios than for random selections and allocations. Regardless, it would be interesting to see if I can get even better results using forecast average returns and variances with historical covariances.
 
 ## Forecasting Returns
 
@@ -75,7 +75,7 @@ risk-averse behaviour of portfolio investors. The second approach is to project 
 income assuming a link with inflation and/or parity with gross domestic profit." - [A Review of the Methodology of
 Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/pdf_file/0003/2591805/184.pdf)
 
-## Backtest
+# Backtest
 
 To test whether the cardinality-constrained portfolio does any better than a randomly selected portfolio, I will run a backtest. The backtest is conducted as follows:
 1. Create N cardinality-constrained portfolios;
@@ -86,7 +86,7 @@ To test whether the cardinality-constrained portfolio does any better than a ran
 
 The comparison of the groups is done using a one-tailed t-test. It is assumed that the mean of the out-of-sample Sharpe Ratios is normally distributed, random, and independent. The results in the next section show that the cardinality-constrained portfolios are significantly better than the randomly selected portfolios.
 
-### Backtest results
+## Backtest results
 
 Sample size = 100
 
@@ -122,7 +122,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, optimised t-s
 
 Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: 4.390886784250938
 
-## To do
+# To do
 
 - [x] I want to clean out the old genetic algorithm code because the new one is better.
 - [x] I want to refactor some of the functions to make it cleaner.
