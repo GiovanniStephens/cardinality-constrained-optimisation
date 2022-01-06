@@ -2,12 +2,13 @@ import optimisation as op
 import numpy as np
 import multiprocessing as mp
 from multiprocessing import cpu_count
+from matplotlib import pyplot as plt
 
 # This is the backtest sample size.
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 10
+NUM_PORTFOLIOS = 50 
 
 # This is the number of children in the GA.
 NUM_CHILDREN = 100
@@ -25,7 +26,7 @@ data = op.load_data('ETF_Prices.csv')
 
 def get_random_weights(portfolio):
     """
-    Creates a set of random weighting that sum to 1. 
+    Creates a set of random weighting that sum to 1.
 
     :portfolio: Input portfolio to get the length.
     :return: A set of random weights equal in length to the portfolio.
@@ -51,7 +52,7 @@ def optimal_weights(portfolio):
 
 def run_portfolio(portfolio, weights, log_returns):
     """
-    This is the backtest part of the code. 
+    This is the backtest part of the code.
     It takes in a portfolio and weights and returns the portfolio's
     out-of-sample returns performance. This assumes that there
     is not rebalancing in the whole out-of-sample period.
@@ -64,9 +65,13 @@ def run_portfolio(portfolio, weights, log_returns):
     # Run the backtest from the first out-of-sample day
     start_i = op.data.shape[1] + 1
     for i in range(NUM_DAYS_OUT_OF_SAMPLE):
-        portfolio_returns.append(np.sum(weights*log_returns.transpose().loc[portfolio].iloc[:, start_i + i]))
+        subset_returns = log_returns.transpose().loc[portfolio]
+        current_step_returns = subset_returns.iloc[:, start_i+i]
+        weighted_returns = np.sum(current_step_returns*weights)
+        portfolio_returns.append(weighted_returns)
         # update the weights
-        weights = weights*np.exp(log_returns.transpose().loc[portfolio].iloc[:, start_i + i])/(1+portfolio_returns[-1])
+        weights = weights*np.exp(current_step_returns) / \
+            (1+portfolio_returns[-1])
     return portfolio_returns
 
 
@@ -77,8 +82,8 @@ def fitness(portfolio_returns):
     :portfolio_returns: The input portfolio returns. List of floats.
     :return: The fitness of the portfolio.
     """
-    return (np.mean(portfolio_returns)*252)/ \
-           (np.std(portfolio_returns)*np.sqrt(252))
+    return (np.mean(portfolio_returns) * 252) / \
+           (np.std(portfolio_returns) * np.sqrt(252))
 
 
 def create_portfolio(num_children):
@@ -96,7 +101,6 @@ def create_portfolio(num_children):
     return portfolio
 
 
-
 def difference_of_means_hypothesis_test(sample_1, sample_2):
     """
     Calculates the t statistic for the difference of means.
@@ -105,15 +109,17 @@ def difference_of_means_hypothesis_test(sample_1, sample_2):
     :sample_2: The second sample. List of floats.
     :return: The t statistic.
     """
-    return np.abs(np.mean(sample_1) - np.mean(sample_2))/ \
-           np.sqrt(np.var(sample_1)/len(sample_1) + np.var(sample_2)/len(sample_2))    
+    return np.abs(np.mean(sample_1) - np.mean(sample_2)) / \
+        np.sqrt(np.var(sample_1) / len(sample_1) +
+                np.var(sample_2) / len(sample_2))
 
 
 def main():
     # Create a pool of workers
     pool = mp.Pool(processes=NUM_JOBS)
     # Create a list of cardinality-constrained portfolios
-    portfolios = pool.map(create_portfolio, [NUM_CHILDREN]*NUM_PORTFOLIOS)
+    portfolios = pool.map(create_portfolio,
+                          [NUM_CHILDREN]*NUM_PORTFOLIOS)
     # Close the pool and wait for the work to finish
     pool.close()
     pool.join()
@@ -122,36 +128,88 @@ def main():
     log_returns = op.calculate_returns(data)
     op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE-1]
     op.TARGET_RETURN = None
-    random_portfolios = [list(log_returns.iloc[:, op.create_individual(op.data).astype(bool)].columns) for _ in range(NUM_PORTFOLIOS)]
-    
+    indices = op.create_individual(op.data).astype(bool)
+    random_portfolios = [list(log_returns.iloc[:, indices].columns)
+                         for _ in range(NUM_PORTFOLIOS)]
+
     # Create starting allocations for each of the portfolios
-    portfolios_weights = [optimal_weights(portfolio) for portfolio in portfolios]
-    portfolios_random_weights = [get_random_weights(portfolio) for portfolio in portfolios]
-    random_portfolios_weights = [optimal_weights(portfolio) for portfolio in random_portfolios]
-    random_portfolios_random_weights = [get_random_weights(portfolio) for portfolio in random_portfolios]
+    portfolios_weights = [optimal_weights(portfolio)
+                          for portfolio in portfolios]
+    portfolios_random_weights = [get_random_weights(portfolio)
+                                 for portfolio in portfolios]
+    random_portfolios_weights = [optimal_weights(portfolio)
+                                 for portfolio in random_portfolios]
+    random_portfolios_random_weights = [get_random_weights(portfolio)
+                                        for portfolio in random_portfolios]
 
     # Run the backtests for each of the portfolios
-    portfolios_fitness = [fitness(run_portfolio(portfolio, weights, log_returns)) for portfolio, weights in zip(portfolios, portfolios_weights)]
-    portfolios_random_fitness = [fitness(run_portfolio(portfolio, weights, log_returns)) for portfolio, weights in zip(portfolios, portfolios_random_weights)]
-    random_portfolios_fitness = [fitness(run_portfolio(portfolio, weights, log_returns)) for portfolio, weights in zip(random_portfolios, random_portfolios_weights)]
-    random_portfolios_random_fitness = [fitness(run_portfolio(portfolio, weights, log_returns)) for portfolio, weights in zip(random_portfolios, random_portfolios_random_weights)]
+    portfolios_fitness = [fitness(run_portfolio(portfolio,
+                                                weights,
+                                                log_returns))
+                          for portfolio,
+                          weights
+                          in zip(portfolios,
+                                 portfolios_weights)]
+    portfolios_random_fitness = [fitness(run_portfolio(portfolio,
+                                                       weights,
+                                                       log_returns))
+                                 for portfolio,
+                                 weights
+                                 in zip(portfolios,
+                                        portfolios_random_weights)]
+    random_portfolios_fitness = [fitness(run_portfolio(portfolio,
+                                                       weights,
+                                                       log_returns))
+                                 for portfolio,
+                                 weights
+                                 in zip(random_portfolios,
+                                        random_portfolios_weights)]
+    random_portfolios_random_fitness = [fitness(run_portfolio(portfolio,
+                                                              weights,
+                                                              log_returns))
+                                        for portfolio,
+                                        weights
+                                        in zip(random_portfolios,
+                                               random_portfolios_random_weights)]
 
-    print(f'Cardinality-constrained, optimised portfolio mean: {np.array(portfolios_fitness).mean()}')
-    print(f'Cardinality-constrained, optimised portfolio std: {np.array(portfolios_fitness).std()}')
-    print(f'Cardinality-constrained, random weightings portfolio mean: {np.array(portfolios_random_fitness).mean()}')
-    print(f'Cardinality-constrained, random weightings portfolio std: {np.array(portfolios_random_fitness).std()}')
-    print(f'\nRandom selections, optimised portfolio mean: {np.array(random_portfolios_fitness).mean()}')
-    print(f'Random selections, optimised portfolio std: {np.array(random_portfolios_fitness).std()}')
-    print(f'Random selections, random weightings portfolio mean: {np.array(random_portfolios_random_fitness).mean()}')
-    print(f'Random selections, random weightings portfolio std: {np.array(random_portfolios_random_fitness).std()}')
+    print(f'Cardinality-constrained, optimised portfolio mean: \
+          {np.array(portfolios_fitness).mean()}')
+    print(f'Cardinality-constrained, optimised portfolio std: \
+          {np.array(portfolios_fitness).std()}')
+    print(f'Cardinality-constrained, random weightings portfolio mean: \
+          {np.array(portfolios_random_fitness).mean()}')
+    print(f'Cardinality-constrained, random weightings portfolio std: \
+          {np.array(portfolios_random_fitness).std()}')
+    print(f'\nRandom selections, optimised portfolio mean: \
+          {np.array(random_portfolios_fitness).mean()}')
+    print(f'Random selections, optimised portfolio std: \
+          {np.array(random_portfolios_fitness).std()}')
+    print(f'Random selections, random weightings portfolio mean: \
+          {np.array(random_portfolios_random_fitness).mean()}')
+    print(f'Random selections, random weightings portfolio std: \
+          {np.array(random_portfolios_random_fitness).std()}')
 
     # Perform a hypothesis test to see if the difference in means is significant
     print(f'\nCardinality-constrained, optimised portfolio vs. random weightings t-statistic: \
         {difference_of_means_hypothesis_test(portfolios_fitness, portfolios_random_fitness)}')
     print(f'Random selections, optimised portfolio vs. random weightings t-statistic: \
         {difference_of_means_hypothesis_test(random_portfolios_fitness, random_portfolios_random_fitness)}')
-    print(f'Cardinality-constrained, optimised portfolio vs. random selection, optimised: \
+    print(f'Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic: \
         {difference_of_means_hypothesis_test(portfolios_fitness, random_portfolios_fitness)}')
+    print(f'Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: \
+        {difference_of_means_hypothesis_test(portfolios_fitness, random_portfolios_random_fitness)}')
+
+    # Plot histograms of the fitnesses
+    plt.hist(portfolios_fitness, bins=10, label='Optimised')
+    plt.hist(portfolios_random_fitness, bins=10, label='Random weightings')
+    plt.hist(random_portfolios_fitness, bins=10, label='Random selections')
+    plt.hist(random_portfolios_random_fitness, bins=10, label='Random selections, random weightings')
+    plt.legend()
+    plt.xlabel('Fitness')
+    plt.ylabel('Frequency')
+    plt.title('Fitness Distributions')
+    plt.show()
+
 
 
 if __name__ == '__main__':
