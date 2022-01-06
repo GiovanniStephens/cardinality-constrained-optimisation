@@ -161,13 +161,17 @@ def on_generation(ga_instance: pygad.GA) -> None:
     last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
 
 
-def cardinality_constrained_optimisation(num_children: int=1000):
+def cardinality_constrained_optimisation(num_children: int=1000, verbose: bool=False):
     """
     Performs the cardinality constrained optimisation.
 
     :num_children: int of the number of children to create.
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
+    if verbose:
+        on_gen = on_generation
+    else:
+        on_gen = None
     ga_instance = pygad.GA(num_generations=25,
                            initial_population=np.array([create_individual(data)
                                                         for _ in range(num_children)]),
@@ -183,7 +187,7 @@ def cardinality_constrained_optimisation(num_children: int=1000):
                            crossover_type="single_point",
                            crossover_probability=0.85,
                            fitness_func=fitness_2,
-                           on_generation=on_generation,
+                           on_generation=on_gen,
                            stop_criteria='saturate_3')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
@@ -213,7 +217,8 @@ if __name__ == '__main__':
     # Set the global data variable
     data = log_returns.transpose()
     # Run the cardinality constrained optimisation
-    best_individual = cardinality_constrained_optimisation(100)
+    best_individual = cardinality_constrained_optimisation(num_children=100,
+                                                           verbose=True)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, indeces]
