@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 NUM_PORTFOLIOS = 50 
 
 # This is the number of children in the GA.
+# This works best on my computer with a number b/w 1000-2000.
 NUM_CHILDREN = 100
 
 # This is the number of days out of sample for the backtest.
@@ -209,7 +210,6 @@ def main():
     plt.ylabel('Frequency')
     plt.title('Fitness Distributions')
     plt.show()
-
 
 
 if __name__ == '__main__':
