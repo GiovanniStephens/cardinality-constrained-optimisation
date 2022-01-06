@@ -2,11 +2,11 @@
 
 The goal of this optimisation is to find a subset portfolio of N stocks from a universe of M stocks that maximises the Sharpe Ratio. 
 
-The optimisation is constrained by the maximum number of stocks that can be held (i.e. N). 
+The optimisation is constrained by the maximum number of stocks that can be held (i.e. N=10). 
 
-The portfolio weightings is constrained to 1 (i.e. no leverage or cash).
+The sum of the portfolio weightings is constrained to 1 (i.e. no leverage or cash).
 
-Each stock allocation (weighting) is constrained to be between 0 and 1. (i.e. no shorting).
+Each stock allocation (weighting) is constrained to be between 0 and 1 (or a maximum of choice). (i.e. no shorting).
 
 Lastly, if the user wants, he/she should be able to specify a minimum expected return. He/she should also be able to run the optimisation constrained by a maximum level of risk.
 
@@ -50,16 +50,6 @@ Try a different genetic algorithm to see if it is faster. (pyGAD could be a good
 
 I want to be able to run the optimisation on forward-looking variances and covariances and forecast returns. I am not sure how I would go about doing this, however. (Food for thought!)
 
-## Basic Back-Test Plan
-
-One basic validation for the optimisation method is to run and out of sample backtest. This can be done by creating N optimal portfolios optimised on the data 3 and 2 years ago. You can then compare their performance on the last year against N random optimal portfolios, and N random portfolios. 
-
-My initial guess is that the first group of cardinality-constrained optimal portfolios would perform better than the second group of random optimal portfolios. The random selection of ETFs that have been optimally allocated should perform better than just a random allocation with a random selection of ETFs. 
-
-I would need N >= 30 to be able to compare the performance of the two groups, but I would rather it be done on like 100 or 200 portfolios. The issue is that it takes quite a while to run the cardinality-constrained optimisation at this stage. I may have to just create a quick optimal portfolio with fewer GA children per generations and generations. (Hopefully, this still creates better results than the random optimal portfolios). 
-
-The comparison of the 3 groups would be on Sharpe Ratio, which is the training objective function. The average Sharpe ratio for the cardinality-constrained portfolios should should be greater than the random selection of ETFs optimised, and it needs to be statistically significant.
-
 ## Forecasting Returns
 
 One approach could be to fit multiple forecasting models to each of the ETFs to get a forecast of the returns. It would be quite slow, so I would need to pre-estimate all of the expected returns ahead of time and then run the optimisation.
@@ -84,6 +74,17 @@ There was mention of the following things in an initial Google search:
 risk-averse behaviour of portfolio investors. The second approach is to project dividend
 income assuming a link with inflation and/or parity with gross domestic profit." - [A Review of the Methodology of
 Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/pdf_file/0003/2591805/184.pdf)
+
+## Backtest
+
+To test whether the cardinality-constrained portfolio does any better than a randomly selected portfolio, I will run a backtest. The backtest is conducted as follows:
+1. Create N cardinality-constrained portfolios;
+2. Create N randomly selected portfolios;
+3. For each portfolio, create N random set of weightings and N set of optimal weightings;
+4. For each portfolio, run them all forward, out-of-sample with the initial weightings;
+5. Compare the results of the out-of-sample runs for each of the four groups.
+
+The comparison of the groups is done using a one-tailed t-test. It is assumed that the mean of the out-of-sample Sharpe Ratios is normally distributed, random, and independent. The results in the next section show that the cardinality-constrained portfolios are significantly better than the randomly selected portfolios.
 
 ### Backtest results
 
@@ -124,7 +125,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 ## To do
 
 - [x] I want to clean out the old genetic algorithm code because the new one is better.
-- [ ] I want to refactor some of the functions to make it cleaner.
+- [x] I want to refactor some of the functions to make it cleaner.
 - [x] Run the backtest on the last year of data.
     - [x] Parallellise the creation of cardinality-constrained portfolios.
     - [x] Formally test the difference in means of the samples.
