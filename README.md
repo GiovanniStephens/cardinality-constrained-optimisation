@@ -85,6 +85,41 @@ risk-averse behaviour of portfolio investors. The second approach is to project 
 income assuming a link with inflation and/or parity with gross domestic profit." - [A Review of the Methodology of
 Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/pdf_file/0003/2591805/184.pdf)
 
+### Backtest results
+
+Sample size = 100
+
+Number of children per generation = 1000
+
+Number of out-of-sample days = 150
+
+Maximum number of holdings = 10
+
+Maximum weighting per holding = 20%
+
+Cardinality-constrained, optimised portfolio mean: 1.0469363694638476
+
+Cardinality-constrained, optimised portfolio std: 0.5833230941274853
+
+Cardinality-constrained, random weightings portfolio mean: 0.7076622398936138
+
+Cardinality-constrained, random weightings portfolio std: 0.8433489843501207
+
+Random selections, optimised portfolio mean: 0.38039021527564487
+
+Random selections, optimised portfolio std: 0.6119541460273398
+
+Random selections, random weightings portfolio mean: 0.2942966480176118
+
+Random selections, random weightings portfolio std: 0.7356430516803205
+
+Cardinality-constrained, optimised portfolio vs. random weightings t-statistic: 1.8121996564583602
+
+Random selections, optimised portfolio vs. random weightings t-statistic: 0.4927930187163222
+
+Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic: 4.318298361944475
+
+Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: 4.390886784250938
 
 ## To do
 
@@ -94,6 +129,7 @@ Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/p
     - [x] Parallellise the creation of cardinality-constrained portfolios.
     - [x] Formally test the difference in means of the samples.
     - [ ] Plot the histograms of the samples.
-- [ ] Update the GA to have a flag about whether we want to print the progress of the GA.
+- [x] Update the GA to have a flag about whether we want to print the progress of the GA.
 - [x] Tidy the backtest code.
 - [x] Comment the backtest functions.
+
