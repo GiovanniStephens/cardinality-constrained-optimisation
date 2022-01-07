@@ -5,8 +5,8 @@ import pygad
 
 
 MAX_NUM_STOCKS = 10
-TARGET_RETURN = 0.18
-TARGET_RISK = None
+TARGET_RETURN = None
+TARGET_RISK = 0.15
 MAX_WEIGHT = 0.2
 last_fitness = 0
 data = None
@@ -226,8 +226,9 @@ if __name__ == '__main__':
     random_weights /= np.sum(random_weights)
     sol = optimize(best_portfolio_returns,
                    random_weights,
-                   target_return=0.18,
-                   max_weight=0.2)
+                   target_return=TARGET_RETURN,
+                   target_risk=TARGET_RISK,
+                   max_weight=MAX_WEIGHT)
     # Print the optimal weights
     print(sol.x)
     best_weights = sol['x']
