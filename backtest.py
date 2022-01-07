@@ -3,16 +3,17 @@ import numpy as np
 import multiprocessing as mp
 from multiprocessing import cpu_count
 from matplotlib import pyplot as plt
+import seaborn as sns
 
 # This is the backtest sample size.
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 50 
+NUM_PORTFOLIOS = 30 
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
-NUM_CHILDREN = 100
+NUM_CHILDREN = 30
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 150
@@ -48,6 +49,7 @@ def optimal_weights(portfolio):
     random_weights = get_random_weights(portfolio)
     return op.optimize(op.data.loc[portfolio, :].transpose(),
                        random_weights,
+                       target_risk=0.15, # This is here just for a test.
                        max_weight=max(1/len(portfolio), 0.2))['x']
 
 
@@ -129,9 +131,10 @@ def main():
     log_returns = op.calculate_returns(data)
     op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE-1]
     op.TARGET_RETURN = None
-    indices = op.create_individual(op.data).astype(bool)
-    random_portfolios = [list(log_returns.iloc[:, indices].columns)
-                         for _ in range(NUM_PORTFOLIOS)]
+    random_portfolios = []
+    for i in range(NUM_PORTFOLIOS):
+        indices = op.create_individual(op.data).astype(bool)
+        random_portfolios.append(list(log_returns.iloc[:, indices].columns))
 
     # Create starting allocations for each of the portfolios
     portfolios_weights = [optimal_weights(portfolio)
@@ -200,15 +203,28 @@ def main():
     print(f'Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: \
         {difference_of_means_hypothesis_test(portfolios_fitness, random_portfolios_random_fitness)}')
 
-    # Plot histograms of the fitnesses
-    plt.hist(portfolios_fitness, bins=10, label='Optimised')
-    plt.hist(portfolios_random_fitness, bins=10, label='Random weightings')
-    plt.hist(random_portfolios_fitness, bins=10, label='Random selections')
-    plt.hist(random_portfolios_random_fitness, bins=10, label='Random selections, random weightings')
+    # Plot histograms of the fitnesses using seaborn
+    sns.set(style="whitegrid")
+    sns.histplot(portfolios_fitness,
+                 kde=True,
+                 color='orange',
+                 label='Cardinality-constrained, optimised portfolios')
+    sns.histplot(portfolios_random_fitness,
+                 kde=True,
+                 color='blue',
+                 label='Cardinality-constrained, random weightings portfolios')
+    sns.histplot(random_portfolios_fitness,
+                 kde=True,
+                 color='green',
+                 label='Random selections, optimised portfolios')
+    sns.histplot(random_portfolios_random_fitness,
+                 kde=True,
+                 color='red',
+                 label='Random selections, random weightings portfolios')
     plt.legend()
+    plt.title('Fitness Distribution')
     plt.xlabel('Fitness')
-    plt.ylabel('Frequency')
-    plt.title('Fitness Distributions')
+    plt.ylabel('Density')
     plt.show()
 
 
