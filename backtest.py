@@ -9,18 +9,20 @@ import seaborn as sns
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 30 
+NUM_PORTFOLIOS = 100
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
-NUM_CHILDREN = 30
+# Under 50, the GA converges too quickly and the results are
+# equal to a random selection.
+NUM_CHILDREN = 1000
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 150
 
 # Used in the multiprocessing to calculate NUM_PORTFOLIOS
 # cardinality-constrained portfolios.
-NUM_JOBS = cpu_count() - 1
+NUM_JOBS = cpu_count()
 
 # Load the price data.
 data = op.load_data('ETF_Prices.csv')
