@@ -122,6 +122,8 @@ Cardinality-constrained, optimised portfolio vs. random selection, optimised t-s
 
 Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: 4.390886784250938
 
+![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
+
 # To do
 
 - [x] I want to clean out the old genetic algorithm code because the new one is better.
