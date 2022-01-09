@@ -22,7 +22,7 @@ NUM_DAYS_OUT_OF_SAMPLE = 150
 
 # Used in the multiprocessing to calculate NUM_PORTFOLIOS
 # cardinality-constrained portfolios.
-NUM_JOBS = cpu_count()
+NUM_JOBS = cpu_count() - 1
 
 # Load the price data.
 data = op.load_data('ETF_Prices.csv')
