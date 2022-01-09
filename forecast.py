@@ -43,8 +43,8 @@ for ticker in tqdm.tqdm(data.columns):
 
 # Create a covariance matrix with historical covariances, and update the diagonal with forecast vol.
 cov_matrix = log_returns.cov()*252
-for i in range(len(cov_matrix)):
-    cov_matrix[i][i] = volatilities[data.columns[i]]
+for ticker in data.columns:
+    cov_matrix.loc[ticker, ticker] = volatilities[ticker]
 
 # To get a subset covariance matrix e.g.:
 # cov_matrix.loc[['SPY','IVV'], ['SPY','IVV']]
