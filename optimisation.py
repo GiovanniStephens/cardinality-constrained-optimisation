@@ -95,7 +95,7 @@ def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     :return: pandas dataframe of the log returns.
     """
     log_returns = np.log(data/data.shift(1))
-    log_returns = log_returns.dropna()
+    log_returns = log_returns.fillna(0)
     log_returns = log_returns.replace([np.inf, -np.inf], 0)
     return log_returns
 
