@@ -61,8 +61,8 @@ def optimize(data: pd.DataFrame,
     :max_weight: float of the maximum weight of any single stock.
     :return: pcipy optimization result.
     """
-    cov_matrix = cov.loc[data.columns, data.columns]
-    rets = expected_returns.loc[data.columns]
+    cov_matrix = cov.loc[data.columns, data.columns].values
+    rets = expected_returns.loc[data.columns].values
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
     if target_risk is not None and target_return is None:
@@ -168,12 +168,13 @@ def prepare_opt_inputs(use_forecasts: bool) -> None:
 
     :use_forecasts: bool of whether to use forecasts.
     """
+    global cov, expected_returns
     if use_forecasts:
         cov = load_data('cov_matrix.csv')
-        expected_returns = load_data('expected_returns.csv')
+        expected_returns = load_data('expected_returns.csv')['0']
     else:
-        cov = data.cov()*252
-        expected_returns = data.mean()*252
+        cov = data.T.cov()*252
+        expected_returns = data.T.mean()*252
 
 
 def cardinality_constrained_optimisation(num_children: int=1000,
@@ -241,8 +242,9 @@ if __name__ == '__main__':
     # Set the global data variable
     data = log_returns.transpose()
     # Run the cardinality constrained optimisation
-    best_individual = cardinality_constrained_optimisation(num_children=100,
-                                                           verbose=True)
+    best_individual = cardinality_constrained_optimisation(num_children=500,
+                                                           verbose=True,
+                                                           use_forecasts=False)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, indeces]
