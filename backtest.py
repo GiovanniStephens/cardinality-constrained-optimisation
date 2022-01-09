@@ -100,7 +100,7 @@ def create_portfolio(num_children):
     :return: A list of tickers.
     """
     log_returns = op.calculate_returns(data)
-    op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE-1]
+    op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE]
     op.TARGET_RETURN = None
     portfolio = op.create_portfolio(num_children)
     return portfolio
