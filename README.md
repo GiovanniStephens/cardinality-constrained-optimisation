@@ -126,8 +126,9 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 
 # To do
 
-- [ ] Forecast returns using ARIMA models for each ETF.
-- [ ] Forecast variance for each ETF using AR-GARCH models.
-- [ ] Update the optimisation algorithm to use the forecasted returns and variances.
-- [ ] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
+- [x] Forecast returns using ARIMA models for each ETF.
+- [x] Forecast variance for each ETF using AR-GARCH models.
+- [x] Update the optimisation algorithm to use the forecasted returns and variances.
+- [x] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
+- [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
 
