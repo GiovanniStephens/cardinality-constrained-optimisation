@@ -3,36 +3,54 @@ import backtest
 import pmdarima as pmd
 from arch import arch_model
 import numpy as np
+import pandas as pd
+import tqdm
 
-# Forecast returns
-data = op.load_data('ETF_Prices.csv')
+data = op.load_data('ETF_Prices.csv').iloc[:, :3]
 training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
 test_log_returns = op.calculate_returns(data.iloc[-backtest.NUM_DAYS_OUT_OF_SAMPLE:, :])
 
-autoarima_model = pmd.auto_arima(training_data['QQQ'],
-                                 start_p=1,
-                                 start_q=1,
-                                 max_p=3,
-                                 max_q=3,
-                                 seasonal=False,
-                                 trace=True,
-                                 error_action='ignore',
-                                 suppress_warnings=True, 
-                                 n_jobs=-1, 
-                                 stepwise=False)
-
+# Forecast returns
 n_periods = 252
-forecast = autoarima_model.predict(n_periods=n_periods, return_conf_int=False)
-print(autoarima_model.summary())
-print(f'Forecast annualized returns: {np.log(forecast[-1]/forecast[0])}')
+print('Forecasting returns...')
+expected_returns = {}
+for ticker in tqdm.tqdm(data.columns):
+    autoarima_model = pmd.auto_arima(training_data[ticker],
+                                    start_p=1,
+                                    start_q=1,
+                                    max_p=5,
+                                    max_q=5,
+                                    seasonal=False,
+                                    trace=False,
+                                    error_action='ignore',
+                                    suppress_warnings=True, 
+                                    n_jobs=-1, 
+                                    stepwise=False)
+    forecast = autoarima_model.predict(n_periods=n_periods, return_conf_int=False)
+    expected_returns[ticker] = np.log(forecast[-1]/forecast[0])
+expected_returns = pd.DataFrame.from_dict(expected_returns, orient='index')
+expected_returns.to_csv('expected_returns.csv')
 
 # Forecast volatility
-am = arch_model(log_returns['QQQ'], mean='AR', vol="Garch", p=1, o=1, q=1, dist="skewt")
-res = am.fit(disp='off')
-forecast = res.forecast(horizon=n_periods, reindex=False)
-print(f'Forecast annualized volatility: {sum(forecast.variance.iloc[0])}')
+print('\nForecasting volatility...')
+volatilities = {}
+for ticker in tqdm.tqdm(data.columns):
+    am = arch_model(100*log_returns[ticker], vol="Garch", p=1, o=1, q=1, dist="skewt", rescale=False)
+    res = am.fit(disp='off')
+    forecast = res.forecast(horizon=n_periods, reindex=False)
+    volatilities[ticker] = forecast.residual_variance.iloc[-1].mean()/np.power(100,2)*252
 
 # Create a covariance matrix with historical covariances, and update the diagonal with forecast vol.
-cov_matrix = np.cov(log_returns.T)
+cov_matrix = log_returns.cov()*252
+for i in range(len(cov_matrix)):
+    cov_matrix[i][i] = volatilities[data.columns[i]]
 
+# To get a subset covariance matrix e.g.:
+# cov_matrix.loc[['SPY','IVV'], ['SPY','IVV']]
+
+# Save the covariance matrix to a csv
+cov_matrix.to_csv('cov_matrix.csv')
+
+# To load the matrix
+# cov_matrix = pd.read_csv('cov_matrix.csv', index_col=0)
