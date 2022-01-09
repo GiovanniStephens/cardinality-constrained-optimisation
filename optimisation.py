@@ -10,6 +10,8 @@ TARGET_RISK = 0.15
 MAX_WEIGHT = 0.2
 last_fitness = 0
 data = None
+cov = None
+expected_returns = None
 
 
 def sharpe_ratio(weights: np.array, returns: list, cov: list) -> float:
@@ -42,7 +44,8 @@ def load_data(filename: str) -> pd.DataFrame:
     return prices_df
 
 
-def optimize(data: pd.DataFrame, initial_weights: np.array,
+def optimize(data: pd.DataFrame,
+             initial_weights: np.array,
              target_risk: float = None,
              target_return: float = None,
              max_weight: float = 0.3333) -> float:
@@ -58,8 +61,8 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
     :max_weight: float of the maximum weight of any single stock.
     :return: pcipy optimization result.
     """
-    cov = data.cov()*252
-    expected_returns = data.mean()*252
+    cov_matrix = cov.loc[data.columns, data.columns]
+    rets = expected_returns.loc[data.columns]
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
     if target_risk is not None and target_return is None:
@@ -67,17 +70,17 @@ def optimize(data: pd.DataFrame, initial_weights: np.array,
             {'type': 'eq',
              'fun': lambda W: target_risk -
              np.sqrt(np.dot(W.T,
-                            np.dot(cov,
+                            np.dot(cov_matrix,
                                    W)))})
     if target_return is not None and target_risk is None:
         cons.append(
             {'type': 'eq',
              'fun': lambda W: target_return -
-             np.sum(expected_returns*W)})
+             np.sum(rets*W)})
     bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio,
                        initial_weights,
-                       args=(expected_returns, cov),
+                       args=(rets, cov_matrix),
                        method='SLSQP',
                        bounds=bounds,
                        constraints=cons)
@@ -159,17 +162,36 @@ def on_generation(ga_instance: pygad.GA) -> None:
     last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
 
 
-def cardinality_constrained_optimisation(num_children: int=1000, verbose: bool=False):
+def prepare_opt_inputs(use_forecasts: bool) -> None:
+    """
+    Prepares the inputs for the optimisation.
+
+    :use_forecasts: bool of whether to use forecasts.
+    """
+    if use_forecasts:
+        cov = load_data('cov_matrix.csv')
+        expected_returns = load_data('expected_returns.csv')
+    else:
+        cov = data.cov()*252
+        expected_returns = data.mean()*252
+
+
+def cardinality_constrained_optimisation(num_children: int=1000,
+                                         verbose: bool=False,
+                                         use_forecasts: bool=False):
     """
     Performs the cardinality constrained optimisation.
 
     :num_children: int of the number of children to create.
+    :verbose: bool of whether to print the progress.
+    :use_forecasts: bool of whether to use forecasts.
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
     if verbose:
         on_gen = on_generation
     else:
         on_gen = None
+    prepare_opt_inputs(use_forecasts)
     ga_instance = pygad.GA(num_generations=25,
                            initial_population=np.array([create_individual(data)
                                                         for _ in range(num_children)]),
@@ -195,13 +217,17 @@ def cardinality_constrained_optimisation(num_children: int=1000, verbose: bool=F
     return solution
 
 
-def create_portfolio(num_children=100) -> list:
+def create_portfolio(num_children: int = 100,
+                     use_forecasts: bool = False) -> list:
     """
     Creates a cardinality constrained portfolio.
 
+    :num_children: int of the number of children to create.
+    :use_forecasts: bool of whether to use forecasts.
     :return: pandas dataframe of the portfolio.
     """
-    individual = cardinality_constrained_optimisation(num_children=num_children)
+    individual = cardinality_constrained_optimisation(num_children=num_children,
+                                                      use_forecasts=use_forecasts)
     indices = np.array(individual).astype(bool)
     portfolio = data.transpose().iloc[:, indices].columns
     return list(portfolio)
