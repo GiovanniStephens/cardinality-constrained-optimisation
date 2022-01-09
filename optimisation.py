@@ -34,9 +34,7 @@ def load_data(filename: str) -> pd.DataFrame:
     :filename: string of the filename.
     :return: pandas dataframe of the data.
     """
-    prices_df = pd.read_csv(filename)
-    # Drop the first index column.
-    prices_df = prices_df.drop(prices_df.columns[0], axis=1)
+    prices_df = pd.read_csv(filename, index_col=0)
     # Remove columns with 50% or more null values
     prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
     # Fill the null values with the previous day's close price
