@@ -10,7 +10,7 @@ TARGET_RISK = 0.15
 MAX_WEIGHT = 0.2
 last_fitness = 0
 data = None
-cov = None
+variances = None
 expected_returns = None
 
 
@@ -44,6 +44,23 @@ def load_data(filename: str) -> pd.DataFrame:
     return prices_df
 
 
+def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculates the covariance matrix of the data.
+    If there are forecast variances, the covariance
+    matrix gets updated to include them.
+
+    :data: pandas dataframe of the returns data.
+    :return: pandas dataframe of the covariance matrix.
+    """
+    cov_matrix = data.cov()*252
+    # If we have forecast variances, update the cov matrix diagonal.
+    if variances is not None:
+        for ticker in data.columns:
+            cov_matrix.loc[ticker, ticker] = variances.loc[ticker].values
+    return cov_matrix
+
+
 def optimize(data: pd.DataFrame,
              initial_weights: np.array,
              target_risk: float = None,
@@ -61,7 +78,7 @@ def optimize(data: pd.DataFrame,
     :max_weight: float of the maximum weight of any single stock.
     :return: pcipy optimization result.
     """
-    cov_matrix = cov.loc[data.columns, data.columns].values
+    cov_matrix = get_cov_matrix(data)
     rets = expected_returns.loc[data.columns].values
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
@@ -168,12 +185,11 @@ def prepare_opt_inputs(use_forecasts: bool) -> None:
 
     :use_forecasts: bool of whether to use forecasts.
     """
-    global cov, expected_returns
+    global variances, expected_returns
     if use_forecasts:
-        cov = load_data('cov_matrix.csv')
+        variances = load_data('variances.csv')
         expected_returns = load_data('expected_returns.csv')['0']
     else:
-        cov = data.T.cov()*252
         expected_returns = data.T.mean()*252
 
 
@@ -244,7 +260,7 @@ if __name__ == '__main__':
     # Run the cardinality constrained optimisation
     best_individual = cardinality_constrained_optimisation(num_children=500,
                                                            verbose=True,
-                                                           use_forecasts=False)
+                                                           use_forecasts=True)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, indeces]
