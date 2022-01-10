@@ -58,6 +58,8 @@ This approach may be appropriate, though, because I am looking at a huge range o
 
 I am thinking the best approach will be to use univariate forecasting models to get a feel for the returns of each ETF.
 
+For now, I have just used an ARIMA model to forecast returns for each of the ETFS.
+
 ### Long-term Expected Returns Research 
 
 There was mention of the following things in an initial Google search:
@@ -74,6 +76,16 @@ There was mention of the following things in an initial Google search:
 risk-averse behaviour of portfolio investors. The second approach is to project dividend
 income assuming a link with inflation and/or parity with gross domestic profit." - [A Review of the Methodology of
 Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/pdf_file/0003/2591805/184.pdf)
+
+## Forecasting variances
+
+I have been able to forecast variances using a GARCH model; however, I am not too sure about how to incorporate the forecasts into the historical variance-covariance matrix. I have a hunch that just changing the diagonal elements of the covariance matrix does not make any sense.
+
+After I validate that I cannot just update the diagonal elements of the covariance matrix, I will look into forecasting covariances too. I think that there is a lot of research on forecasting the variance-covariance matrix... 
+
+## Forecasting covariances
+
+(To be researched)
 
 # Backtest
 
@@ -130,5 +142,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Forecast variance for each ETF using AR-GARCH models.
 - [x] Update the optimisation algorithm to use the forecasted returns and variances.
 - [x] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
+- [ ] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
+- [ ] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
 - [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
 
