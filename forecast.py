@@ -40,17 +40,5 @@ for ticker in tqdm.tqdm(data.columns):
     res = am.fit(disp='off')
     forecast = res.forecast(horizon=n_periods, reindex=False)
     volatilities[ticker] = forecast.residual_variance.iloc[-1].mean()/np.power(100,2)*252
-
-# Create a covariance matrix with historical covariances, and update the diagonal with forecast vol.
-cov_matrix = log_returns.cov()*252
-for ticker in data.columns:
-    cov_matrix.loc[ticker, ticker] = volatilities[ticker]
-
-# To get a subset covariance matrix e.g.:
-# cov_matrix.loc[['SPY','IVV'], ['SPY','IVV']]
-
-# Save the covariance matrix to a csv
-cov_matrix.to_csv('cov_matrix.csv')
-
-# To load the matrix
-# cov_matrix = pd.read_csv('cov_matrix.csv', index_col=0)
+volatilities = pd.DataFrame.from_dict(volatilities, orient='index')
+volatilities.to_csv('variances.csv')
