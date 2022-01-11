@@ -92,9 +92,11 @@ After I validate that I cannot just update the diagonal elements of the covarian
 
 I think there is a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. That's pretty much what I am planning to do. I just want to check whether replacing the diagonal of a variance-covariance matrix with the forecast variances is the same as the CCC variance-covariance matrix. 
 
-If this is not looking the same, I could look into forecasting the variance-covariance matrix using a GARCH DCC. 
+If this is not looking the same, I could look into forecasting the variance-covariance matrix using a GARCH DCC. DCC models have been pretty heavily criticised as not really correct time-varying correlations. 
 
-Can fitted copulas be used to get a forecast covariance? 
+Fitted copulas can be used to estimate covariance, but it may be a bit slow to compute. 
+
+CCC is probably the fastest, but copulas might give a good result. Worth testing the two against each other. 
 
 # Backtest
 
