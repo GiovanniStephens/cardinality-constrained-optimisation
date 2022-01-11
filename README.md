@@ -83,9 +83,18 @@ I have been able to forecast variances using a GARCH model; however, I am not to
 
 After I validate that I cannot just update the diagonal elements of the covariance matrix, I will look into forecasting covariances too. I think that there is a lot of research on forecasting the variance-covariance matrix... 
 
+
+
 ## Forecasting covariances
 
-(To be researched)
+
+
+
+I think there is a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. That's pretty much what I am planning to do. I just want to check whether replacing the diagonal of a variance-covariance matrix with the forecast variances is the same as the CCC variance-covariance matrix. 
+
+If this is not looking the same, I could look into forecasting the variance-covariance matrix using a GARCH DCC. 
+
+Can fitted copulas be used to get a forecast covariance? 
 
 # Backtest
 
