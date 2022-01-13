@@ -53,11 +53,15 @@ def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
     :data: pandas dataframe of the returns data.
     :return: pandas dataframe of the covariance matrix.
     """
-    cov_matrix = data.cov()*252
-    # If we have forecast variances, update the cov matrix diagonal.
+    # If we have forecast variances, use the forecast variances 
+    # to update the covariance matrix.
     if variances is not None:
-        for ticker in data.columns:
-            cov_matrix.loc[ticker, ticker] = variances.loc[ticker].values
+        D = np.zeros((data.shape[1],data.shape[1]))
+        diag = np.sqrt(variances.loc[data.columns].values)
+        np.fill_diagonal(D, diag)
+        cov_matrix = np.matmul(np.matmul(D, data.corr()), D)
+    else:
+        cov_matrix = data.cov()*252
     return cov_matrix
 
 
