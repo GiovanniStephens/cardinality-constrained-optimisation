@@ -50,6 +50,11 @@ def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
     If there are forecast variances, the covariance
     matrix gets updated to include them.
 
+    (see: Bollerslev, T. (1990). Modelling the Coherence in Short-Run
+    Nominal Exchange Rates: A Multivariate Generalized Arch Model.
+    The Review of Economics and Statistics,
+    72(3), 498–505. https://doi.org/10.2307/2109358)
+
     :data: pandas dataframe of the returns data.
     :return: pandas dataframe of the covariance matrix.
     """
@@ -183,36 +188,37 @@ def on_generation(ga_instance: pygad.GA) -> None:
     last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
 
 
-def prepare_opt_inputs(use_forecasts: bool) -> None:
+def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     """
     Prepares the inputs for the optimisation.
 
     :use_forecasts: bool of whether to use forecasts.
     """
-    global variances, expected_returns
+    print("Preparing optimisation inputs...")
+    global variances, expected_returns, data
     if use_forecasts:
+        data = calculate_returns(prices).transpose()
         variances = load_data('variances.csv')
         expected_returns = load_data('expected_returns.csv')['0']
     else:
+        data = calculate_returns(prices).transpose()
+        variances = None
         expected_returns = data.T.mean()*252
 
 
 def cardinality_constrained_optimisation(num_children: int=1000,
-                                         verbose: bool=False,
-                                         use_forecasts: bool=False):
+                                         verbose: bool=False):
     """
     Performs the cardinality constrained optimisation.
 
     :num_children: int of the number of children to create.
     :verbose: bool of whether to print the progress.
-    :use_forecasts: bool of whether to use forecasts.
     :return: the best Sharpe Ratio and the individual (portfolio).
     """
     if verbose:
         on_gen = on_generation
     else:
         on_gen = None
-    prepare_opt_inputs(use_forecasts)
     ga_instance = pygad.GA(num_generations=25,
                            initial_population=np.array([create_individual(data)
                                                         for _ in range(num_children)]),
@@ -238,17 +244,14 @@ def cardinality_constrained_optimisation(num_children: int=1000,
     return solution
 
 
-def create_portfolio(num_children: int = 100,
-                     use_forecasts: bool = False) -> list:
+def create_portfolio(num_children: int = 100) -> list:
     """
     Creates a cardinality constrained portfolio.
 
     :num_children: int of the number of children to create.
-    :use_forecasts: bool of whether to use forecasts.
     :return: pandas dataframe of the portfolio.
     """
-    individual = cardinality_constrained_optimisation(num_children=num_children,
-                                                      use_forecasts=use_forecasts)
+    individual = cardinality_constrained_optimisation(num_children=num_children)
     indices = np.array(individual).astype(bool)
     portfolio = data.transpose().iloc[:, indices].columns
     return list(portfolio)
@@ -263,8 +266,7 @@ if __name__ == '__main__':
     data = log_returns.transpose()
     # Run the cardinality constrained optimisation
     best_individual = cardinality_constrained_optimisation(num_children=500,
-                                                           verbose=True,
-                                                           use_forecasts=True)
+                                                           verbose=True)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, indeces]
