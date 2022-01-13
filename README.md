@@ -83,12 +83,7 @@ I have been able to forecast variances using a GARCH model; however, I am not to
 
 After I validate that I cannot just update the diagonal elements of the covariance matrix, I will look into forecasting covariances too. I think that there is a lot of research on forecasting the variance-covariance matrix... 
 
-
-
 ## Forecasting covariances
-
-
-
 
 I think there is a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. That's pretty much what I am planning to do. I just want to check whether replacing the diagonal of a variance-covariance matrix with the forecast variances is the same as the CCC variance-covariance matrix. 
 
@@ -153,7 +148,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Forecast variance for each ETF using AR-GARCH models.
 - [x] Update the optimisation algorithm to use the forecasted returns and variances.
 - [x] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
-- [ ] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
-- [ ] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
+- [x] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
+- [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
 - [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
 
