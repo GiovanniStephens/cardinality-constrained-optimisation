@@ -1,8 +1,8 @@
 # Cardinality Constrained Optimisation
 
-The goal of this optimisation is to find a subset portfolio of N stocks from a universe of M stocks that maximises the Sharpe Ratio. 
+The goal of this optimisation is to find a subset portfolio of N stocks from a universe of M stocks that maximises some objective function. The portfolio should test well out-of-sample (i.e. performs well on data the model has not seen yet).
 
-The optimisation is constrained by the maximum number of stocks that can be held (i.e. N=10). 
+The optimisation is constrained by the maximum number of stocks that can be held (e.g. N=10). 
 
 The sum of the portfolio weightings is constrained to 1 (i.e. no leverage or cash).
 
@@ -24,6 +24,8 @@ When running a mean-variance optimisation, it is assumed implicitly that the var
 
 Another assumption is that historical average returns and sample variances and covariances are good estimators for the true (and assumed constant) average returns and variances and covariances. This is a faulty assumption because all three variables change over time. 
 
+To mitigate this, I try to forecast variances and returns and compare to portfolios optimised using historical data.
+
 # Objective Function
 
 The objective function is defined as: 
@@ -35,6 +37,8 @@ where E(R) is the stock's expected return and Std(R) is the standard deviation o
 ## Alternative Objective Function
 
 An alternative is to use a tail risk objective function. For example conditional value at risk (CVaR) or conditional expected shortfall (CES). Although, these functions would likely need to be estimated using numerical estimations.
+
+One way to estimate this value is to simulate the portfolio using a Copula-GARCH model and then taking the ith percentile.
 
 An issue with this alternative function is that it is slow to estimate. It cannot be repeated quickly for thousands of hypothetical portfolios. The Sharpe Ratio is a fast way to gauge whether the portfolio would be any good. 
 
@@ -49,6 +53,10 @@ Next step will be to create a particle swarm optimisation algorithm to see how i
 Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative). (done)
 
 Using historical variances, covariances, and mean returns, the average out-of-sample Sharpe Ratio is significantly greater for optimised cardinality-constrained portfolios than for random selections and allocations. Regardless, it would be interesting to see if I can get even better results using forecast average returns and variances with historical covariances.
+
+I have created the whole model, however, I have not created automated unit tests alogn the way. As a result, I have lost a little of my trust in the model. Next steps are to do a lot of validation and simplificaton of the model.
+
+Additionally, the model is quite slow, so I need to work out how to speed it up further.
 
 ## Forecasting Returns
 
@@ -96,11 +104,12 @@ CCC is probably the fastest, but copulas might give a good result. Worth testing
 # Backtest
 
 To test whether the cardinality-constrained portfolio does any better than a randomly selected portfolio, I will run a backtest. The backtest is conducted as follows:
-1. Create N cardinality-constrained portfolios;
-2. Create N randomly selected portfolios;
-3. For each portfolio, create N random set of weightings and N set of optimal weightings;
-4. For each portfolio, run them all forward, out-of-sample with the initial weightings;
-5. Compare the results of the out-of-sample runs for each of the four groups.
+1. Create N cardinality-constrained portfolios optimised on historical data;
+2. Create N randomly selected portfolios optimised on historical data;
+3. Create N cardinality-constrained portfolios optimised using forecasted data;
+4. For each portfolio, create N random set of weightings and N set of optimal weightings;
+5. For each portfolio, run them all forward, out-of-sample with the initial weightings;
+6. Compare the results of the out-of-sample runs for each of the four groups.
 
 The comparison of the groups is done using a one-tailed t-test. It is assumed that the mean of the out-of-sample Sharpe Ratios is normally distributed, random, and independent. The results in the next section show that the cardinality-constrained portfolios are significantly better than the randomly selected portfolios.
 
@@ -151,4 +160,5 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
 - [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
 - [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
+- [ ] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected. 
 
