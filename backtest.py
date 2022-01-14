@@ -9,20 +9,20 @@ import seaborn as sns
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 100
+NUM_PORTFOLIOS = 30
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
 # Under 50, the GA converges too quickly and the results are
 # equal to a random selection.
-NUM_CHILDREN = 1000
+NUM_CHILDREN = 500
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 150
 
 # Used in the multiprocessing to calculate NUM_PORTFOLIOS
 # cardinality-constrained portfolios.
-NUM_JOBS = cpu_count() - 1
+NUM_JOBS = cpu_count()
 
 USE_FORECAST = False
 
@@ -110,11 +110,14 @@ def difference_of_means_hypothesis_test(sample_1, sample_2):
     """
     Calculates the t statistic for the difference of means.
 
+    Second sample mean minus the first. (i.e. if positive,
+    the second is greater than the first.)
+
     :sample_1: The first sample. List of floats.
     :sample_2: The second sample. List of floats.
     :return: The t statistic.
     """
-    return np.abs(np.mean(sample_1) - np.mean(sample_2)) / \
+    return (np.mean(sample_2) - np.mean(sample_1)) / \
         np.sqrt(np.var(sample_1) / len(sample_1) +
                 np.var(sample_2) / len(sample_2))
 
@@ -128,7 +131,6 @@ def main():
     # Close the pool and wait for the work to finish
     pool.close()
     pool.join()
-
     global USE_FORECAST
     USE_FORECAST = True
     pool = mp.Pool(processes=NUM_JOBS)
