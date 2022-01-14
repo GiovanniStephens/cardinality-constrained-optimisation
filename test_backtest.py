@@ -1,5 +1,7 @@
 import unittest
 import backtest
+import numpy as np
+
 
 class TestBacktest(unittest.TestCase):
     def test_get_random_weights_count(self):
@@ -39,7 +41,9 @@ class TestBacktest(unittest.TestCase):
         Asserts that you get three optimal weights.
         """
         tickers = ['QQQ', 'SPY', 'JJT']
-        backtest.op.prepare_opt_inputs(backtest.data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :],
+        backtest.op.prepare_opt_inputs(backtest.data
+                                       .iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE,
+                                             :],
                                        backtest.USE_FORECAST)
         weights = backtest.optimal_weights(tickers)
         self.assertEqual(len(weights), 3)
@@ -49,7 +53,9 @@ class TestBacktest(unittest.TestCase):
         Asserts that the weights all sum to 1.
         """
         tickers = ['QQQ', 'SPY', 'JJT']
-        backtest.op.prepare_opt_inputs(backtest.data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :],
+        backtest.op.prepare_opt_inputs(backtest.data
+                                       .iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE,
+                                             :],
                                        backtest.USE_FORECAST)
         weights = backtest.optimal_weights(tickers)
         self.assertAlmostEqual(sum(weights), 1)
@@ -59,7 +65,9 @@ class TestBacktest(unittest.TestCase):
         Asserts that the weights are all positive.
         """
         tickers = ['QQQ', 'SPY', 'JJT']
-        backtest.op.prepare_opt_inputs(backtest.data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :],
+        backtest.op.prepare_opt_inputs(backtest.data
+                                       .iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE,
+                                             :],
                                        backtest.USE_FORECAST)
         weights = backtest.optimal_weights(tickers)
         self.assertTrue(all(w >= 0 for w in weights))
@@ -69,10 +77,12 @@ class TestBacktest(unittest.TestCase):
         Asserts that the weights are all distinct.
         """
         tickers = ['QQQ', 'SPY', 'JJT']
-        backtest.op.prepare_opt_inputs(backtest.data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :],
+        backtest.op.prepare_opt_inputs(backtest.data
+                                       .iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE,
+                                             :],
                                        backtest.USE_FORECAST)
         weights = backtest.optimal_weights(tickers)
-        self.assertTrue(len(set(weights)) == 3)
+        self.assertTrue(len(set(weights)) > 1)
 
     def test_data_gets_loaded(self):
         """
@@ -80,6 +90,29 @@ class TestBacktest(unittest.TestCase):
         gets loaded.
         """
         self.assertTrue(backtest.data.shape[0] > 0)
+
+    def test_create_portfolio(self):
+        """
+        Tests that a lsit of tickers is returned.
+        """
+        tickers = backtest.create_portfolio(50)
+        self.assertGreater(len(tickers), 2)
+
+    def test_difference_of_means_hypothesis_test(self):
+        """
+        Tests that the t value is being calculated correctly.
+        """
+        sample_1 = [1, 2, 3, 4, 5]
+        sample_2 = [2, 3, 4, 5, 6]
+        mean_1 = sum(sample_1) / len(sample_1)
+        mean_2 = sum(sample_2) / len(sample_2)
+        stdDev_1 = np.array(sample_1).std()
+        stdDev_2 = np.array(sample_2).std()
+        t = (mean_2 - mean_1) / \
+            np.sqrt(stdDev_1**2 / len(sample_1) + stdDev_2**2 / len(sample_2))
+        other_t = backtest.difference_of_means_hypothesis_test(sample_1,
+                                                               sample_2)
+        self.assertEqual(round(t, 6), round(other_t, 6))
 
 
 if __name__ == '__main__':
