@@ -160,5 +160,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
 - [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
 - [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
-- [ ] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected. 
+- [x] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected.
+- [ ] Test the download data module.
+- [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
 
