@@ -1,3 +1,4 @@
+from logging import log
 import unittest
 import optimisation as op
 import pandas as pd
@@ -76,6 +77,119 @@ class TestOptimisation(unittest.TestCase):
         sharpe_ratio = np.dot(weights, returns)/np.sqrt(port_var)
         model_sharpe = op.sharpe_ratio(np.array(weights), np.array(returns), cov_matrix)
         self.assertAlmostEqual(sharpe_ratio, -model_sharpe)
+
+    
+    def test_load_data_no_file(self):
+        """
+        Asserts that the load_data function raises an error
+        when the file is not found.
+        """
+        with self.assertRaises(FileNotFoundError):
+            data = op.load_data('ETF_Prices_missing.csv')
+
+    
+    def test_load_data_returns_df(self):
+        """
+        Asserts that the load_data function returns a pandas DataFrame.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        self.assertEqual(isinstance(data, pd.DataFrame), True)
+
+    
+    def test_get_cov_matrix(self):
+        """
+        Asserts that the get_cov_matrix function calculates
+        the covariances correctly.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        cov = log_returns.iloc[:,:2].cov()*252
+        cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
+        self.assertEqual(cov_matrix.values.all(), cov.values.all())
+
+
+    def test_optimisation_max_weight(self):
+        """
+        Asserts that the optimisation function returns
+        weights under the maximum weight.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        num_stocks = 5
+        max_weight = 0.3
+        initial_weights = [1/num_stocks]*num_stocks
+        sol = op.optimize(log_returns.iloc[:, :num_stocks],
+                                  initial_weights,
+                                  max_weight = max_weight)
+        self.assertLessEqual(max(sol['x']), max_weight)
+
+    
+    def test_optimisation_min_weight(self):
+        """
+        Asserts that the optimisation function returns
+        weights over the minimum weight.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        num_stocks = 5
+        min_weight = 0
+        initial_weights = [1/num_stocks]*num_stocks
+        sol = op.optimize(log_returns.iloc[:, :num_stocks],
+                                  initial_weights)
+        self.assertGreaterEqual(min(sol['x']), min_weight)
+
+    
+    def test_optimisation_risk_constraint(self):
+        """
+        Tests that the risk constraint is indeed being
+        applied in the optimisation.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        num_stocks = 30 # Need sufficient stocks to get the risk to 0.15
+        max_weight = 2
+        min_weight = -2 # Can short
+        target_risk = 0.15
+        initial_weights = [1/num_stocks]*num_stocks
+        sol = op.optimize(log_returns.iloc[:, :num_stocks],
+                                  initial_weights,
+                                  target_risk = target_risk,
+                                  target_return=None,
+                                  max_weight = max_weight,
+                                  min_weight = min_weight)
+        weights = sol['x']
+        cov = op.get_cov_matrix(log_returns.iloc[:, :num_stocks])
+        risk = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+        self.assertAlmostEqual(risk, target_risk)
+
+    
+    def test_optimisation_return_constraint(self):
+        """
+        Tests that the return constraint is indeed being
+        applied in the optimisation.
+        """
+        data = op.load_data('ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        num_stocks = 30
+        max_weight = 2
+        min_weight = -2
+        target_return = 0.15
+        initial_weights = [1/num_stocks]*num_stocks
+        sol = op.optimize(log_returns.iloc[:, :num_stocks],
+                                    initial_weights,
+                                    target_return = target_return,
+                                    target_risk = None,
+                                    max_weight = max_weight,
+                                    min_weight = min_weight)
+        weights = sol['x']
+        returns = op.calculate_returns(data)
+        returns = returns.iloc[:, :num_stocks].mean()*252
+        returns = np.dot(weights, returns)
+        self.assertAlmostEqual(returns, target_return)
 
 
 if __name__ == '__main__':
