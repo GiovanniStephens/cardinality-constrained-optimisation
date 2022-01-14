@@ -24,6 +24,8 @@ NUM_DAYS_OUT_OF_SAMPLE = 150
 # cardinality-constrained portfolios.
 NUM_JOBS = cpu_count() - 1
 
+USE_FORECAST = False
+
 # Load the price data.
 data = op.load_data('ETF_Prices.csv')
 
@@ -51,8 +53,7 @@ def optimal_weights(portfolio):
     random_weights = get_random_weights(portfolio)
     return op.optimize(op.data.loc[portfolio, :].transpose(),
                        random_weights,
-                       target_risk=0.15, # This is here just for a test.
-                       max_weight=max(1/len(portfolio), 0.2))['x']
+                       max_weight=max(1/(len(portfolio)-1), 0.2))['x']
 
 
 def run_portfolio(portfolio, weights, log_returns):
@@ -69,7 +70,7 @@ def run_portfolio(portfolio, weights, log_returns):
     portfolio_returns = []
     # Run the backtest from the first out-of-sample day
     start_i = op.data.shape[1] + 1
-    for i in range(NUM_DAYS_OUT_OF_SAMPLE):
+    for i in range(NUM_DAYS_OUT_OF_SAMPLE-1):
         subset_returns = log_returns.transpose().loc[portfolio]
         current_step_returns = subset_returns.iloc[:, start_i+i]
         weighted_returns = np.sum(current_step_returns*weights)
@@ -99,8 +100,7 @@ def create_portfolio(num_children):
     :num_children: The number of children in the GA to create.
     :return: A list of tickers.
     """
-    log_returns = op.calculate_returns(data)
-    op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE]
+    op.prepare_opt_inputs(data.iloc[:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
     op.TARGET_RETURN = None
     portfolio = op.create_portfolio(num_children)
     return portfolio
@@ -129,10 +129,20 @@ def main():
     pool.close()
     pool.join()
 
+    global USE_FORECAST
+    USE_FORECAST = True
+    pool = mp.Pool(processes=NUM_JOBS)
+    # Create a list of cardinality-constrained portfolios
+    forecast_portfolios = pool.map(create_portfolio,
+                          [NUM_CHILDREN]*NUM_PORTFOLIOS)
+    # Close the pool and wait for the work to finish
+    pool.close()
+    pool.join()
+
     # Create a set of randomly selected portfolios
-    log_returns = op.calculate_returns(data)
-    op.data = log_returns.transpose().iloc[:, :-NUM_DAYS_OUT_OF_SAMPLE-1]
+    op.prepare_opt_inputs(data.iloc[:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
     op.TARGET_RETURN = None
+    log_returns = op.calculate_returns(data)
     random_portfolios = []
     for i in range(NUM_PORTFOLIOS):
         indices = op.create_individual(op.data).astype(bool)
@@ -141,6 +151,8 @@ def main():
     # Create starting allocations for each of the portfolios
     portfolios_weights = [optimal_weights(portfolio)
                           for portfolio in portfolios]
+    forecast_portfolios_weights = [optimal_weights(portfolio)
+                                   for portfolio in forecast_portfolios]
     portfolios_random_weights = [get_random_weights(portfolio)
                                  for portfolio in portfolios]
     random_portfolios_weights = [optimal_weights(portfolio)
@@ -156,6 +168,13 @@ def main():
                           weights
                           in zip(portfolios,
                                  portfolios_weights)]
+    forecast_portfolios_fitness = [fitness(run_portfolio(portfolio,
+                                                         weights,
+                                                         log_returns))
+                                    for portfolio,
+                                    weights
+                                    in zip(forecast_portfolios,
+                                           forecast_portfolios_weights)]
     portfolios_random_fitness = [fitness(run_portfolio(portfolio,
                                                        weights,
                                                        log_returns))
@@ -182,6 +201,10 @@ def main():
           {np.array(portfolios_fitness).mean()}')
     print(f'Cardinality-constrained, optimised portfolio std: \
           {np.array(portfolios_fitness).std()}')
+    print(f'Cardinality-constrained, optimised portfolio w/ forecasts mean: \
+          {np.array(forecast_portfolios_fitness).mean()}')
+    print(f'Cardinality-constrained, optimised portfolio w/ forecasts std: \
+          {np.array(forecast_portfolios_fitness).std()}')
     print(f'Cardinality-constrained, random weightings portfolio mean: \
           {np.array(portfolios_random_fitness).mean()}')
     print(f'Cardinality-constrained, random weightings portfolio std: \
@@ -204,6 +227,8 @@ def main():
         {difference_of_means_hypothesis_test(portfolios_fitness, random_portfolios_fitness)}')
     print(f'Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: \
         {difference_of_means_hypothesis_test(portfolios_fitness, random_portfolios_random_fitness)}')
+    print(f'Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic: \
+        {difference_of_means_hypothesis_test(portfolios_fitness, forecast_portfolios_fitness)}')
 
     # Plot histograms of the fitnesses using seaborn
     sns.set(style="whitegrid")
