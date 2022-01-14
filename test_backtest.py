@@ -114,6 +114,31 @@ class TestBacktest(unittest.TestCase):
                                                                sample_2)
         self.assertEqual(round(t, 6), round(other_t, 6))
 
+    def test_difference_of_means_hypothesis_test_positive(self):
+        """
+        Tests to see that the t-value is negative if the mean is
+        smaller and positive if larger.
+
+        Sample 2 mean is greater, so the t value should be positive.
+        """
+        sample_1 = [1, 2, 3, 4, 5]
+        sample_2 = [2, 3, 4, 5, 6]
+        t = backtest.difference_of_means_hypothesis_test(sample_1,
+                                                         sample_2)
+        self.assertGreater(t, 0)
+
+    def test_difference_of_means_hypothesis_test_negative(self):
+        """
+        Tests to see that the t-value is negative if the mean is
+        smaller and positive if larger.
+
+        Sample 1 mean is greater, so the t value should be negative.
+        """
+        sample_1 = [6, 7, 8, 9, 10]
+        sample_2 = [2, 3, 4, 5, 6]
+        t = backtest.difference_of_means_hypothesis_test(sample_1,
+                                                         sample_2)
+        self.assertLess(t, 0)
 
 if __name__ == '__main__':
     unittest.main()
