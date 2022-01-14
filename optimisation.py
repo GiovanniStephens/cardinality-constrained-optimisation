@@ -5,9 +5,11 @@ import pygad
 
 
 MAX_NUM_STOCKS = 10
+MIN_NUM_STOCKS = 3
 TARGET_RETURN = None
 TARGET_RISK = 0.15
-MAX_WEIGHT = 0.2
+MAX_WEIGHT = 0.4
+MIN_WEIGHT = 0.0 # No shorting
 last_fitness = 0
 data = None
 variances = None
@@ -139,7 +141,7 @@ def fitness(individual, data):
     """
     fitness = 0
     if np.count_nonzero(individual) <= MAX_NUM_STOCKS \
-       and np.count_nonzero(individual) > 1:
+       and np.count_nonzero(individual) >= MIN_NUM_STOCKS:
         random_weights = np.random.random(np.count_nonzero(individual))
         random_weights /= np.sum(random_weights)
         subset = data.iloc[np.array(individual).astype(bool), :]
