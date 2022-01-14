@@ -7,7 +7,7 @@ import pygad
 MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
 TARGET_RETURN = None
-TARGET_RISK = 0.15
+TARGET_RISK = None
 MAX_WEIGHT = 0.4
 MIN_WEIGHT = 0.0 # No shorting
 last_fitness = 0
@@ -264,12 +264,12 @@ def create_portfolio(num_children: int = 100) -> list:
 if __name__ == '__main__':
     # Load the data
     prices_df = load_data('ETF_Prices.csv')
-    # Calculate the returns
+    # Prepare the inputs for the optimisation
+    prepare_opt_inputs(prices_df, use_forecasts=False)
+
     log_returns = calculate_returns(prices_df)
-    # Set the global data variable
-    data = log_returns.transpose()
     # Run the cardinality constrained optimisation
-    best_individual = cardinality_constrained_optimisation(num_children=500,
+    best_individual = cardinality_constrained_optimisation(num_children=1000,
                                                            verbose=True)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
@@ -280,7 +280,8 @@ if __name__ == '__main__':
                    random_weights,
                    target_return=TARGET_RETURN,
                    target_risk=TARGET_RISK,
-                   max_weight=MAX_WEIGHT)
+                   max_weight=MAX_WEIGHT,
+                   min_weight=MIN_WEIGHT)
     # Print the optimal weights
     print(sol.x)
     best_weights = sol['x']
