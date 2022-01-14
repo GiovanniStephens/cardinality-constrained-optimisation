@@ -74,7 +74,8 @@ def optimize(data: pd.DataFrame,
              initial_weights: np.array,
              target_risk: float = None,
              target_return: float = None,
-             max_weight: float = 0.3333) -> float:
+             max_weight: float = 0.3333,
+             min_weight: float = 0.0000) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -85,6 +86,7 @@ def optimize(data: pd.DataFrame,
     :target_return: float of the target return
                     (annualised portfolio mean return).
     :max_weight: float of the maximum weight of any single stock.
+    :min_weight: float of the minimum weight of any single stock.
     :return: pcipy optimization result.
     """
     cov_matrix = get_cov_matrix(data)
@@ -103,7 +105,7 @@ def optimize(data: pd.DataFrame,
             {'type': 'eq',
              'fun': lambda W: target_return -
              np.sum(rets*W)})
-    bounds = tuple((0, max_weight) for _ in range(len(initial_weights)))
+    bounds = tuple((min_weight, max_weight) for _ in range(len(initial_weights)))
     sol = opt.minimize(sharpe_ratio,
                        initial_weights,
                        args=(rets, cov_matrix),
@@ -194,7 +196,6 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
 
     :use_forecasts: bool of whether to use forecasts.
     """
-    print("Preparing optimisation inputs...")
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
