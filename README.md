@@ -159,7 +159,7 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
 - [x] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
 - [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
-- [ ] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
+- [x] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
 - [x] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected.
 - [ ] Test the download data module.
 - [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
