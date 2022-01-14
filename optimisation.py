@@ -239,9 +239,10 @@ def cardinality_constrained_optimisation(num_children: int=1000,
                            stop_criteria='saturate_3')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
-    print(f"Parameters of the best solution : {solution}")
-    print(f"Fitness value of the best solution = {solution_fitness}")
-    print(f"Index of the best solution : {solution_idx}")
+    if verbose:
+        print(f"Parameters of the best solution : {solution}")
+        print(f"Fitness value of the best solution = {solution_fitness}")
+        print(f"Index of the best solution : {solution_idx}")
     return solution
 
 
