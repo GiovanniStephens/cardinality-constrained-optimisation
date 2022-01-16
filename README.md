@@ -163,4 +163,5 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected.
 - [ ] Test the download data module.
 - [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
+- [ ] Maybe do some exploratory data analysis (EDA) on the input pricess to understand price data better.
 
