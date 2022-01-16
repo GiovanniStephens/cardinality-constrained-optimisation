@@ -7,7 +7,7 @@ import pygad
 MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
 TARGET_RETURN = None
-TARGET_RISK = None
+TARGET_RISK = 0.15
 MAX_WEIGHT = 0.4
 MIN_WEIGHT = 0.0 # No shorting
 last_fitness = 0
@@ -222,7 +222,7 @@ def cardinality_constrained_optimisation(num_children: int=1000,
         on_gen = on_generation
     else:
         on_gen = None
-    ga_instance = pygad.GA(num_generations=25,
+    ga_instance = pygad.GA(num_generations=6,
                            initial_population=np.array([create_individual(data)
                                                         for _ in range(num_children)]),
                            num_parents_mating=num_children//10,
@@ -248,14 +248,16 @@ def cardinality_constrained_optimisation(num_children: int=1000,
     return solution
 
 
-def create_portfolio(num_children: int = 100) -> list:
+def create_portfolio(num_children: int = 100, verbose: bool=True) -> list:
     """
     Creates a cardinality constrained portfolio.
 
     :num_children: int of the number of children to create.
+    :verbose: bool of whether to print the progress.
     :return: pandas dataframe of the portfolio.
     """
-    individual = cardinality_constrained_optimisation(num_children=num_children)
+    individual = cardinality_constrained_optimisation(num_children=num_children,
+                                                      verbose=verbose)
     indices = np.array(individual).astype(bool)
     portfolio = data.transpose().iloc[:, indices].columns
     return list(portfolio)
