@@ -164,4 +164,4 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [ ] Test the download data module.
 - [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
 - [ ] Maybe do some exploratory data analysis (EDA) on the input pricess to understand price data better.
-
+- [ ] There is an issue with the ending results when you fill the blanks with zero-valued returns. The results were as expected when I just dropped the nulls. I need to think about how I am going to go about solving this issue. Maybe I can impute the price data using an ARIMA model or something similar before calculating returns. I need to understand the nature of the nulls in the prices though. Maybe there are heaps that are blank at the beginning of the data for a few ETFs. I need to look into this.
