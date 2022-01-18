@@ -250,9 +250,15 @@ def main():
                  kde=True,
                  color='red',
                  label='Random selections, random weightings portfolios')
+    sns.histplot(forecast_portfolios_fitness,
+                 kde=True,
+                 color='purple',
+                 label='Cardinality-constrained, optimised portfolios w/ forecasts')
     plt.legend()
     plt.title('Fitness Distribution')
     plt.xlabel('Fitness')
+    # # Change the x-axis to 0.5 increments
+    # plt.xticks(np.arange(-3, 2.6, 0.5))
     plt.ylabel('Density')
     plt.show()
 
