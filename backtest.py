@@ -18,7 +18,7 @@ NUM_PORTFOLIOS = 30
 NUM_CHILDREN = 500
 
 # This is the number of days out of sample for the backtest.
-NUM_DAYS_OUT_OF_SAMPLE = 150
+NUM_DAYS_OUT_OF_SAMPLE = 252
 
 # Used in the multiprocessing to calculate NUM_PORTFOLIOS
 # cardinality-constrained portfolios.
