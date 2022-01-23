@@ -39,7 +39,7 @@ def load_data(filename: str) -> pd.DataFrame:
     :return: pandas dataframe of the data.
     """
     prices_df = pd.read_csv(filename, index_col=0)
-    # Remove columns with 50% or more null values
+    # Remove columns with 10% or more null values
     prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/10))
     # Fill the null values with the previous day's close price
     prices_df = prices_df.fillna(method='ffill')
