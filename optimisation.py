@@ -6,8 +6,8 @@ import pygad
 
 MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
-TARGET_RETURN = None
-TARGET_RISK = 0.15
+TARGET_RETURN = 0.2
+TARGET_RISK = None
 MAX_WEIGHT = 0.4
 MIN_WEIGHT = 0.0 # No shorting
 last_fitness = 0
@@ -40,7 +40,7 @@ def load_data(filename: str) -> pd.DataFrame:
     """
     prices_df = pd.read_csv(filename, index_col=0)
     # Remove columns with 50% or more null values
-    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/2))
+    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/10))
     # Fill the null values with the previous day's close price
     prices_df = prices_df.fillna(method='ffill')
     return prices_df
