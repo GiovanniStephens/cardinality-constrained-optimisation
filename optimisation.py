@@ -68,7 +68,7 @@ def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
         np.fill_diagonal(D, diag)
         cov_matrix = np.matmul(np.matmul(D, data.corr()), D)
     else:
-        cov_matrix = data.cov()*252
+        cov_matrix = data.cov()*252 # Historical sample cov
     return cov_matrix
 
 
