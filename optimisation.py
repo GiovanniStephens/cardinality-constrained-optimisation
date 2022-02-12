@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import scipy.optimize as opt
 import pygad
+from muarch import MUArch, UArch
+from copulae import TCopula
 
 
 MAX_NUM_STOCKS = 10
@@ -46,7 +48,7 @@ def load_data(filename: str) -> pd.DataFrame:
     return prices_df
 
 
-def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
+def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
     """
     Calculates the covariance matrix of the data.
     If there are forecast variances, the covariance
@@ -66,10 +68,32 @@ def get_cov_matrix(data: pd.DataFrame) -> pd.DataFrame:
         D = np.zeros((data.shape[1],data.shape[1]))
         diag = np.sqrt(variances.loc[data.columns].values)
         np.fill_diagonal(D, diag)
-        cov_matrix = np.matmul(np.matmul(D, data.corr()), D)
+        if use_copulae:
+            corr = estimate_covar_using_copulas(data)
+        else:
+            corr = data.corr()
+        cov_matrix = np.matmul(np.matmul(D, corr), D)
     else:
         cov_matrix = data.cov()*252 # Historical sample cov
     return cov_matrix
+
+
+def estimate_covar_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Estimates the covariance matrix using the copula method.
+
+    :data: pandas dataframe of the log returns data.
+    :return: pandas dataframe of the covariance matrix.
+    """
+    # Estimate GARCH model for each time series
+    models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10) 
+    # Estimate GARCH model for each time series
+    models.fit(data)
+    # Fit residuals into a copula
+    residuals = models.residuals()
+    cop = TCopula(dim=data.shape[1])
+    cop.fit(residuals)
+    return cop.sigma
 
 
 def optimize(data: pd.DataFrame,
@@ -77,7 +101,8 @@ def optimize(data: pd.DataFrame,
              target_risk: float = None,
              target_return: float = None,
              max_weight: float = 0.3333,
-             min_weight: float = 0.0000) -> float:
+             min_weight: float = 0.0000,
+             use_copulae: bool = False) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -91,7 +116,7 @@ def optimize(data: pd.DataFrame,
     :min_weight: float of the minimum weight of any single stock.
     :return: pcipy optimization result.
     """
-    cov_matrix = get_cov_matrix(data)
+    cov_matrix = get_cov_matrix(data, use_copulae)
     rets = expected_returns.loc[data.columns].values
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
@@ -267,11 +292,11 @@ if __name__ == '__main__':
     # Load the data
     prices_df = load_data('ETF_Prices.csv')
     # Prepare the inputs for the optimisation
-    prepare_opt_inputs(prices_df, use_forecasts=False)
+    prepare_opt_inputs(prices_df, use_forecasts=True)
 
     log_returns = calculate_returns(prices_df)
     # Run the cardinality constrained optimisation
-    best_individual = cardinality_constrained_optimisation(num_children=1000,
+    best_individual = cardinality_constrained_optimisation(num_children=500,
                                                            verbose=True)
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
