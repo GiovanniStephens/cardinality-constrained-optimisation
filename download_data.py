@@ -7,7 +7,7 @@ def load_etfs(filename: str) -> pd.DataFrame:
     """
     Loads the list of ETFs from my local file.
 
-    :returns: list of ETFs as a pandas DataFrame 
+    :returns: list of ETFs as a pandas DataFrame.
     """
     etfs = pd.read_csv(filename)
     return etfs
@@ -21,11 +21,15 @@ def download_data(etfs: pd.DataFrame) -> pd.DataFrame:
     :returns: daily price data for the given list of ETFs.
     """
     tickers = ' '.join(etfs['Tickers'].to_list())
-    prices = yf.download(tickers, period='3y', interval='1d', group_by='ticker')
+    prices = yf.download(tickers,
+                         period='3y',
+                         interval='1d',
+                         group_by='ticker')
     adj_closing_prices = []
     for ticker in etfs['Tickers']:
         adj_closing_prices.append(prices[ticker]['Adj Close'].to_list())
-    prices_df = pd.DataFrame(np.transpose(adj_closing_prices), columns=etfs['Tickers'])
+    prices_df = pd.DataFrame(np.transpose(adj_closing_prices),
+                             columns=etfs['Tickers'])
     return prices_df
 
 

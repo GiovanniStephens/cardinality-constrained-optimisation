@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import scipy.optimize as opt
 import pygad
-from muarch import MUArch, UArch
+from muarch import MUArch
 from copulae import TCopula
 
 
@@ -11,7 +11,7 @@ MIN_NUM_STOCKS = 3
 TARGET_RETURN = 0.2
 TARGET_RISK = None
 MAX_WEIGHT = 0.4
-MIN_WEIGHT = 0.0 # No shorting
+MIN_WEIGHT = 0.0  # No shorting
 last_fitness = 0
 data = None
 variances = None
@@ -62,10 +62,10 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
     :data: pandas dataframe of the returns data.
     :return: pandas dataframe of the covariance matrix.
     """
-    # If we have forecast variances, use the forecast variances 
+    # If we have forecast variances, use the forecast variances
     # to update the covariance matrix.
     if variances is not None:
-        D = np.zeros((data.shape[1],data.shape[1]))
+        D = np.zeros((data.shape[1], data.shape[1]))
         diag = np.sqrt(variances.loc[data.columns].values)
         np.fill_diagonal(D, diag)
         if use_copulae:
@@ -74,7 +74,7 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
             corr = data.corr()
         cov_matrix = np.matmul(np.matmul(D, corr), D)
     else:
-        cov_matrix = data.cov()*252 # Historical sample cov
+        cov_matrix = data.cov()*252  # Historical sample cov
     return cov_matrix
 
 
@@ -86,7 +86,7 @@ def estimate_covar_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
     :return: pandas dataframe of the covariance matrix.
     """
     # Estimate GARCH model for each time series
-    models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10) 
+    models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10)
     # Estimate GARCH model for each time series
     models.fit(data)
     # Fit residuals into a copula
@@ -234,8 +234,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
         expected_returns = data.T.mean()*252
 
 
-def cardinality_constrained_optimisation(num_children: int=1000,
-                                         verbose: bool=False):
+def cardinality_constrained_optimisation(num_children: int = 1000,
+                                         verbose: bool = False):
     """
     Performs the cardinality constrained optimisation.
 
@@ -273,7 +273,7 @@ def cardinality_constrained_optimisation(num_children: int=1000,
     return solution
 
 
-def create_portfolio(num_children: int = 100, verbose: bool=True) -> list:
+def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
     """
     Creates a cardinality constrained portfolio.
 

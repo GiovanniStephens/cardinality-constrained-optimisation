@@ -101,7 +101,8 @@ def create_portfolio(num_children):
     :num_children: The number of children in the GA to create.
     :return: A list of tickers.
     """
-    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
+    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
+                          USE_FORECAST)
     op.TARGET_RETURN = None
     portfolio = op.create_portfolio(num_children)
     return portfolio
@@ -137,24 +138,27 @@ def main():
     pool = mp.Pool(processes=NUM_JOBS)
     # Create a list of cardinality-constrained portfolios
     forecast_portfolios = pool.map(create_portfolio,
-                          [NUM_CHILDREN]*NUM_PORTFOLIOS)
+                                   [NUM_CHILDREN]*NUM_PORTFOLIOS)
     # Close the pool and wait for the work to finish
     pool.close()
     pool.join()
 
     # Create a set of randomly selected portfolios
-    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
+    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
+                          USE_FORECAST)
     op.TARGET_RETURN = None
     log_returns = op.calculate_returns(data)
     random_portfolios = []
-    for i in range(NUM_PORTFOLIOS):
+    for _ in range(NUM_PORTFOLIOS):
         indices = op.create_individual(op.data).astype(bool)
         random_portfolios.append(list(log_returns.iloc[:, indices].columns))
 
     # Create starting allocations for each of the portfolios
-    portfolios_weights = [optimal_weights(portfolio, use_copulae=False)
+    portfolios_weights = [optimal_weights(portfolio,
+                                          use_copulae=False)
                           for portfolio in portfolios]
-    portfolios_weights_w_copulae = [optimal_weights(portfolio, use_copulae=True)
+    portfolios_weights_w_copulae = [optimal_weights(portfolio,
+                                                    use_copulae=True)
                                     for portfolio in portfolios]
     forecast_portfolios_weights = [optimal_weights(portfolio)
                                    for portfolio in forecast_portfolios]
@@ -179,14 +183,14 @@ def main():
                                     for portfolio,
                                     weights
                                     in zip(portfolios,
-                                           portfolios_weights_w_copulae)]                                         
+                                           portfolios_weights_w_copulae)]
     forecast_portfolios_fitness = [fitness(run_portfolio(portfolio,
                                                          weights,
                                                          log_returns))
-                                    for portfolio,
-                                    weights
-                                    in zip(forecast_portfolios,
-                                           forecast_portfolios_weights)]
+                                   for portfolio,
+                                   weights
+                                   in zip(forecast_portfolios,
+                                          forecast_portfolios_weights)]
     portfolios_random_fitness = [fitness(run_portfolio(portfolio,
                                                        weights,
                                                        log_returns))
@@ -209,6 +213,7 @@ def main():
                                         in zip(random_portfolios,
                                                random_portfolios_random_weights)]
 
+    print('PORTFOLIO SHARPE RATIO STATISTICS:\n')
     print(f'Cardinality-constrained, optimised portfolio mean: \
           {np.array(portfolios_fitness).mean()}')
     print(f'Cardinality-constrained, optimised portfolio std: \
@@ -274,7 +279,7 @@ def main():
                  label='Cardinality-constrained, optimised portfolios w/ forecasts')
     plt.legend()
     plt.title('Fitness Distribution')
-    plt.xlabel('Fitness')
+    plt.xlabel('Fitness (Sharpe Ratio)')
     # # Change the x-axis to 0.5 increments
     # plt.xticks(np.arange(-3, 2.6, 0.5))
     plt.ylabel('Density')

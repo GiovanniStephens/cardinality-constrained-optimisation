@@ -140,5 +140,6 @@ class TestBacktest(unittest.TestCase):
                                                          sample_2)
         self.assertLess(t, 0)
 
+
 if __name__ == '__main__':
     unittest.main()

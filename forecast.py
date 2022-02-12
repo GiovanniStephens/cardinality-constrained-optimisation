@@ -9,7 +9,6 @@ import tqdm
 data = op.load_data('Data/ETF_Prices.csv')
 training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
-test_log_returns = op.calculate_returns(data.iloc[-backtest.NUM_DAYS_OUT_OF_SAMPLE:, :])
 
 # Forecast returns
 n_periods = 252
