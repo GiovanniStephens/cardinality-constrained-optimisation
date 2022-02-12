@@ -2,21 +2,24 @@
 
 The goal of this optimisation is to find a subset portfolio of N stocks from a universe of M stocks that maximises some objective function. The portfolio should test well out-of-sample (i.e. performs well on data the model has not seen yet).
 
-The optimisation is constrained by the maximum number of stocks that can be held (e.g. N=10). 
+The optimisation is constrained by the maximum number (N) of stocks that can be held (e.g. N=10). 
 
 The sum of the portfolio weightings is constrained to 1 (i.e. no leverage or cash).
 
 Each stock allocation (weighting) is constrained to be between 0 and 1 (or a maximum of choice). (i.e. no shorting).
+(This constraint can be changed to anything you want in the optimisation module.)
 
-Lastly, if the user wants, he/she should be able to specify a minimum expected return. He/she should also be able to run the optimisation constrained by a maximum level of risk.
+Lastly, if the user wants, he/she can specify a minimum expected return. He/she can also run the optimisation constrained by a maximum level of risk (portfolio standard deviation).
 
 ## Why Cardinality Constrained?
 
-I want to constrain the number of stocks that can be held in the portfolio so that transaction costs and the effort to rebalance the portfolio is manageable. The other reason for this is that the optimisation relys on a variance-covariance matrix that needs at least T = N time series obseravtions else the variance-covariance matrix cannot be invertible. 
+I want to constrain the number of stocks that can be held in the portfolio so that transaction costs and the effort to rebalance the portfolio is manageable. The other reason for this is that the optimisation relys on a variance-covariance matrix that needs at least T = N time series obseravtions, else the variance-covariance matrix cannot be invertible. 
 
 So, for a universe of 500 stocks, I would need at least 500 (2 years worth of daily) observations to be able to acturately estimate the variance-covariance matrix. This poses a challenge when trying to pick an optimal portfolio from a universe of 500+ stocks. 
 
 In terms of ETFs, I have a set of around 1700+ that I would like to pick from. So constraining the portfolio to a maximum number of ETFs is a necessary constraint.
+
+Another reason for this is to minimise transaction costs when rebalancing and entering into N positions. It is quite unfeasible to enter into 50+ positions unless you have a significant amount of capital.
 
 ## Implicit Assumptions
 
@@ -24,7 +27,7 @@ When running a mean-variance optimisation, it is assumed implicitly that the var
 
 Another assumption is that historical average returns and sample variances and covariances are good estimators for the true (and assumed constant) average returns and variances and covariances. This is a faulty assumption because all three variables change over time. 
 
-To mitigate this, I try to forecast variances and returns and compare to portfolios optimised using historical data.
+To mitigate this, I forecast variances, covariances and returns and compare to portfolios optimised using historical data.
 
 # Objective Function
 
@@ -32,9 +35,9 @@ The objective function is defined as:
 
 obj = E(R)/Std(R)
 
-where E(R) is the stock's expected return and Std(R) is the standard deviation of the returns.
+where E(R) is the portfolio's expected return and Std(R) is the standard deviation of the portfolio returns.
 
-## Alternative Objective Function
+## Alternative Objective Function (not currently used)
 
 An alternative is to use a tail risk objective function. For example conditional value at risk (CVaR) or conditional expected shortfall (CES). Although, these functions would likely need to be estimated using numerical estimations.
 
@@ -60,17 +63,13 @@ Additionally, the model is quite slow, so I need to work out how to speed it up 
 
 ## Forecasting Returns
 
-One approach could be to fit multiple forecasting models to each of the ETFs to get a forecast of the returns. It would be quite slow, so I would need to pre-estimate all of the expected returns ahead of time and then run the optimisation.
+To get an estimate of the expected returns, I am using univariate ARIMA models for each ETF and then projecting the price to get returns. The models are fitted using auto-ARIMA to minimise the AIC (Akaike Information Criterion) value.
 
-This approach may be appropriate, though, because I am looking at a huge range of ETFs. Some are equities, some are mixed across nations, others are commodities, some are TIPS, some are bonds, others are currencies, or derivatives, or even trading strategies. So fundamental estimates of long-term returns are not appropriate unless you have a whole lot of additional data to estimte GDP growth in each country, ETF constituents, dividend yields for each holding, inflation in each country, FX movements etc. It's pretty impractical to do this.
-
-I am thinking the best approach will be to use univariate forecasting models to get a feel for the returns of each ETF.
-
-For now, I have just used an ARIMA model to forecast returns for each of the ETFS.
+The forecast returns are then fed back into the optimisation algorithm.
 
 ### Long-term Expected Returns Research 
 
-There was mention of the following things in an initial Google search:
+Though I juse use an ARIMA model to forecast returns, I did look into other expected return models to feed into the optimisation. Here were some of the quick findings from an initial Google search:
 1. Shiller E/P as a long-term forecast
 2. D/P (Dividend payout ratio) as a long-term forecast
 3. Broad payout yield
@@ -87,29 +86,27 @@ Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/p
 
 ## Forecasting variances
 
-I have been able to forecast variances using a GARCH model; however, I am not too sure about how to incorporate the forecasts into the historical variance-covariance matrix. I have a hunch that just changing the diagonal elements of the covariance matrix does not make any sense.
-
-After I validate that I cannot just update the diagonal elements of the covariance matrix, I will look into forecasting covariances too. I think that there is a lot of research on forecasting the variance-covariance matrix... 
+I have been able to forecast variances using a GARCH model. The variances are, then, loaded into the variance-covariance matrix using Bollerslov's (1990) constant conditional correlation (CCC) model. This can be done by taking a historical (and static) correlation matrix and then transforming it to a covariance matrix and inserting the forecast variances into the matrix.
 
 ## Forecasting covariances
 
-I think there is a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. That's pretty much what I am planning to do. I just want to check whether replacing the diagonal of a variance-covariance matrix with the forecast variances is the same as the CCC variance-covariance matrix. 
+Bollerslov (1990) proposes a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. For the optimisation, I use this method if I am using forecast variances. 
 
-If this is not looking the same, I could look into forecasting the variance-covariance matrix using a GARCH DCC. DCC models have been pretty heavily criticised as not really correct time-varying correlations. 
+After the portfolios have been selected through the cardinality-constrained optimisation, I optimise the weights using the CCC model using forecast variances and a correlation matrix estimated by fitting skew-t copulas to the residuals from an AR-GARCH model.
 
-Fitted copulas can be used to estimate covariance, but it may be a bit slow to compute. 
+The fitted copulas are used to estimate covariance, but it is a bit slow to compute. 
 
-CCC is probably the fastest, but copulas might give a good result. Worth testing the two against each other. 
+The estimated variance-coverage matrix gives better results than just using historical values on average.
 
 # Backtest
 
-To test whether the cardinality-constrained portfolio does any better than a randomly selected portfolio, I will run a backtest. The backtest is conducted as follows:
+To test whether the cardinality-constrained portfolio does any better than a randomly selected portfolio, I run a backtest. The backtest is conducted as follows:
 1. Create N cardinality-constrained portfolios optimised on historical data;
 2. Create N randomly selected portfolios optimised on historical data;
-3. Create N cardinality-constrained portfolios optimised using forecasted data;
-4. For each portfolio, create N random set of weightings and N set of optimal weightings;
+3. Create N cardinality-constrained portfolios optimised using forecasted variances and expected returns;
+4. For each portfolio, create N random set of weightings and N set of optimal weightings using copulae and using the CCC model;
 5. For each portfolio, run them all forward, out-of-sample with the initial weightings;
-6. Compare the results of the out-of-sample runs for each of the four groups.
+6. Compare the results of the out-of-sample runs for each of the six groups.
 
 The comparison of the groups is done using a one-tailed t-test. It is assumed that the mean of the out-of-sample Sharpe Ratios is normally distributed, random, and independent. The results in the next section show that the cardinality-constrained portfolios are significantly better than the randomly selected portfolios.
 
@@ -161,9 +158,9 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 - [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
 - [x] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
 - [x] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected.
-- [ ] Test the download data module.
 - [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
 - [x] Maybe do some exploratory data analysis (EDA) on the input pricess to understand price data better.
 - [x] There is an issue with the ending results when you fill the blanks with zero-valued returns. The results were as expected when I just dropped the nulls. I need to think about how I am going to go about solving this issue. Maybe I can impute the price data using an ARIMA model or something similar before calculating returns. I need to understand the nature of the nulls in the prices though. Maybe there are heaps that are blank at the beginning of the data for a few ETFs. I need to look into this.
-- [ ] It seems like the constrained portfolios are not performing well when compared to random portfolios when there is a long historical data for training. I do not know what that is, tbh. I want to see what happens when we train derive the variance-covariance matrix from just 1 year of data as opposed to the full historical data. 
+- [x] It seems like the constrained portfolios are not performing well when compared to random portfolios when there is a long historical data for training. I do not know what that is, tbh. I want to see what happens when we train derive the variance-covariance matrix from just 1 year of data as opposed to the full historical data. 
+- [x] I will create an optimisation where I get the weightings using the copula-estimated correlations with forecast variances to create an estimate variance-covariance matrix for the optimisation. I want to see if this does better than the CCC model and the historical covariances.
 - [ ] Another thing that would be cool to do is to create a moving optimisation that 'rebalances' each n days. So you would run the cardinality optimisation once, and then a mean-variance optimisation every n days. This would allow you to see how the constrained portfolios perform over time.
