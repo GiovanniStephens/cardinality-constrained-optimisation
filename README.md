@@ -112,55 +112,43 @@ The comparison of the groups is done using a one-tailed t-test. It is assumed th
 
 ## Backtest results
 
-Sample size = 100
+Sample size = 20
 
-Number of children per generation = 1000
+Number of children per generation = 500
 
-Number of out-of-sample days = 150
+Number of out-of-sample days = 252
 
 Maximum number of holdings = 10
 
+Minimum number of holdings = 3
+
 Maximum weighting per holding = 20%
 
-Cardinality-constrained, optimised portfolio mean: 1.0469363694638476
+Cardinality-constrained, optimised portfolio mean:           3.03348004700598
+Cardinality-constrained, optimised portfolio std:           0.35399116871443753
+Cardinality-constrained, optimised portfolio using copulae mean:           3.091332461744629
+Cardinality-constrained, optimised portfolio using copulae std:           0.3855432713267096
+Cardinality-constrained, optimised portfolio w/ forecasts mean:           2.87086326464585
+Cardinality-constrained, optimised portfolio w/ forecasts std:           0.7488831240350854
+Cardinality-constrained, random weightings portfolio mean:           2.3003461023443967
+Cardinality-constrained, random weightings portfolio std:           1.0436015803722725
 
-Cardinality-constrained, optimised portfolio std: 0.5833230941274853
+Random selections, optimised portfolio mean:           0.6502714270765833
+Random selections, optimised portfolio std:           0.4661265102962434
+Random selections, random weightings portfolio mean:           0.25420297894399607
+Random selections, random weightings portfolio std:           0.4404973199397284
 
-Cardinality-constrained, random weightings portfolio mean: 0.7076622398936138
-
-Cardinality-constrained, random weightings portfolio std: 0.8433489843501207
-
-Random selections, optimised portfolio mean: 0.38039021527564487
-
-Random selections, optimised portfolio std: 0.6119541460273398
-
-Random selections, random weightings portfolio mean: 0.2942966480176118
-
-Random selections, random weightings portfolio std: 0.7356430516803205
-
-Cardinality-constrained, optimised portfolio vs. random weightings t-statistic: 1.8121996564583602
-
-Random selections, optimised portfolio vs. random weightings t-statistic: 0.4927930187163222
-
-Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic: 4.318298361944475
-
-Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic: 4.390886784250938
+Cardinality-constrained, optimised portfolio vs. random weightings t-statistic:         -3.643850679417152
+Random selections, optimised portfolio vs. random weightings t-statistic:         -3.3825582406462926
+Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic:         -22.301771351668886
+Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic:         -26.937706598801306
+Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic:         -1.0752785655320893
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
 
 # To do
 
-- [x] Forecast returns using ARIMA models for each ETF.
-- [x] Forecast variance for each ETF using AR-GARCH models.
-- [x] Update the optimisation algorithm to use the forecasted returns and variances.
-- [x] Since I will be using historical and forecast variances and returns, I would like to be able to compare the historical estimates vs. the forecasted estimates. As a result, the optimisation will need a toggle to go back and forth between the two.
-- [x] Validate whether I can just update the diagonal elements of a variance-covariance matrix with forecast variances.
-- [x] If I cannot just update the diagonal elements of a variance-covariance matrix with forecast variances, I will need to forecast covariances.
-- [x] Run the backtest with another group of portfolios optimised using the forecasted returns and variances.
-- [x] Create some unit tests and validations to check that the optimisation algorithm and backtest is working as expected.
+- [ ] Check that the comments are appropriate.
+- [ ] Do some more tidying and linting.
 - [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
-- [x] Maybe do some exploratory data analysis (EDA) on the input pricess to understand price data better.
-- [x] There is an issue with the ending results when you fill the blanks with zero-valued returns. The results were as expected when I just dropped the nulls. I need to think about how I am going to go about solving this issue. Maybe I can impute the price data using an ARIMA model or something similar before calculating returns. I need to understand the nature of the nulls in the prices though. Maybe there are heaps that are blank at the beginning of the data for a few ETFs. I need to look into this.
-- [x] It seems like the constrained portfolios are not performing well when compared to random portfolios when there is a long historical data for training. I do not know what that is, tbh. I want to see what happens when we train derive the variance-covariance matrix from just 1 year of data as opposed to the full historical data. 
-- [x] I will create an optimisation where I get the weightings using the copula-estimated correlations with forecast variances to create an estimate variance-covariance matrix for the optimisation. I want to see if this does better than the CCC model and the historical covariances.
 - [ ] Another thing that would be cool to do is to create a moving optimisation that 'rebalances' each n days. So you would run the cardinality optimisation once, and then a mean-variance optimisation every n days. This would allow you to see how the constrained portfolios perform over time.
