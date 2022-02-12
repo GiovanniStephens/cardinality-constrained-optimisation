@@ -93,3 +93,20 @@ plt.xlabel('Maximum log returns')
 plt.ylabel('Frequency')
 plt.show()
 
+# Show correlation matrix of the log returns for the first 10 ETFs
+sns.set(style="whitegrid")
+sns.heatmap(log_returns.iloc[:, 0:10].corr(),
+            annot=True,
+            cmap='RdYlGn',
+            linewidths=0.5)
+plt.title('Correlation matrix of log returns for the first 10 ETFs')
+plt.show()
+
+# Show the correlation matrix of the log returns of the first 10 ETFs on the last 252 days
+sns.set(style="whitegrid")
+sns.heatmap(log_returns.iloc[-252:, 0:10].corr(),
+            annot=True,
+            cmap='RdYlGn',
+            linewidths=0.5)
+plt.title('Correlation matrix of log returns for the first 10 ETFs on the last 252 days')
+plt.show()
