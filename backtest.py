@@ -42,7 +42,7 @@ def get_random_weights(portfolio):
     return random_weights
 
 
-def optimal_weights(portfolio):
+def optimal_weights(portfolio, use_copulae=False):
     """
     Finds the optimal weights (allocations) for the
     input portfolio.
@@ -53,7 +53,8 @@ def optimal_weights(portfolio):
     random_weights = get_random_weights(portfolio)
     return op.optimize(op.data.loc[portfolio, :].transpose(),
                        random_weights,
-                       max_weight=max(1/(len(portfolio)-1), 0.2))['x']
+                       max_weight=max(1/(len(portfolio)-1), 0.2),
+                       use_copulae=use_copulae)['x']
 
 
 def run_portfolio(portfolio, weights, log_returns):
@@ -100,7 +101,7 @@ def create_portfolio(num_children):
     :num_children: The number of children in the GA to create.
     :return: A list of tickers.
     """
-    op.prepare_opt_inputs(data.iloc[:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
+    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
     op.TARGET_RETURN = None
     portfolio = op.create_portfolio(num_children)
     return portfolio
@@ -142,7 +143,7 @@ def main():
     pool.join()
 
     # Create a set of randomly selected portfolios
-    op.prepare_opt_inputs(data.iloc[:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
+    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :], USE_FORECAST)
     op.TARGET_RETURN = None
     log_returns = op.calculate_returns(data)
     random_portfolios = []
@@ -151,8 +152,10 @@ def main():
         random_portfolios.append(list(log_returns.iloc[:, indices].columns))
 
     # Create starting allocations for each of the portfolios
-    portfolios_weights = [optimal_weights(portfolio)
+    portfolios_weights = [optimal_weights(portfolio, use_copulae=False)
                           for portfolio in portfolios]
+    portfolios_weights_w_copulae = [optimal_weights(portfolio, use_copulae=True)
+                                    for portfolio in portfolios]
     forecast_portfolios_weights = [optimal_weights(portfolio)
                                    for portfolio in forecast_portfolios]
     portfolios_random_weights = [get_random_weights(portfolio)
@@ -170,6 +173,13 @@ def main():
                           weights
                           in zip(portfolios,
                                  portfolios_weights)]
+    portfolios_fitness_w_copulae = [fitness(run_portfolio(portfolio,
+                                                          weights,
+                                                          log_returns))
+                                    for portfolio,
+                                    weights
+                                    in zip(portfolios,
+                                           portfolios_weights_w_copulae)]                                         
     forecast_portfolios_fitness = [fitness(run_portfolio(portfolio,
                                                          weights,
                                                          log_returns))
@@ -203,6 +213,10 @@ def main():
           {np.array(portfolios_fitness).mean()}')
     print(f'Cardinality-constrained, optimised portfolio std: \
           {np.array(portfolios_fitness).std()}')
+    print(f'Cardinality-constrained, optimised portfolio using copulae: \
+          {np.array(portfolios_fitness_w_copulae).mean()}')
+    print(f'Cardinality-constrained, optimised portfolio using copulae std: \
+          {np.array(portfolios_fitness_w_copulae).std()}')
     print(f'Cardinality-constrained, optimised portfolio w/ forecasts mean: \
           {np.array(forecast_portfolios_fitness).mean()}')
     print(f'Cardinality-constrained, optimised portfolio w/ forecasts std: \
@@ -238,6 +252,10 @@ def main():
                  kde=True,
                  color='orange',
                  label='Cardinality-constrained, optimised portfolios')
+    sns.histplot(portfolios_fitness_w_copulae,
+                 kde=True,
+                 color='green',
+                 label='Cardinality-constrained, optimised portfolios using copulae')
     sns.histplot(portfolios_random_fitness,
                  kde=True,
                  color='blue',
