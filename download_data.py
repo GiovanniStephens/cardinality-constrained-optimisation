@@ -40,9 +40,9 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
-    etfs = load_etfs('ETFs.csv')
+    etfs = load_etfs('Data/ETFs.csv')
     prices = download_data(etfs)
-    save_to_csv(prices, 'ETF_Prices.csv')
+    save_to_csv(prices, 'Data/ETF_Prices.csv')
 
 
 if __name__ == '__main__':

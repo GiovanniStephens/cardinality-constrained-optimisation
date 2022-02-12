@@ -290,7 +290,7 @@ def create_portfolio(num_children: int = 100, verbose: bool=True) -> list:
 
 if __name__ == '__main__':
     # Load the data
-    prices_df = load_data('ETF_Prices.csv')
+    prices_df = load_data('Data/ETF_Prices.csv')
     # Prepare the inputs for the optimisation
     prepare_opt_inputs(prices_df, use_forecasts=True)
 

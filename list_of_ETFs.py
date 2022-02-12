@@ -128,7 +128,7 @@ def main():
     Main function.
     """
     etf_df = get_all_ETFs()
-    etf_df.to_csv('ETFs.csv', index=False)
+    etf_df.to_csv('Data/ETFs.csv', index=False)
 
 
 if __name__ == '__main__':

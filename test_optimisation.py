@@ -9,7 +9,7 @@ class TestOptimisation(unittest.TestCase):
         """
         Asserts that the load_data function returns a pandas DataFrame.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         self.assertEqual(data.shape, (756, 1792))
 
     def test_calculate_returns(self):
@@ -19,7 +19,7 @@ class TestOptimisation(unittest.TestCase):
 
         The returns should be N-1, but I fill the first value with a 0% return.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         self.assertEqual(log_returns.shape, data.shape)
 
@@ -32,7 +32,7 @@ class TestOptimisation(unittest.TestCase):
 
         The returns should be N-1, but I fill the first value with a 0% return.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         self.assertEqual(log_returns.iloc[0, 0], 0)
 
@@ -83,13 +83,13 @@ class TestOptimisation(unittest.TestCase):
         when the file is not found.
         """
         with self.assertRaises(FileNotFoundError):
-            data = op.load_data('ETF_Prices_missing.csv')
+            data = op.load_data('Data/ETF_Prices_missing.csv')
 
     def test_load_data_returns_df(self):
         """
         Asserts that the load_data function returns a pandas DataFrame.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         self.assertEqual(isinstance(data, pd.DataFrame), True)
 
     def test_get_cov_matrix(self):
@@ -97,7 +97,7 @@ class TestOptimisation(unittest.TestCase):
         Asserts that the get_cov_matrix function calculates
         the covariances correctly.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         cov = log_returns.iloc[:, :2].cov()*252
         cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
@@ -108,7 +108,7 @@ class TestOptimisation(unittest.TestCase):
         Asserts that the optimisation function returns
         weights under the maximum weight.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 5
@@ -124,7 +124,7 @@ class TestOptimisation(unittest.TestCase):
         Asserts that the optimisation function returns
         weights over the minimum weight.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 5
@@ -139,7 +139,7 @@ class TestOptimisation(unittest.TestCase):
         Tests that the risk constraint is indeed being
         applied in the optimisation.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 30  # Need sufficient stocks to get the risk to 0.15
@@ -163,7 +163,7 @@ class TestOptimisation(unittest.TestCase):
         Tests that the return constraint is indeed being
         applied in the optimisation.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 30
@@ -195,7 +195,7 @@ class TestOptimisation(unittest.TestCase):
         """
         min_num = 1
         max_num = 20
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         individual = op.create_individual(log_returns)
         num_ones = np.count_nonzero(individual)
@@ -208,7 +208,7 @@ class TestOptimisation(unittest.TestCase):
         GA. If there are too many 1's, the fitness
         should be the negative sum of the 1's.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         individual = [1]*log_returns.shape[1]
         fitness = op.fitness(individual, log_returns)
@@ -220,7 +220,7 @@ class TestOptimisation(unittest.TestCase):
         GA. If there are too few 1's, the fitness
         should be 0.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         individual = [0]*log_returns.shape[1]
         fitness = op.fitness(individual, log_returns)
@@ -232,7 +232,7 @@ class TestOptimisation(unittest.TestCase):
         GA. If there are the right number of 1's,
         the fitness should be between 1 and 5.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 8
@@ -246,7 +246,7 @@ class TestOptimisation(unittest.TestCase):
         Tests the fitness function that is
         required for pyGAD.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=False)
         num_stocks = 8
@@ -261,7 +261,7 @@ class TestOptimisation(unittest.TestCase):
         Tests that the prepare_opt_inputs function
         loads returns of the correct length.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=True)
         self.assertEqual(len(op.data), len(log_returns.T))
@@ -270,7 +270,7 @@ class TestOptimisation(unittest.TestCase):
         """
         Should have an equal number of variances to ETFs.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=True)
         self.assertEqual(len(op.variances), len(log_returns.T))
@@ -279,7 +279,7 @@ class TestOptimisation(unittest.TestCase):
         """
         Should have an equal number of forecasts to ETFs.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         log_returns = op.calculate_returns(data)
         op.prepare_opt_inputs(data, use_forecasts=True)
         self.assertEqual(len(op.expected_returns), len(log_returns.T))
@@ -289,7 +289,7 @@ class TestOptimisation(unittest.TestCase):
         When not importing forecast variances, the variances
         variable should be None.
         """
-        data = op.load_data('ETF_Prices.csv')
+        data = op.load_data('Data/ETF_Prices.csv')
         op.prepare_opt_inputs(data, use_forecasts=False)
         self.assertEqual(op.variances, None)
 

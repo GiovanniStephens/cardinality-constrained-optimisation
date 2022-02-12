@@ -9,7 +9,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # import the data
-df = pd.read_csv('ETF_Prices.csv', index_col=0)
+df = pd.read_csv('Data/ETF_Prices.csv', index_col=0)
 
 # Check the data types
 print(f'Data types: {df.dtypes}\n')

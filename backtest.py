@@ -27,7 +27,7 @@ NUM_JOBS = cpu_count()
 USE_FORECAST = False
 
 # Load the price data.
-data = op.load_data('ETF_Prices.csv')
+data = op.load_data('Data/ETF_Prices.csv')
 
 
 def get_random_weights(portfolio):
