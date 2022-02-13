@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 import scipy.optimize as opt
 import pygad
-from muarch import MUArch
+from muarch import MUArch, UArch
 from copulae import TCopula
-
+import warnings
+warnings.filterwarnings("ignore")
 
 MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
@@ -226,8 +227,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('variances.csv')
-        expected_returns = load_data('expected_returns.csv')['0']
+        variances = load_data('Data/variances.csv')
+        expected_returns = load_data('Data/expected_returns.csv')['0']
     else:
         data = calculate_returns(prices).transpose()
         variances = None
