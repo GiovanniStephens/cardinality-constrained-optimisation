@@ -112,9 +112,9 @@ The comparison of the groups is done using a one-tailed t-test. It is assumed th
 
 ## Backtest results
 
-Sample size = 20
+Sample size = 100
 
-Number of children per generation = 500
+Number of children per generation = 1000
 
 Number of out-of-sample days = 252
 
@@ -124,25 +124,27 @@ Minimum number of holdings = 3
 
 Maximum weighting per holding = 20%
 
-Cardinality-constrained, optimised portfolio mean:           3.03348004700598
-Cardinality-constrained, optimised portfolio std:           0.35399116871443753
-Cardinality-constrained, optimised portfolio using copulae mean:           3.091332461744629
-Cardinality-constrained, optimised portfolio using copulae std:           0.3855432713267096
-Cardinality-constrained, optimised portfolio w/ forecasts mean:           2.87086326464585
-Cardinality-constrained, optimised portfolio w/ forecasts std:           0.7488831240350854
-Cardinality-constrained, random weightings portfolio mean:           2.3003461023443967
-Cardinality-constrained, random weightings portfolio std:           1.0436015803722725
+Minimum weighting per holding = 0%
 
-Random selections, optimised portfolio mean:           0.6502714270765833
-Random selections, optimised portfolio std:           0.4661265102962434
-Random selections, random weightings portfolio mean:           0.25420297894399607
-Random selections, random weightings portfolio std:           0.4404973199397284
+Cardinality-constrained, optimised portfolio mean:           2.9537768422303015
+Cardinality-constrained, optimised portfolio std:           0.4731999673156576
+Cardinality-constrained, optimised portfolio using copulae mean:           3.064262233898966
+Cardinality-constrained, optimised portfolio using copulae std:           0.4829962345476325
+Cardinality-constrained, optimised portfolio w/ forecasts mean:           2.983131149108223
+Cardinality-constrained, optimised portfolio w/ forecasts std:           0.40163833672694216
+Cardinality-constrained, random weightings portfolio mean:           2.5689569449391905
+Cardinality-constrained, random weightings portfolio std:           0.8758641343139768
 
-Cardinality-constrained, optimised portfolio vs. random weightings t-statistic:         -3.643850679417152
-Random selections, optimised portfolio vs. random weightings t-statistic:         -3.3825582406462926
-Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic:         -22.301771351668886
-Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic:         -26.937706598801306
-Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic:         -1.0752785655320893
+Random selections, optimised portfolio mean:           0.6269879489226622
+Random selections, optimised portfolio std:           0.40837903507269024
+Random selections, random weightings portfolio mean:           0.10187350826412626
+Random selections, random weightings portfolio std:           0.484911941229262
+
+Cardinality-constrained, optimised portfolio vs. random weightings t-statistic:         -3.8655240526741874
+Random selections, optimised portfolio vs. random weightings t-statistic:         -8.283004933819473
+Cardinality-constrained, optimised portfolio vs. random selection, optimised t-statistic:         -37.22544687238842
+Cardinality-constrained, optimised portfolio vs. random selection, random weightings t-statistic:         -42.09215059012316
+Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic:         0.4729452837454157
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
 
