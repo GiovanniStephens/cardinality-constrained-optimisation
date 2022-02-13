@@ -9,13 +9,13 @@ import seaborn as sns
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 30
+NUM_PORTFOLIOS = 100
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
 # Under 50, the GA converges too quickly and the results are
 # equal to a random selection.
-NUM_CHILDREN = 500
+NUM_CHILDREN = 1000
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 252
@@ -218,7 +218,7 @@ def main():
           {np.array(portfolios_fitness).mean()}')
     print(f'Cardinality-constrained, optimised portfolio std: \
           {np.array(portfolios_fitness).std()}')
-    print(f'Cardinality-constrained, optimised portfolio using copulae: \
+    print(f'Cardinality-constrained, optimised portfolio using copulae mean: \
           {np.array(portfolios_fitness_w_copulae).mean()}')
     print(f'Cardinality-constrained, optimised portfolio using copulae std: \
           {np.array(portfolios_fitness_w_copulae).std()}')
