@@ -48,6 +48,7 @@ def optimal_weights(portfolio, use_copulae=False):
     input portfolio.
 
     :portfolio: The input portfolio. List of ticker strings.
+    :use_copulae: Whether to use copulae or not.
     :return: A list of weights for the input portfolio.
     """
     random_weights = get_random_weights(portfolio)
@@ -67,6 +68,7 @@ def run_portfolio(portfolio, weights, log_returns):
     :portfolio: The input portfolio. List of ticker strings.
     :weights: The input weights. List of floats.
     :log_returns: The input log returns. Dataframe.
+    :return: The out-of-sample returns.
     """
     portfolio_returns = []
     # Run the backtest from the first out-of-sample day

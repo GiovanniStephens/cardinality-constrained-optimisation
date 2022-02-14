@@ -22,6 +22,8 @@ expected_returns = None
 def sharpe_ratio(weights: np.array, returns: list, cov: list) -> float:
     """
     Calculates the Sharpe ratio of a portfolio.
+    The Sharpe ratio is the ratio of the mean return of the portfolio
+    to the portfolio standard deviation.
 
     :weights: numpy array of weights.
     :p_returns: list of the portfolio's expected return.
@@ -70,7 +72,7 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
         diag = np.sqrt(variances.loc[data.columns].values)
         np.fill_diagonal(D, diag)
         if use_copulae:
-            corr = estimate_covar_using_copulas(data)
+            corr = estimate_corr_using_copulas(data)
         else:
             corr = data.corr()
         cov_matrix = np.matmul(np.matmul(D, corr), D)
@@ -79,9 +81,13 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
     return cov_matrix
 
 
-def estimate_covar_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
+def estimate_corr_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
     """
     Estimates the covariance matrix using the copula method.
+
+    It first models the returns using an AR(1)-GARCH(1, 1)
+    with skewt innovations. Then it uses the copula to
+    estimate the correlation matrix.
 
     :data: pandas dataframe of the log returns data.
     :return: pandas dataframe of the covariance matrix.
@@ -115,6 +121,7 @@ def optimize(data: pd.DataFrame,
                     (annualised portfolio mean return).
     :max_weight: float of the maximum weight of any single stock.
     :min_weight: float of the minimum weight of any single stock.
+    :use_copulae: boolean of whether to use copulae or not.
     :return: pcipy optimization result.
     """
     cov_matrix = get_cov_matrix(data, use_copulae)
@@ -160,6 +167,10 @@ def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
 def fitness(individual, data):
     """
     Fitness function for the genetic algorithm.
+
+    This is the max Sharpe Ratio for a given portfolio.
+    The the number of ETFs is out of the limits, the fitness
+    is set to the negative of the count of the securities.
 
     :individual: binary array.
     :data: pandas dataframe of the returns data.
@@ -222,6 +233,7 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     """
     Prepares the inputs for the optimisation.
 
+    :prices: pandas dataframe of the prices.
     :use_forecasts: bool of whether to use forecasts.
     """
     global variances, expected_returns, data
