@@ -45,21 +45,11 @@ One way to estimate this value is to simulate the portfolio using a Copula-GARCH
 
 An issue with this alternative function is that it is slow to estimate. It cannot be repeated quickly for thousands of hypothetical portfolios. The Sharpe Ratio is a fast way to gauge whether the portfolio would be any good. 
 
-# Plan
+# Approach
 
-I want to be able to solve the cardinality constrained problem quickly, so an approximate solution like evolutionalry (done) or particle swarm algorithms could be used. An alternative would be to use mixed integer programming to solve the problem, but I have not been able to work out how to do that yet. 
+To solve the cardinality constrained problem, I create an approximate solution using an evolutionary algorithm. Each chromasome is a portfolio of N ETFs. The objective function is maximised for each subset portfolio. 
 
-First, I am going to try create a genetic algorithm (done), and then I will try something else. Maybe I will constrain the problem to take a limited amount of time too... we will see. (done. I used early termination to speed up the process)
-
-Next step will be to create a particle swarm optimisation algorithm to see how it compares to the genetic algorithm for speed and outcome.
-
-Try a different genetic algorithm to see if it is faster. (pyGAD could be a good alternative). (done)
-
-Using historical variances, covariances, and mean returns, the average out-of-sample Sharpe Ratio is significantly greater for optimised cardinality-constrained portfolios than for random selections and allocations. Regardless, it would be interesting to see if I can get even better results using forecast average returns and variances with historical covariances.
-
-I have created the whole model, however, I have not created automated unit tests alogn the way. As a result, I have lost a little of my trust in the model. Next steps are to do a lot of validation and simplificaton of the model.
-
-Additionally, the model is quite slow, so I need to work out how to speed it up further.
+I create portfolios using historical returns, variances and covariances, and then I create portfolios using forecasts of returns, variances with historical covariances (i.e. COnstant conditional correlation (CCC) model). To see if I can get even better out-of-sample performance, I use forecast covariances as well using a Copula-GARCH model. 
 
 ## Forecasting Returns
 
@@ -147,8 +137,3 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic:         0.4729452837454157
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
-
-# To do
-
-- [x] Check that the comments are appropriate.
-- [x] Do some more tidying and linting.
