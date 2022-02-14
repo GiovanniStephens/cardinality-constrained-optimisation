@@ -150,7 +150,5 @@ Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ fore
 
 # To do
 
-- [ ] Check that the comments are appropriate.
-- [ ] Do some more tidying and linting.
-- [ ] I want to maybe use time indeces rather than just numbers to make sure that I am using the right days in the backtest.
-- [ ] Another thing that would be cool to do is to create a moving optimisation that 'rebalances' each n days. So you would run the cardinality optimisation once, and then a mean-variance optimisation every n days. This would allow you to see how the constrained portfolios perform over time.
+- [x] Check that the comments are appropriate.
+- [x] Do some more tidying and linting.
