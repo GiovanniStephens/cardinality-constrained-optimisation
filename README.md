@@ -45,6 +45,8 @@ One way to estimate this value is to simulate the portfolio using a Copula-GARCH
 
 An issue with this alternative function is that it is slow to estimate. It cannot be repeated quickly for thousands of hypothetical portfolios. The Sharpe Ratio is a fast way to gauge whether the portfolio would be any good. 
 
+Another approach is to optimise the portfolio such that all holdings contribute equally to the portfolio risk (i.e., risk parity portfolio). 
+
 # Approach
 
 To solve the cardinality constrained problem, I create an approximate solution using an evolutionary algorithm. Each chromasome is a portfolio of N ETFs. The objective function is maximised for each subset portfolio. 
