@@ -103,13 +103,43 @@ def estimate_corr_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
     return cop.sigma
 
 
+# risk budgeting optimization
+def calculate_portfolio_var(w, V):
+    # function that calculates portfolio risk
+    w = np.matrix(w)
+    return (w*V*w.T)[0,0]
+
+
+def calculate_risk_contribution(w, V):
+    # function that calculates asset contribution to total risk
+    w = np.matrix(w)
+    sigma = np.sqrt(calculate_portfolio_var(w, V))
+    # Marginal Risk Contribution
+    MRC = V*w.T
+    # Risk Contribution
+    RC = np.multiply(MRC,w.T)/sigma
+    return RC
+
+
+def risk_budget_objective(x, pars):
+    # calculate portfolio risk
+    V = pars[0]# covariance table
+    x_t = pars[1] # risk target in percent of portfolio risk
+    sig_p =  np.sqrt(calculate_portfolio_var(x, V)) # portfolio sigma
+    risk_target = np.asmatrix(np.multiply(sig_p, x_t))
+    asset_RC = calculate_risk_contribution(x, V)
+    J = sum(np.square(asset_RC-risk_target.T))[0,0] # sum of squared error
+    return J
+
+
 def optimize(data: pd.DataFrame,
              initial_weights: np.array,
              target_risk: float = None,
              target_return: float = None,
              max_weight: float = 0.3333,
              min_weight: float = 0.0000,
-             use_copulae: bool = False) -> float:
+             use_copulae: bool = False,
+             risk_parity: bool = False) -> float:
     """
     Optimizes the portfolio using the Sharpe ratio.
 
@@ -141,12 +171,21 @@ def optimize(data: pd.DataFrame,
              'fun': lambda W: target_return -
              np.sum(rets*W)})
     bounds = tuple((min_weight, max_weight) for _ in range(len(initial_weights)))
-    sol = opt.minimize(sharpe_ratio,
-                       initial_weights,
-                       args=(rets, cov_matrix),
-                       method='SLSQP',
-                       bounds=bounds,
-                       constraints=cons)
+    if risk_parity:
+        risk_proportion = [1/len(initial_weights)]*len(initial_weights)
+        sol = opt.minimize(risk_budget_objective,
+                           initial_weights,
+                           args=(cov_matrix, risk_proportion),
+                           method='SLSQP',
+                           bounds=bounds,
+                           constraints=cons)
+    else:
+        sol = opt.minimize(sharpe_ratio,
+                           initial_weights,
+                           args=(rets, cov_matrix),
+                           method='SLSQP',
+                           bounds=bounds,
+                           constraints=cons)
     return sol
 
 
@@ -301,7 +340,7 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
     return list(portfolio)
 
 
-if __name__ == '__main__':
+def main():
     # Load the data
     prices_df = load_data('Data/ETF_Prices.csv')
     # Prepare the inputs for the optimisation
@@ -338,3 +377,15 @@ if __name__ == '__main__':
                          zip(prices_df.iloc[:, indeces].columns,
                              sol.x)}
     print(stock_allocations)
+
+
+if __name__ == '__main__':
+    prices_df = load_data('Data/ETF_Prices.csv')
+    prepare_opt_inputs(prices_df, use_forecasts=True)
+    log_returns = calculate_returns(prices_df)
+    portfolio = create_portfolio()
+    data = log_returns.loc[:, portfolio]
+    random_weights = np.random.random(len(portfolio))
+    random_weights /= np.sum(random_weights)
+    res = optimize(data, random_weights, risk_parity=True)
+    print(res)
