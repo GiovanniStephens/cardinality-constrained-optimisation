@@ -45,7 +45,7 @@ One way to estimate this value is to simulate the portfolio using a Copula-GARCH
 
 An issue with this alternative function is that it is slow to estimate. It cannot be repeated quickly for thousands of hypothetical portfolios. The Sharpe Ratio is a fast way to gauge whether the portfolio would be any good. 
 
-Another approach is to optimise the portfolio such that all holdings contribute equally to the portfolio risk (i.e., risk parity portfolio). 
+Another approach is to optimise the portfolio such that all holdings contribute equally to the portfolio risk (i.e., risk parity portfolio). At this stage, the option to optimise the portfolios using risk parity is under development.
 
 # Approach
 
@@ -139,3 +139,15 @@ Cardinality-constrained, optimised portfolio vs. random selection, random weight
 Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ forecast values and optimal weightings t-statistic:         0.4729452837454157
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
+
+
+# Todo
+
+- [ ] Add risk parity portfolios to the mix.
+- [ ] Calculate other metrics other than mean and standard deviation of the returns:
+    - [ ] Maximum drawdown
+    - [ ] Calmar ratio (Avg. Annual Return / Maximum Drawdown)
+    - [ ] Sortino ratio ((Portfolio Return - Rf ) / downside deviation)
+    - [ ] Portfolio beta
+    - [ ] Portfolio alpha
+- [ ] Test optimisation routines against www.portfoliovisualizer.com 
