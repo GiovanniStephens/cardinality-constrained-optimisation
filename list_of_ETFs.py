@@ -3,11 +3,12 @@ import pandas as pd
 from bs4 import BeautifulSoup as bs
 from selenium import webdriver
 from tqdm import tqdm
+import urllib.parse
 
 
-BASE_URL = 'https://etfdb.com/screener/'
+BASE_URL = 'https://etfdb.com/screener/#'
 # Only ETFs with at least 3 years of data are included.
-PARAMS = {'three_ytd_start': '-99'}
+PARAMS = {'page': -1, 'three_ytd_start': '-99', 'leveraged': '3x'}
 
 
 def set_up_driver():
@@ -36,12 +37,8 @@ def build_url(page_num: int) -> str:
     :page_num: int of the page number.
     :return: string of the URL.
     """
-    url = BASE_URL + '#page='\
-                   + str(page_num) \
-                   + '&' \
-                   + '&'.join(PARAMS.keys()) \
-                   + '=' \
-                   + '&'.join(PARAMS.values())
+    PARAMS['page'] = page_num
+    url = BASE_URL + urllib.parse.urlencode(PARAMS)
     return url
 
 
@@ -128,7 +125,7 @@ def main():
     Main function.
     """
     etf_df = get_all_ETFs()
-    etf_df.to_csv('Data/ETFs.csv', index=False)
+    etf_df.to_csv('Data/3x_leveraged_ETFs.csv', index=False)
 
 
 if __name__ == '__main__':
