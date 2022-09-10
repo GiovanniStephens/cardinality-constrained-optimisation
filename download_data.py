@@ -22,9 +22,11 @@ def download_data(etfs: pd.DataFrame) -> pd.DataFrame:
     """
     tickers = ' '.join(etfs['Tickers'].to_list())
     prices = yf.download(tickers,
-                         period='3y',
+                        #  period='3y',
                          interval='1d',
-                         group_by='ticker')
+                         group_by='ticker',
+                         start="2019-01-01",
+                         end="2021-12-31")
     adj_closing_prices = []
     for ticker in etfs['Tickers']:
         adj_closing_prices.append(prices[ticker]['Adj Close'].to_list())
@@ -44,10 +46,10 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
-    etfs = load_etfs('Data/ETFs.csv')
+    etfs = load_etfs('Data/3x_leveraged_ETFs.csv')
     prices = download_data(etfs)
     filtered_prices = prices.dropna(axis=1, thresh=90)
-    save_to_csv(filtered_prices, 'Data/ETF_Prices.csv')
+    save_to_csv(filtered_prices, 'Data/leveraged_ETF_Prices.csv')
 
 
 if __name__ == '__main__':
