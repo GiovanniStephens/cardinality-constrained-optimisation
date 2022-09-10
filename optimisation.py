@@ -9,9 +9,9 @@ warnings.filterwarnings("ignore")
 
 MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
-TARGET_RETURN = 0.2
+TARGET_RETURN = None
 TARGET_RISK = None
-MAX_WEIGHT = 0.4
+MAX_WEIGHT = 1
 MIN_WEIGHT = 0.0  # No shorting
 last_fitness = 0
 data = None
@@ -175,7 +175,7 @@ def optimize(data: pd.DataFrame,
         risk_proportion = [1/len(initial_weights)]*len(initial_weights)
         sol = opt.minimize(risk_budget_objective,
                            initial_weights,
-                           args=(cov_matrix, risk_proportion),
+                           args=([np.matrix(cov_matrix), risk_proportion]),
                            method='SLSQP',
                            bounds=bounds,
                            constraints=cons)
@@ -225,7 +225,8 @@ def fitness(individual, data):
                             random_weights,
                             target_return=TARGET_RETURN,
                             target_risk=TARGET_RISK,
-                            max_weight=MAX_WEIGHT)['fun']
+                            max_weight=MAX_WEIGHT,
+                            risk_parity=True)['fun']
     else:
         fitness = -np.count_nonzero(individual)
     return fitness
@@ -380,12 +381,16 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/ETF_Prices.csv')
-    prepare_opt_inputs(prices_df, use_forecasts=True)
+    prices_df = load_data('Data/leveraged_ETF_Prices.csv')
+    prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
-    portfolio = create_portfolio()
+    portfolio = create_portfolio(num_children=10)
+    # portfolio = ['LTPZ', 'JO', 'GAMR', 'NACP', 'IBCE']
+    # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
+
+    print(portfolio)
     data = log_returns.loc[:, portfolio]
     random_weights = np.random.random(len(portfolio))
     random_weights /= np.sum(random_weights)
-    res = optimize(data, random_weights, risk_parity=True)
+    res = optimize(data, random_weights, risk_parity=True, max_weight=1, target_return=0.1)
     print(res)
