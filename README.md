@@ -143,11 +143,11 @@ Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ fore
 
 # Todo
 
-- [ ] Add risk parity portfolios to the mix.
+- [x] Add risk parity portfolios to the mix.
 - [ ] Calculate other metrics other than mean and standard deviation of the returns:
     - [ ] Maximum drawdown
     - [ ] Calmar ratio (Avg. Annual Return / Maximum Drawdown)
     - [ ] Sortino ratio ((Portfolio Return - Rf ) / downside deviation)
     - [ ] Portfolio beta
     - [ ] Portfolio alpha
-- [ ] Test optimisation routines against www.portfoliovisualizer.com 
+- [x] Test optimisation routines against www.portfoliovisualizer.com 
