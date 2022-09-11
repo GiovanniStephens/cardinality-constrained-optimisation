@@ -46,10 +46,10 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
-    etfs = load_etfs('Data/3x_leveraged_ETFs.csv')
+    etfs = load_etfs('Data/2x_leveraged_ETFs.csv')
     prices = download_data(etfs)
     filtered_prices = prices.dropna(axis=1, thresh=90)
-    save_to_csv(filtered_prices, 'Data/leveraged_ETF_Prices.csv')
+    save_to_csv(filtered_prices, 'Data/2x_leveraged_ETF_Prices.csv')
 
 
 if __name__ == '__main__':
