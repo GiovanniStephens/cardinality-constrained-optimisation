@@ -8,7 +8,7 @@ import urllib.parse
 
 BASE_URL = 'https://etfdb.com/screener/#'
 # Only ETFs with at least 3 years of data are included.
-PARAMS = {'page': -1, 'three_ytd_start': '-99', 'leveraged': '3x'}
+PARAMS = {'page': -1, 'three_ytd_start': '-99', 'leveraged': '2x'}
 
 
 def set_up_driver():
@@ -125,7 +125,7 @@ def main():
     Main function.
     """
     etf_df = get_all_ETFs()
-    etf_df.to_csv('Data/3x_leveraged_ETFs.csv', index=False)
+    etf_df.to_csv('Data/2x_leveraged_ETFs.csv', index=False)
 
 
 if __name__ == '__main__':
