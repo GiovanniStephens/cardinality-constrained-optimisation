@@ -382,10 +382,10 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = load_data('Data/NZ_ETF_Prices.csv')
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
-    portfolio = create_portfolio(num_children=2000)
+    portfolio = create_portfolio(num_children=1000)
     # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD', 'JJT']
     # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
 
