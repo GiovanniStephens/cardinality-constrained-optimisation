@@ -83,7 +83,7 @@ def run_portfolio(portfolio, weights, log_returns):
             (1+portfolio_returns[-1])
     return portfolio_returns
 
-
+# Todo
 def maximum_drawdown(portfolio_returns):
     """
     Calculates the out-of-sample maximum drawdown
@@ -93,20 +93,23 @@ def maximum_drawdown(portfolio_returns):
     :return: The maximum drawdown, which is the percentage drawdown 
              from the highest peak to the lowest low.
     """
-    index = 1.0
-    max_point = 1.0
-    min_point = 1.0
-    for i in portfolio_returns:
-        index *= np.exp(i)
-        if index > max_point:
-            max_point = index
-    
-    index = 1
-    for i in portfolio_returns:
-        index *= np.exp(i)
-        if index < min_point:
-            min_point = index
-    return (max_point - min_point) / max_point
+    # I need to calculate the cummulative maximum.
+    cummax = []
+    # Then the cummulative return.
+    cum_return = []
+    # Then the drawdown is the percentage diff between the cummulative 
+    # max and the cummulative return.
+    drawdowns = []
+
+    cummax.append(portfolio_returns[0])
+    cum_return.append(portfolio_returns[0])
+    drawdowns.append(0)
+    for i in range(1, len(portfolio_returns) - 1):
+        cummax.append(max(portfolio_returns[i] + portfolio_returns[i-1], portfolio_returns[i]))
+        cum_return.append(cum_return[i-1] + portfolio_returns[i])
+        drawdowns.append(cummax[i] - cum_return[i])
+    # The answer is the maximum of the drowdowns.
+    return min(drawdowns)
 
 
 def downside_deviation(portfolio_returns, mar = 0):
