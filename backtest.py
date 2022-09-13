@@ -84,6 +84,29 @@ def run_portfolio(portfolio, weights, log_returns):
     return portfolio_returns
 
 
+def maximum_drawdown(portfolio_returns):
+    """
+    Calculates the out-of-sample maximum drawdown
+    from the simulation.
+
+    :portfolio_returns: The input portfolio returns. List of floats.
+    """
+    index = 1.0
+    max_point = 1.0
+    min_point = 1.0
+    for i in portfolio_returns:
+        index *= np.exp(i)
+        if index > max_point:
+            max_point = index
+    
+    index = 1
+    for i in portfolio_returns:
+        index *= np.exp(i)
+        if index < min_point:
+            min_point = index
+    return (max_point - min_point) / max_point
+
+
 def fitness(portfolio_returns):
     """
     Calculates the portfolio Sharpe Ratio.
