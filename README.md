@@ -148,6 +148,6 @@ Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ fore
     - [ ] Maximum drawdown
     - [ ] Calmar ratio (Avg. Annual Return / Maximum Drawdown)
     - [ ] Sortino ratio ((Portfolio Return - Rf ) / downside deviation)
-    - [ ] Portfolio beta
-    - [ ] Portfolio alpha
+    - [ ] Portfolio beta (This means that the user would need to specify a benchmark)
+    - [ ] Portfolio alpha (This means that the user would need to specify a benchmark)
 - [x] Test optimisation routines against www.portfoliovisualizer.com 
