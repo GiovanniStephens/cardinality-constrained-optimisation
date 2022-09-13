@@ -107,6 +107,22 @@ def maximum_drawdown(portfolio_returns):
     return (max_point - min_point) / max_point
 
 
+def downside_deviation(portfolio_returns, mar = 0):
+    """
+    Calculates the downside deviation of the portfolio
+    returns.
+
+    :portfolio_returns: The input portfolio returns. List of floats.
+    :mar: threshold below which one would calculate the deviation.
+    :return: downside deviation.
+    """
+    squared_dev = 0
+    for i in portfolio_returns:
+        if i < mar:
+            squared_dev += (i - mar)**2
+    return (squared_dev / len(portfolio_returns))**0.5
+
+
 def fitness(portfolio_returns):
     """
     Calculates the portfolio Sharpe Ratio.
