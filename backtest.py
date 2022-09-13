@@ -90,6 +90,8 @@ def maximum_drawdown(portfolio_returns):
     from the simulation.
 
     :portfolio_returns: The input portfolio returns. List of floats.
+    :return: The maximum drawdown, which is the percentage drawdown 
+             from the highest peak to the lowest low.
     """
     index = 1.0
     max_point = 1.0
