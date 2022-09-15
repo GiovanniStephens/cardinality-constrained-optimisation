@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import tqdm
 
-data = op.load_data('Data/ETF_Prices.csv')
+data = op.load_data('Data/NZ_ETF_Prices.csv')
 training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
 
@@ -32,7 +32,7 @@ for ticker in tqdm.tqdm(data.columns):
                                           forecast[-1])/forecast[0])
 expected_returns = pd.DataFrame.from_dict(expected_returns,
                                           orient='index')
-expected_returns.to_csv('Data/expected_returns.csv')
+expected_returns.to_csv('Data/NZ_expected_returns.csv')
 
 # Forecast volatility
 print('\nForecasting volatility...')
@@ -52,4 +52,4 @@ for ticker in tqdm.tqdm(data.columns):
         / np.power(100, 2)*252
 volatilities = pd.DataFrame.from_dict(volatilities,
                                       orient='index')
-volatilities.to_csv('Data/variances.csv')
+volatilities.to_csv('Data/NZ_variances.csv')
