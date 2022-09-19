@@ -101,13 +101,13 @@ def maximum_drawdown(portfolio_returns):
     # max and the cummulative return.
     drawdowns = []
 
-    cummax.append(portfolio_returns[0])
-    cum_return.append(portfolio_returns[0])
+    cummax.append(np.exp(portfolio_returns[0]))
+    cum_return.append(np.exp(portfolio_returns[0]))
     drawdowns.append(0)
-    for i in range(1, len(portfolio_returns) - 1):
-        cummax.append(max(portfolio_returns[i] + portfolio_returns[i-1], portfolio_returns[i]))
-        cum_return.append(cum_return[i-1] + portfolio_returns[i])
-        drawdowns.append(cummax[i] - cum_return[i])
+    for i in range(1, len(portfolio_returns)):
+        cummax.append(max(np.exp(portfolio_returns[i]) * cum_return[i-1], cum_return[i-1]))
+        cum_return.append(np.exp(portfolio_returns[i]) * cum_return[i-1])
+        drawdowns.append(cum_return[i] / cummax[i] - 1)
     # The answer is the maximum of the drowdowns.
     return min(drawdowns)
 
