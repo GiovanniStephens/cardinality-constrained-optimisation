@@ -150,4 +150,5 @@ Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ fore
     - [ ] Sortino ratio ((Portfolio Return - Rf ) / downside deviation)
     - [ ] Portfolio beta (This means that the user would need to specify a benchmark)
     - [ ] Portfolio alpha (This means that the user would need to specify a benchmark)
-- [x] Test optimisation routines against www.portfoliovisualizer.com 
+- [x] Test optimisation routines against www.portfoliovisualizer.com
+- [ ] I want to make sure a different optimisation engine produces the same weights given the expected returns, variances, and covariances. 
