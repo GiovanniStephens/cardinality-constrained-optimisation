@@ -83,7 +83,7 @@ def run_portfolio(portfolio, weights, log_returns):
             (1+portfolio_returns[-1])
     return portfolio_returns
 
-# Todo
+
 def maximum_drawdown(portfolio_returns):
     """
     Calculates the out-of-sample maximum drawdown
@@ -126,6 +126,19 @@ def downside_deviation(portfolio_returns, mar = 0):
         if i < mar:
             squared_dev += (i - mar)**2
     return (squared_dev / len(portfolio_returns))**0.5
+
+
+def sortino_ratio(r, downside_deviation, MAR = 0):
+    """
+    Calculates the Sortino ratio given the inputs.
+
+    :r: float for the portfolio returns (annualised)
+    :downside_deviation: the standard deviation of the 
+                         returns below MAR.
+    :MAR: The threshold under which the deviation is calculated.
+    :return: float for the Sortino Ratio.
+    """
+    return (r- MAR) / downside_deviation
 
 
 def fitness(portfolio_returns):
