@@ -141,6 +141,17 @@ def sortino_ratio(r, downside_deviation, MAR = 0):
     return (r- MAR) / downside_deviation
 
 
+def calmar_ratio(r, downside_drawdown):
+    """
+    Calculates that the portfolio Calmar ratio would be.
+
+    :r: float for the portfolio returns (annualised)
+    :downside_deviation: The maximum drawdown over a period in % terms.
+    :return: a float for the Calmar ratio
+    """
+    return r / downside_drawdown
+
+
 def fitness(portfolio_returns):
     """
     Calculates the portfolio Sharpe Ratio.
