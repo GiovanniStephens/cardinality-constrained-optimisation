@@ -280,8 +280,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('Data/variances.csv')
-        expected_returns = load_data('Data/expected_returns.csv')['0']
+        variances = load_data('Data/NZ_variances.csv')
+        expected_returns = load_data('Data/NZ_expected_returns.csv')['0']
     else:
         data = calculate_returns(prices).transpose()
         variances = None
@@ -383,7 +383,7 @@ def main():
 
 if __name__ == '__main__':
     prices_df = load_data('Data/NZ_ETF_Prices.csv')
-    prepare_opt_inputs(prices_df, use_forecasts=False)
+    prepare_opt_inputs(prices_df, use_forecasts=True)
     log_returns = calculate_returns(prices_df)
     portfolio = create_portfolio(num_children=1000)
     # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD', 'JJT']
@@ -395,8 +395,8 @@ if __name__ == '__main__':
     random_weights /= np.sum(random_weights)
     res = optimize(data
                    , random_weights
-                   , risk_parity=True
-                   , max_weight=1
+                   , risk_parity=False
+                   , max_weight=0.3333
                    , target_return=0.2
                    , use_copulae=True)
     print(res)
