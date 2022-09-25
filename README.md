@@ -80,6 +80,8 @@ Forecasting Long-term Equity Returns](https://fbe.unimelb.edu.au/__data/assets/p
 
 I have been able to forecast variances using a GARCH model. The variances are, then, loaded into the variance-covariance matrix using Bollerslov's (1990) constant conditional correlation (CCC) model. This can be done by taking a historical (and static) correlation matrix and then transforming it to a covariance matrix and inserting the forecast variances into the matrix.
 
+One thing I have noticed is that the model produces some wild and interesting variance forecasts for some assets. I will be investigating why this happens. 
+
 ## Forecasting covariances
 
 Bollerslov (1990) proposes a constant conditional correlation (CCC) model that forecasts the variances using a GARCH model and uses historical correlations to back out the variance-covariance matrix. For the optimisation, I use this method if I am using forecast variances. 
@@ -152,4 +154,4 @@ Cardinality-constrained, optimised portfolio vs. cardinality-constrained w/ fore
     - [ ] Portfolio alpha (This means that the user would need to specify a benchmark)
 - [x] Test optimisation routines against www.portfoliovisualizer.com
 - [ ] I want to make sure a different optimisation engine produces the same weights given the expected returns, variances, and covariances.
-_ [ ] Refactor and test some more. 
+- [ ] Refactor and test some more. 
