@@ -149,7 +149,18 @@ def calmar_ratio(r, downside_drawdown):
     :downside_deviation: The maximum drawdown over a period in % terms.
     :return: a float for the Calmar ratio
     """
-    return r / downside_drawdown
+    return r / -downside_drawdown
+
+
+def get_statistics(portfolio, weights, log_returns):
+    portfolio_returns = run_portfolio(portfolio, weights, log_returns)
+    max_drawdown = maximum_drawdown(portfolio_returns)
+    downside_dev = downside_deviation(portfolio_returns)
+    r = np.mean(portfolio_returns) * 252
+    std_dev = np.std(portfolio_returns) * np.sqrt(252)
+    calmar = calmar_ratio(r, max_drawdown)
+    sortino = sortino_ratio(r, downside_dev)
+    return [r, std_dev, r/std_dev, downside_dev, max_drawdown, calmar, sortino]
 
 
 def fitness(portfolio_returns):
@@ -357,4 +368,12 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD']
+    op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
+                          False)
+    op.TARGET_RETURN = 0.2
+    log_returns = op.calculate_returns(data)
+    weights = optimal_weights(portfolio, use_copulae=True)
+    # portfolio_returns = run_portfolio(portfolio, weights, log_returns)
+    print(get_statistics(portfolio, weights, log_returns))
