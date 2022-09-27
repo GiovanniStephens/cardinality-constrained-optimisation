@@ -54,7 +54,7 @@ def optimal_weights(portfolio, use_copulae=False):
     random_weights = get_random_weights(portfolio)
     return op.optimize(op.data.loc[portfolio, :].transpose(),
                        random_weights,
-                       max_weight=max(1/(len(portfolio)-1), 0.2),
+                       max_weight=max(1/(len(portfolio)-1), 0.3),
                        use_copulae=use_copulae)['x']
 
 
@@ -153,6 +153,14 @@ def calmar_ratio(r, downside_drawdown):
 
 
 def get_statistics(portfolio, weights, log_returns):
+    """
+    Aggregates all the performance metrics into one list.
+
+    :portfolio: list of strings of stock tickers.
+    :weights: list of floats of the portfolio weights.
+    :log_returns: logs returns. List of floats.
+    :returns: list of performance metrics.
+    """
     portfolio_returns = run_portfolio(portfolio, weights, log_returns)
     max_drawdown = maximum_drawdown(portfolio_returns)
     downside_dev = downside_deviation(portfolio_returns)
