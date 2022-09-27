@@ -11,7 +11,7 @@ MAX_NUM_STOCKS = 10
 MIN_NUM_STOCKS = 3
 TARGET_RETURN = 0.2
 TARGET_RISK = None
-MAX_WEIGHT = 0.4
+MAX_WEIGHT = 0.3333
 MIN_WEIGHT = 0.1
 last_fitness = 0
 data = None
@@ -382,10 +382,10 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/NZ_ETF_Prices.csv')
-    prepare_opt_inputs(prices_df, use_forecasts=True)
+    prices_df = load_data('Data/ETF_Prices.csv')
+    prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
-    portfolio = create_portfolio(num_children=1000)
+    portfolio = create_portfolio(num_children=5000)
     # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD', 'JJT']
     # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
 
