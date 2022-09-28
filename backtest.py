@@ -9,13 +9,13 @@ import seaborn as sns
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 100
+NUM_PORTFOLIOS = 5
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
 # Under 50, the GA converges too quickly and the results are
 # equal to a random selection.
-NUM_CHILDREN = 1000
+NUM_CHILDREN = 100
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 252
@@ -266,37 +266,37 @@ def main():
                           weights
                           in zip(portfolios,
                                  portfolios_weights)]
-    portfolios_fitness_w_copulae = [fitness(run_portfolio(portfolio,
-                                                          weights,
-                                                          log_returns))
+    portfolios_fitness_w_copulae = [get_statistics(portfolio,
+                                                   weights,
+                                                   log_returns)
                                     for portfolio,
                                     weights
                                     in zip(portfolios,
                                            portfolios_weights_w_copulae)]
-    forecast_portfolios_fitness = [fitness(run_portfolio(portfolio,
-                                                         weights,
-                                                         log_returns))
+    forecast_portfolios_fitness = [get_statistics(portfolio,
+                                                  weights,
+                                                  log_returns)
                                    for portfolio,
                                    weights
                                    in zip(forecast_portfolios,
                                           forecast_portfolios_weights)]
-    portfolios_random_fitness = [fitness(run_portfolio(portfolio,
-                                                       weights,
-                                                       log_returns))
+    portfolios_random_fitness = [get_statistics(portfolio,
+                                                weights,
+                                                log_returns)
                                  for portfolio,
                                  weights
                                  in zip(portfolios,
                                         portfolios_random_weights)]
-    random_portfolios_fitness = [fitness(run_portfolio(portfolio,
-                                                       weights,
-                                                       log_returns))
+    random_portfolios_fitness = [get_statistics(portfolio,
+                                                weights,
+                                                log_returns)
                                  for portfolio,
                                  weights
                                  in zip(random_portfolios,
                                         random_portfolios_weights)]
-    random_portfolios_random_fitness = [fitness(run_portfolio(portfolio,
-                                                              weights,
-                                                              log_returns))
+    random_portfolios_random_fitness = [get_statistics(portfolio,
+                                                       weights,
+                                                       log_returns)
                                         for portfolio,
                                         weights
                                         in zip(random_portfolios,
@@ -304,30 +304,31 @@ def main():
 
     print('PORTFOLIO SHARPE RATIO STATISTICS:\n')
     print(f'Cardinality-constrained, optimised portfolio mean: \
-          {np.array(portfolios_fitness).mean()}')
+          {np.array([stat[2] for stat in portfolios_fitness]).mean()}')
     print(f'Cardinality-constrained, optimised portfolio std: \
-          {np.array(portfolios_fitness).std()}')
+          {np.array([stat[2] for stat in portfolios_fitness]).std()}')
     print(f'Cardinality-constrained, optimised portfolio using copulae mean: \
-          {np.array(portfolios_fitness_w_copulae).mean()}')
+          {np.array([stat[2] for stat in portfolios_fitness_w_copulae]).mean()}')
     print(f'Cardinality-constrained, optimised portfolio using copulae std: \
-          {np.array(portfolios_fitness_w_copulae).std()}')
+          {np.array([stat[2] for stat in portfolios_fitness_w_copulae]).std()}')
     print(f'Cardinality-constrained, optimised portfolio w/ forecasts mean: \
-          {np.array(forecast_portfolios_fitness).mean()}')
+          {np.array([stat[2] for stat in forecast_portfolios_fitness]).mean()}')
     print(f'Cardinality-constrained, optimised portfolio w/ forecasts std: \
-          {np.array(forecast_portfolios_fitness).std()}')
+          {np.array([stat[2] for stat in forecast_portfolios_fitness]).std()}')
     print(f'Cardinality-constrained, random weightings portfolio mean: \
-          {np.array(portfolios_random_fitness).mean()}')
+          {np.array([stat[2] for stat in portfolios_random_fitness]).mean()}')
     print(f'Cardinality-constrained, random weightings portfolio std: \
-          {np.array(portfolios_random_fitness).std()}')
+          {np.array([stat[2] for stat in portfolios_random_fitness]).std()}')
     print(f'\nRandom selections, optimised portfolio mean: \
-          {np.array(random_portfolios_fitness).mean()}')
+          {np.array([stat[2] for stat in random_portfolios_fitness]).mean()}')
     print(f'Random selections, optimised portfolio std: \
-          {np.array(random_portfolios_fitness).std()}')
+          {np.array([stat[2] for stat in random_portfolios_fitness]).std()}')
     print(f'Random selections, random weightings portfolio mean: \
-          {np.array(random_portfolios_random_fitness).mean()}')
+          {np.array([stat[2] for stat in random_portfolios_random_fitness]).mean()}')
     print(f'Random selections, random weightings portfolio std: \
-          {np.array(random_portfolios_random_fitness).std()}')
+          {np.array([stat[2] for stat in random_portfolios_random_fitness]).std()}')
 
+    """
     # Perform a hypothesis test to see if the difference in means is significant
     print(f'\nCardinality-constrained, optimised portfolio vs. random weightings t-statistic: \
         {difference_of_means_hypothesis_test(portfolios_fitness, portfolios_random_fitness)}')
@@ -373,6 +374,7 @@ def main():
     # plt.xticks(np.arange(-3, 2.6, 0.5))
     plt.ylabel('Density')
     plt.show()
+    """
 
 
 if __name__ == '__main__':
