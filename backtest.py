@@ -9,13 +9,13 @@ import seaborn as sns
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 5
+NUM_PORTFOLIOS = 30
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
 # Under 50, the GA converges too quickly and the results are
 # equal to a random selection.
-NUM_CHILDREN = 100
+NUM_CHILDREN = 500
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 252
@@ -259,9 +259,9 @@ def main():
                                         for portfolio in random_portfolios]
 
     # Run the backtests for each of the portfolios
-    portfolios_fitness = [fitness(run_portfolio(portfolio,
-                                                weights,
-                                                log_returns))
+    portfolios_fitness = [get_statistics(portfolio,
+                                         weights,
+                                         log_returns)
                           for portfolio,
                           weights
                           in zip(portfolios,
@@ -378,7 +378,7 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
+    main()
     portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD']
     op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
                           False)
