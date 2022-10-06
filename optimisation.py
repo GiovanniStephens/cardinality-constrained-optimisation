@@ -280,8 +280,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('Data/NZ_variances.csv')
-        expected_returns = load_data('Data/NZ_expected_returns.csv')['0']
+        variances = load_data('Data/variances.csv')
+        expected_returns = load_data('Data/expected_returns.csv')['0']
     else:
         data = calculate_returns(prices).transpose()
         variances = None
