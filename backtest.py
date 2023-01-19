@@ -1,21 +1,23 @@
-import optimisation as op
-import numpy as np
 import multiprocessing as mp
 from multiprocessing import cpu_count
-from matplotlib import pyplot as plt
+
+import numpy as np
 import seaborn as sns
+from matplotlib import pyplot as plt
+
+import optimisation as op
 
 # This is the backtest sample size.
 # Ideally, it would be >= 30 to get a robust statistic.
 # It is a bit slow creating the cardinality-constrained portfolios,
 # even with parallelisation.
-NUM_PORTFOLIOS = 30
+NUM_PORTFOLIOS = 20
 
 # This is the number of children in the GA.
 # This works best on my computer with a number b/w 1000-2000.
 # Under 50, the GA converges too quickly and the results are
 # equal to a random selection.
-NUM_CHILDREN = 500
+NUM_CHILDREN = 100
 
 # This is the number of days out of sample for the backtest.
 NUM_DAYS_OUT_OF_SAMPLE = 252
@@ -24,10 +26,10 @@ NUM_DAYS_OUT_OF_SAMPLE = 252
 # cardinality-constrained portfolios.
 NUM_JOBS = cpu_count()
 
-USE_FORECAST = False
+USE_FORECAST = True
 
 # Load the price data.
-data = op.load_data('Data/ETF_Prices.csv')
+data = op.load_data('Data/NZ_ETF_Prices.csv')
 
 
 def get_random_weights(portfolio):
@@ -217,8 +219,9 @@ def main():
     # Create a pool of workers
     pool = mp.Pool(processes=NUM_JOBS)
     # Create a list of cardinality-constrained portfolios
+    params = [NUM_CHILDREN]*NUM_PORTFOLIOS
     portfolios = pool.map(create_portfolio,
-                          [NUM_CHILDREN]*NUM_PORTFOLIOS)
+                          params)
     # Close the pool and wait for the work to finish
     pool.close()
     pool.join()
