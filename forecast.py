@@ -1,13 +1,14 @@
-import optimisation as op
-import backtest
-import pmdarima as pmd
-from arch import arch_model
 import numpy as np
 import pandas as pd
+import pmdarima as pmd
 import tqdm
+from arch import arch_model
+
+import backtest
+import optimisation as op
 
 data = op.load_data('Data/NZ_ETF_Prices.csv')
-training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
+training_data = data # data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
 
 # Forecast returns
