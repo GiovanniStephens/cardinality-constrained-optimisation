@@ -1,15 +1,17 @@
+import warnings
+
 import numpy as np
 import pandas as pd
-import scipy.optimize as opt
 import pygad
-from muarch import MUArch, UArch
+import scipy.optimize as opt
 from copulae import TCopula
-import warnings
+from muarch import MUArch, UArch
+
 warnings.filterwarnings("ignore")
 
 MAX_NUM_STOCKS = 10
-MIN_NUM_STOCKS = 3
-TARGET_RETURN = 0.2
+MIN_NUM_STOCKS = 4
+TARGET_RETURN = 0.15
 TARGET_RISK = None
 MAX_WEIGHT = 0.3333
 MIN_WEIGHT = 0.1
@@ -280,8 +282,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('Data/variances.csv')
-        expected_returns = load_data('Data/expected_returns.csv')['0']
+        variances = load_data('Data/NZ_variances.csv')
+        expected_returns = load_data('Data/NZ_expected_returns.csv')['0']
     else:
         data = calculate_returns(prices).transpose()
         variances = None
@@ -382,10 +384,10 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = load_data('Data/NZ_ETF_Prices.csv')
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
-    portfolio = create_portfolio(num_children=5000)
+    portfolio = create_portfolio(num_children=1000)
     # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD', 'JJT']
     # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
 
@@ -395,8 +397,8 @@ if __name__ == '__main__':
     random_weights /= np.sum(random_weights)
     res = optimize(data
                    , random_weights
-                   , risk_parity=False
+                   , risk_parity=True
                    , max_weight=0.3333
-                   , target_return=0.2
+                   , target_return=0.1
                    , use_copulae=True)
     print(res)
