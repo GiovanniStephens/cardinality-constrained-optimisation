@@ -10,8 +10,8 @@ from muarch import MUArch, UArch
 warnings.filterwarnings("ignore")
 
 MAX_NUM_STOCKS = 10
-MIN_NUM_STOCKS = 4
-TARGET_RETURN = 0.15
+MIN_NUM_STOCKS = 5
+TARGET_RETURN = None
 TARGET_RISK = None
 MAX_WEIGHT = 0.3333
 MIN_WEIGHT = 0.1
