@@ -10,10 +10,10 @@ from muarch import MUArch, UArch
 warnings.filterwarnings("ignore")
 
 MAX_NUM_STOCKS = 10
-MIN_NUM_STOCKS = 5
+MIN_NUM_STOCKS = 3
 TARGET_RETURN = None
 TARGET_RISK = None
-MAX_WEIGHT = 0.3333
+MAX_WEIGHT = 0.45
 MIN_WEIGHT = 0.1
 last_fitness = 0
 data = None
@@ -235,7 +235,7 @@ def fitness(individual, data):
     return fitness
 
 
-def fitness_2(solution: np.array, solution_idx: int) -> float:
+def fitness_2(ga_instance, solution: np.array, solution_idx: int) -> float:
     """
     Fitness function for the pygad genetic algorithm.
 
@@ -346,7 +346,7 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
 
 def main():
     # Load the data
-    prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = load_data('Data/NZ_ETF_Prices.csv')
     # Prepare the inputs for the optimisation
     prepare_opt_inputs(prices_df, use_forecasts=True)
 
@@ -384,7 +384,7 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/NZ_ETF_Prices.csv')
+    prices_df = load_data('Data/ETF_Prices.csv')
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
     portfolio = create_portfolio(num_children=1000)
