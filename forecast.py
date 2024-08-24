@@ -8,6 +8,7 @@ import backtest
 import optimisation as op
 
 data = op.load_data('Data/ETF_Prices.csv')
+data = data.dropna(axis=1, thresh=0.95*len(data))
 training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
 
