@@ -7,8 +7,8 @@ from arch import arch_model
 import backtest
 import optimisation as op
 
-data = op.load_data('Data/NZ_ETF_Prices.csv')
-training_data = data # data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
+data = op.load_data('Data/ETF_Prices.csv')
+training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 log_returns = op.calculate_returns(training_data)
 
 # Forecast returns
@@ -30,7 +30,7 @@ for ticker in tqdm.tqdm(data.columns):
     forecast = autoarima_model.predict(n_periods=n_periods,
                                        return_conf_int=False)
     expected_returns[ticker] = np.log(max(0.0001,
-                                          forecast[-1])/forecast[0])
+                                          forecast.iloc[-1])/forecast.iloc[0])
 expected_returns = pd.DataFrame.from_dict(expected_returns,
                                           orient='index')
 expected_returns.to_csv('Data/NZ_expected_returns.csv')
