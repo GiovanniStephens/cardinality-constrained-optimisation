@@ -5,7 +5,7 @@ import pandas as pd
 import pygad
 import scipy.optimize as opt
 from copulae import TCopula
-from muarch import MUArch, UArch
+from muarch import MUArch
 
 warnings.filterwarnings("ignore")
 
@@ -109,7 +109,7 @@ def estimate_corr_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
 def calculate_portfolio_var(w, V):
     # function that calculates portfolio risk
     w = np.matrix(w)
-    return (w*V*w.T)[0,0]
+    return (w*V*w.T)[0, 0]
 
 
 def calculate_risk_contribution(w, V):
@@ -119,18 +119,18 @@ def calculate_risk_contribution(w, V):
     # Marginal Risk Contribution
     MRC = V*w.T
     # Risk Contribution
-    RC = np.multiply(MRC,w.T)/sigma
+    RC = np.multiply(MRC, w.T)/sigma
     return RC
 
 
 def risk_budget_objective(x, pars):
     # calculate portfolio risk
-    V = pars[0]# covariance table
-    x_t = pars[1] # risk target in percent of portfolio risk
-    sig_p =  np.sqrt(calculate_portfolio_var(x, V)) # portfolio sigma
+    V = pars[0]     # covariance table
+    x_t = pars[1]   # risk target in percent of portfolio risk
+    sig_p = np.sqrt(calculate_portfolio_var(x, V))      # portfolio sigma
     risk_target = np.asmatrix(np.multiply(sig_p, x_t))
     asset_RC = calculate_risk_contribution(x, V)
-    J = sum(np.square(asset_RC-risk_target.T))[0,0] # sum of squared error
+    J = sum(np.square(asset_RC-risk_target.T))[0, 0]    # sum of squared error
     return J
 
 
@@ -395,10 +395,10 @@ if __name__ == '__main__':
     data = log_returns.loc[:, portfolio]
     random_weights = np.random.random(len(portfolio))
     random_weights /= np.sum(random_weights)
-    res = optimize(data
-                   , random_weights
-                   , risk_parity=True
-                   , max_weight=0.3333
-                   , target_return=0.1
-                   , use_copulae=True)
+    res = optimize(data,
+                   random_weights,
+                   risk_parity=True,
+                   max_weight=0.3333,
+                   target_return=0.1,
+                   use_copulae=True)
     print(res)
