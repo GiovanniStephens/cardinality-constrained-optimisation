@@ -25,7 +25,7 @@ def download_data(etfs: pd.DataFrame) -> pd.DataFrame:
                          #  period='3y',
                          interval='1d',
                          group_by='ticker',
-                         start="2020-08-01",
+                         start="2015-08-01",
                          end="2024-08-01")
     adj_closing_prices = []
     for ticker in etfs['Tickers']:
