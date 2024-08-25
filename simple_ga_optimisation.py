@@ -155,6 +155,7 @@ def run_parallel_ga(data, num_generations, total_population_size, mutation_rate,
 
 # Load data and run the GA
 data = load_data('Data/ETF_Prices.csv')
+data = data.iloc[:-213]
 best_solution, best_fitness = run_parallel_ga(data,
                                               num_generations=50,
                                               total_population_size=10000,
