@@ -9,9 +9,9 @@ from muarch import MUArch
 
 warnings.filterwarnings("ignore")
 
-MAX_NUM_STOCKS = 10
+MAX_NUM_STOCKS = 15
 MIN_NUM_STOCKS = 3
-TARGET_RETURN = None
+TARGET_RETURN = 0.15
 TARGET_RISK = None
 MAX_WEIGHT = 0.45
 MIN_WEIGHT = 0.1
@@ -217,22 +217,34 @@ def fitness(individual, data):
     :data: pandas dataframe of the returns data.
     :return: float of the fitness (i.e. Sharpe Ratio)
     """
-    fitness = 0
-    if np.count_nonzero(individual) <= MAX_NUM_STOCKS \
-       and np.count_nonzero(individual) >= MIN_NUM_STOCKS:
-        random_weights = np.random.random(np.count_nonzero(individual))
-        random_weights /= np.sum(random_weights)
-        subset = data.iloc[np.array(individual).astype(bool), :]
-        fitness = -optimize(subset.transpose(),
-                            random_weights,
-                            target_return=TARGET_RETURN,
-                            target_risk=TARGET_RISK,
-                            max_weight=MAX_WEIGHT,
-                            min_weight=MIN_WEIGHT,
-                            risk_parity=False)['fun']
+    num_stocks = np.count_nonzero(individual)
+    random_weights = np.random.random(num_stocks)
+    random_weights /= np.sum(random_weights)  # Normalize the weights
+    subset = data.iloc[np.array(individual).astype(bool), :]
+
+    # Calculate base fitness
+    if num_stocks >= 2:
+        base_fitness = -optimize(subset.transpose(),
+                                 random_weights,
+                                 target_return=TARGET_RETURN,
+                                 target_risk=TARGET_RISK,
+                                 max_weight=MAX_WEIGHT,
+                                 min_weight=MIN_WEIGHT,
+                                 risk_parity=False)['fun']
     else:
-        fitness = -np.count_nonzero(individual)
-    return fitness
+        base_fitness = -1
+
+    # Apply penalties if necessary
+    if num_stocks > MAX_NUM_STOCKS:
+        excess = num_stocks - MAX_NUM_STOCKS
+        penalty = excess**2
+        return base_fitness - penalty
+    elif num_stocks < MIN_NUM_STOCKS:
+        deficit = MIN_NUM_STOCKS - num_stocks
+        penalty = deficit**2
+        return base_fitness - penalty
+    else:
+        return base_fitness
 
 
 def fitness_2(ga_instance, solution: np.array, solution_idx: int) -> float:
@@ -246,6 +258,18 @@ def fitness_2(ga_instance, solution: np.array, solution_idx: int) -> float:
     return fit
 
 
+def generate_random_gene(individual):
+    """
+    Generates a random gene for the individual.
+
+    :individual: binary array of the individual.
+    :return: binary array of the individual.
+    """
+    for i in range(len(individual)):
+        individual[i] = np.random.binomial(1, MAX_NUM_STOCKS/len(individual))
+    return individual
+
+
 def create_individual(data):
     """
     Creates an individual.
@@ -254,8 +278,9 @@ def create_individual(data):
     :return: a binary array of the individual.
     """
     individual = np.zeros(len(data))
-    for i in range(len(individual)):
-        individual[i] = np.random.binomial(1, MAX_NUM_STOCKS/len(individual))
+    individual = generate_random_gene(individual)
+    while np.count_nonzero(individual) < MIN_NUM_STOCKS:
+        individual = generate_random_gene(individual)
     return individual
 
 
@@ -282,8 +307,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     global variances, expected_returns, data
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('Data/NZ_variances.csv')
-        expected_returns = load_data('Data/NZ_expected_returns.csv')['0']
+        variances = load_data('Data/variances.csv')
+        expected_returns = load_data('Data/expected_returns.csv')['0']
     else:
         data = calculate_returns(prices).transpose()
         variances = None
@@ -310,16 +335,16 @@ def cardinality_constrained_optimisation(num_children: int = 1000,
                            gene_type=int,
                            init_range_low=0,
                            init_range_high=2,
-                           mutation_probability=[0.9, 0.7],
                            parent_selection_type='rank',
+                           keep_parents=0,
                            random_mutation_min_val=-1,
                            random_mutation_max_val=1,
-                           mutation_type="adaptive",
+                           mutation_type="random",
                            crossover_type="single_point",
                            crossover_probability=0.85,
                            fitness_func=fitness_2,
                            on_generation=on_gen,
-                           stop_criteria='saturate_3')
+                           stop_criteria='saturate_5')
     ga_instance.run()
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
     if verbose:
@@ -384,11 +409,13 @@ def main():
 
 
 if __name__ == '__main__':
-    prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = load_data('Data/NZ_ETF_Prices.csv')
+    prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
-    portfolio = create_portfolio(num_children=1000)
-    # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD', 'JJT']
+    # portfolio = create_portfolio(num_children=100)
+    # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD']
+    portfolio = ['USF.NZ', 'NZC.NZ', 'USV.NZ', 'USA.NZ', 'ASF.NZ']
     # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
 
     print(portfolio)
@@ -397,8 +424,8 @@ if __name__ == '__main__':
     random_weights /= np.sum(random_weights)
     res = optimize(data,
                    random_weights,
-                   risk_parity=True,
-                   max_weight=0.3333,
-                   target_return=0.1,
+                   risk_parity=False,
+                   max_weight=0.4,
+                   target_return=0.15,
                    use_copulae=True)
     print(res)
