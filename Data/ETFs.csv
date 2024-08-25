@@ -1,1794 +1,3263 @@
-Tickers,Name,Asset Class
-SPY,SPDR S&P 500 ETF Trust,Equity
-IVV,iShares Core S&P 500 ETF,Equity
-VTI,Vanguard Total Stock Market ETF,Equity
-VOO,Vanguard S&P 500 ETF,Equity
-QQQ,Invesco QQQ Trust,Equity
-VEA,Vanguard FTSE Developed Markets ETF,Equity
-IEFA,iShares Core MSCI EAFE ETF,Equity
-AGG,iShares Core U.S. Aggregate Bond ETF,Bond
-VTV,Vanguard Value ETF,Equity
-VUG,Vanguard Growth ETF,Equity
-BND,Vanguard Total Bond Market ETF,Bond
-VWO,Vanguard FTSE Emerging Markets ETF,Equity
-IWF,iShares Russell 1000 Growth ETF,Equity
-IEMG,iShares Core MSCI Emerging Markets ETF,Equity
-IJR,iShares Core S&P Small-Cap ETF,Equity
-VIG,Vanguard Dividend Appreciation ETF,Equity
-IWM,iShares Russell 2000 ETF,Equity
-IJH,iShares Core S&P Mid-Cap ETF,Equity
-VO,Vanguard Mid-Cap ETF,Equity
-IWD,iShares Russell 1000 Value ETF,Equity
-VGT,Vanguard Information Technology ETF,Equity
-EFA,iShares MSCI EAFE ETF,Equity
-GLD,SPDR Gold Shares,Commodity
-XLK,Technology Select Sector SPDR Fund,Equity
-VXUS,Vanguard Total International Stock ETF,Equity
-VB,Vanguard Small Cap ETF,Equity
-VNQ,Vanguard Real Estate ETF,Real Estate
-VCIT,Vanguard Intermediate-Term Corporate Bond ETF,Bond
-BNDX,Vanguard Total International Bond ETF,Bond
-ITOT,iShares Core S&P Total U.S. Stock Market ETF,Equity
-XLF,Financial Select Sector SPDR Fund,Equity
-IVW,iShares S&P 500 Growth ETF,Equity
-BSV,Vanguard Short-Term Bond ETF,Bond
-VYM,Vanguard High Dividend Yield Index ETF,Equity
-VCSH,Vanguard Short-Term Corporate Bond ETF,Bond
-TIP,iShares TIPS Bond ETF,Bond
-LQD,iShares iBoxx $ Investment Grade Corporate Bond ETF,Bond
-VEU,Vanguard FTSE All-World ex-US Index Fund,Equity
-SCHX,Schwab U.S. Large-Cap ETF,Equity
-XLV,Health Care Select Sector SPDR Fund,Equity
-RSP,Invesco S&P 500® Equal Weight ETF,Equity
-IXUS,iShares Core MSCI Total International Stock ETF,Equity
-IWB,iShares Russell 1000 ETF,Equity
-IWR,iShares Russell Midcap ETF,Equity
-SCHD,Schwab US Dividend Equity ETF,Equity
-USMV,iShares MSCI USA Min Vol Factor ETF,Equity
-DIA,SPDR Dow Jones Industrial Average ETF Trust,Equity
-EEM,iShares MSCI Emerging Markets ETF,Equity
-SCHF,Schwab International Equity ETF,Equity
-IAU,iShares Gold Trust,Commodity
-VV,Vanguard Large Cap ETF,Equity
-VBR,Vanguard Small Cap Value ETF,Equity
-MBB,iShares MBS ETF,Bond
-VT,Vanguard Total World Stock ETF,Equity
-XLE,Energy Select Sector SPDR Fund,Equity
-IVE,iShares S&P 500 Value ETF,Equity
-QUAL,iShares MSCI USA Quality Factor ETF,Equity
-XLY,Consumer Discretionary Select Sector SPDR Fund,Equity
-ESGU,iShares ESG Aware MSCI USA ETF,Equity
-MUB,iShares National Muni Bond ETF,Bond
-SCHB,Schwab U.S. Broad Market ETF,Equity
-DGRO,iShares Core Dividend Growth ETF,Equity
-IGSB,iShares 1-5 Year Investment Grade Corporate Bond ETF,Bond
-VGK,Vanguard FTSE Europe ETF,Equity
-MDY,SPDR S&P Midcap 400 ETF Trust,Equity
-SCHP,Schwab U.S. TIPS ETF,Bond
-SDY,SPDR S&P Dividend ETF,Equity
-TQQQ,ProShares UltraPro QQQ,Equity
-PFF,iShares Preferred & Income Securities ETF,Preferred Stock
-SHY,iShares 1-3 Year Treasury Bond ETF,Bond
-HYG,iShares iBoxx $ High Yield Corporate Bond ETF,Bond
-EMB,iShares J.P. Morgan USD Emerging Markets Bond ETF,Bond
-DVY,iShares Select Dividend ETF,Equity
-VTIP,Vanguard Short-Term Inflation-Protected Securities ETF,Bond
-TLT,iShares 20+ Year Treasury Bond ETF,Bond
-VXF,Vanguard Extended Market ETF,Equity
-JPST,JPMorgan Ultra-Short Income ETF,Bond
-SPYG,SPDR Portfolio S&P 500 Growth ETF,Equity
-SCHG,Schwab U.S. Large-Cap Growth ETF,Equity
-XLI,Industrial Select Sector SPDR Fund,Equity
-IEF,iShares 7-10 Year Treasury Bond ETF,Bond
-VHT,Vanguard Health Care ETF,Equity
-ACWI,iShares MSCI ACWI ETF,Equity
-VBK,Vanguard Small Cap Growth ETF,Equity
-ARKK,ARK Innovation ETF,Equity
-SCHA,Schwab U.S. Small-Cap ETF,Equity
-IUSB,iShares Core Total USD Bond Market ETF,Bond
-VOE,Vanguard Mid-Cap Value ETF,Equity
-GOVT,iShares U.S. Treasury Bond ETF,Bond
-IWP,iShares Russell Mid-Cap Growth ETF,Equity
-VLUE,iShares MSCI USA Value Factor ETF,Equity
-IWN,iShares Russell 2000 Value ETF,Equity
-SPYV,SPDR Portfolio S&P 500 Value ETF,Equity
-VMBS,Vanguard Mortgage-Backed Securities ETF,Bond
-EFV,iShares MSCI EAFE Value ETF,Equity
-IWS,iShares Russell Mid-Cap Value ETF,Equity
-IUSG,iShares Core S&P U.S. Growth ETF,Equity
-SCZ,iShares MSCI EAFE Small-Cap ETF,Equity
-MTUM,iShares MSCI USA Momentum Factor ETF,Equity
-VTEB,Vanguard Tax-Exempt Bond ETF,Bond
-GSLC,Goldman Sachs ActiveBeta U.S. Large Cap Equity ETF,Equity
-BIV,Vanguard Intermediate-Term Bond ETF,Bond
-XLC,Communication Services Select Sector SPDR Fund,Equity
-MGK,Vanguard Mega Cap Growth ETF,Equity
-SPLG,SPDR Portfolio S&P 500 ETF,Equity
-VGSH,Vanguard Short-Term Treasury ETF,Bond
-MINT,PIMCO Enhanced Short Maturity Active ETF,Bond
-BIL,SPDR Bloomberg 1-3 Month T-Bill ETF,Bond
-EFG,iShares MSCI EAFE Growth ETF,Equity
-XLU,Utilities Select Sector SPDR Fund,Equity
-XLP,Consumer Staples Select Sector SPDR Fund,Equity
-VOT,Vanguard Mid-Cap Growth ETF,Equity
-SHV,iShares Short Treasury Bond ETF,Bond
-FVD,First Trust Value Line Dividend Index Fund,Equity
-IWV,iShares Russell 3000 ETF,Equity
-GDX,VanEck Gold Miners ETF,Equity
-SPDW,SPDR Portfolio Developed World ex-US ETF,Equity
-IUSV,iShares Core S&P U.S. Value ETF,Equity
-EWJ,iShares MSCI Japan ETF,Equity
-IWO,iShares Russell 2000 Growth ETF,Equity
-VFH,Vanguard Financials ETF,Equity
-SLV,iShares Silver Trust,Commodity
-IGIB,iShares 5-10 Year Investment Grade Corporate Bond ETF,Bond
-FDN,First Trust Dow Jones Internet Index Fund,Equity
-IEI,iShares 3-7 Year Treasury Bond ETF,Bond
-IYW,iShares U.S. Technology ETF,Equity
-SCHV,Schwab U.S. Large-Cap Value ETF,Equity
-IJJ,iShares S&P Mid-Cap 400 Value ETF,Equity
-SOXX,iShares Semiconductor ETF,Equity
-SCHM,Schwab US Mid-Cap ETF,Equity
-IBB,iShares Biotechnology ETF,Equity
-VSS,Vanguard FTSE All-World ex-US Small-Cap ETF,Equity
-IHI,iShares U.S. Medical Devices ETF,Equity
-IJS,iShares S&P Small-Cap 600 Value ETF,Equity
-NOBL,ProShares S&P 500 Dividend Aristocrats ETF,Equity
-VGIT,Vanguard Intermediate-Term Treasury ETF,Bond
-BBEU,JPMorgan BetaBuilders Europe ETF,Equity
-OEF,iShares S&P 100 ETF,Equity
-FTCS,First Trust Capital Strength ETF,Equity
-IJK,iShares S&P Mid-Cap 400 Growth ETF,Equity
-SCHZ,Schwab U.S. Aggregate Bond ETF,Bond
-SCHO,Schwab Short-Term U.S. Treasury ETF,Bond
-SCHE,Schwab Emerging Markets Equity ETF,Equity
-STIP,iShares 0-5 Year TIPS Bond ETF,Bond
-JNK,SPDR Bloomberg High Yield Bond ETF,Bond
-FNDX,Schwab Fundamental US Large Co. Index ETF,Equity
-VOOG,Vanguard S&P 500 Growth ETF,Equity
-USHY,iShares Broad USD High Yield Corporate Bond ETF,Bond
-SRLN,SPDR Blackstone Senior Loan ETF,Bond
-SPLV,Invesco S&P 500® Low Volatility ETF,Equity
-VONG,Vanguard Russell 1000 Growth ETF,Equity
-EFAV,iShares MSCI EAFE Min Vol Factor ETF,Equity
-SMH,VanEck Semiconductor ETF,Equity
-BBJP,JPMorgan BetaBuilders Japan ETF,Equity
-SPSB,SPDR Portfolio Short Term Corporate Bond ETF,Bond
-XLB,Materials Select Sector SPDR Fund,Equity
-MOAT,VanEck Morningstar Wide Moat ETF,Equity
-FPE,First Trust Preferred Securities & Income ETF,Preferred Stock
-RDVY,First Trust Rising Dividend Achievers ETF,Equity
-KWEB,KraneShares CSI China Internet ETF,Equity
-HDV,iShares Core High Dividend ETF,Equity
-PGX,Invesco Preferred ETF,Preferred Stock
-VCR,Vanguard Consumer Discretionary ETF,Equity
-ESGD,iShares ESG Aware MSCI EAFE ETF,Equity
-EZU,iShares MSCI Eurozone ETF,Equity
-FLOT,iShares Floating Rate Bond ETF,Bond
-VONV,Vanguard Russell 1000 Value ETF,Equity
-FTEC,Fidelity MSCI Information Technology Index ETF,Equity
-EWT,iShares MSCI Taiwan ETF,Equity
-DGRW,WisdomTree US Quality Dividend Growth Fund,Equity
-VTWO,Vanguard Russell 2000 ETF,Equity
-FNDF,Schwab Fundamental International Large Co. Index ETF,Equity
-SCHH,Schwab US REIT ETF,Real Estate
-SUB,iShares Short-Term National Muni Bond ETF,Bond
-USIG,iShares Broad USD Investment Grade Corporate Bond ETF,Bond
-XBI,SPDR S&P Biotech ETF,Equity
-IJT,iShares S&P Small-Cap 600 Growth ETF,Equity
-IDEV,iShares Core MSCI International Developed Markets ETF,Equity
-SKYY,First Trust Cloud Computing ETF,Equity
-IYR,iShares U.S. Real Estate ETF,Real Estate
-VDC,Vanguard Consumer Staples ETF,Equity
-SPAB,SPDR Portfolio Aggregate Bond ETF,Bond
-QLD,ProShares Ultra QQQ,Equity
-ISTB,iShares Core 1-5 Year USD Bond ETF,Bond
-CWB,SPDR Bloomberg Convertible Securities ETF,Bond
-GUNR,FlexShares Morningstar Global Upstream Natural Resources Index Fund,Equity
-LMBS,First Trust Low Duration Opportunities ETF,Bond
-ESGE,iShares ESG Aware MSCI EM ETF,Equity
-IGV,iShares Expanded Tech-Software Sector ETF,Equity
-ESGV,Vanguard ESG U.S. Stock ETF,Equity
-BLV,Vanguard Long-Term Bond ETF,Bond
-BKLN,Invesco Senior Loan ETF,Bond
-SPTM,SPDR Portfolio S&P 1500 Composite Stock Market ETF,Equity
-BBCA,JPMorgan BetaBuilders Canada ETF,Equity
-ICSH,BlackRock Ultra Short-Term Bond ETF,Bond
-VDE,Vanguard Energy ETF,Equity
-IXN,iShares Global Tech ETF,Equity
-MCHI,iShares MSCI China ETF,Equity
-SOXL,Direxion Daily Semiconductor Bull 3x Shares,Equity
-ICLN,iShares Global Clean Energy ETF,Equity
-VPL,Vanguard FTSE Pacific ETF,Equity
-LIT,Global X Lithium & Battery Tech ETF,Equity
-INDA,iShares MSCI India ETF,Equity
-QYLD,Global X NASDAQ 100 Covered Call ETF,Equity
-XLRE,Real Estate Select Sector SPDR Fund,Real Estate
-SPIB,SPDR Portfolio Intermediate Term Corporate Bond ETF,Bond
-PRF,Invesco FTSE RAFI US 1000 ETF,Equity
-ACWV,iShares MSCI Global Min Vol Factor ETF,Equity
-SPEM,SPDR Portfolio Emerging Markets ETF,Equity
-CIBR,First Trust NASDAQ Cybersecurity ETF,Equity
-SPMD,SPDR Portfolio S&P 400 Mid Cap ETF,Equity
-VPU,Vanguard Utilities ETF,Equity
-PAVE,Global X US Infrastructure Development ETF,Equity
-SHYG,iShares 0-5 Year High Yield Corporate Bond ETF,Bond
-VCLT,Vanguard Long-Term Corporate Bond ETF,Bond
-SPYD,SPDR Portfolio S&P 500 High Dividend ETF,Equity
-IEUR,iShares Core MSCI Europe ETF,Equity
-ARKG,ARK Genomic Revolution ETF,Equity
-FIXD,First Trust TCW Opportunistic Fixed Income ETF,Bond
-VIS,Vanguard Industrials ETF,Equity
-SLYV,SPDR S&P 600 Small Cap Value ETF,Equity
-ANGL,VanEck Fallen Angel High Yield Bond ETF,Bond
-SHM,SPDR Nuveen Bloomberg Short Term Municipal Bond ETF,Bond
-FNDA,Schwab Fundamental US Small Co. Index ETF,Equity
-VNQI,Vanguard Global ex-U.S. Real Estate ETF,Real Estate
-MGV,Vanguard Mega Cap Value ETF,Equity
-IWY,iShares Russell Top 200 Growth ETF,Equity
-FALN,iShares Fallen Angels USD Bond ETF,Bond
-SSO,ProShares Ultra S&P 500,Equity
-SPTL,SPDR Portfolio Long Term Treasury ETF,Bond
-FXI,iShares China Large-Cap ETF,Equity
-AMLP,Alerian MLP ETF,Equity
-FNDE,Schwab Fundamental Emerging Markets Large Co. Index ETF,Equity
-EWZ,iShares MSCI Brazil ETF,Equity
-KRE,SPDR S&P Regional Banking ETF,Equity
-ONEQ,Fidelity Nasdaq Composite Index ETF,Equity
-RPG,Invesco S&P 500® Pure Growth ETF,Equity
-ACWX,iShares MSCI ACWI ex U.S. ETF,Equity
-NEAR,BlackRock Short Maturity Bond ETF,Bond
-SUSA,iShares MSCI USA ESG Select ETF,Equity
-EWY,iShares MSCI South Korea ETF,Equity
-SPSM,SPDR Portfolio S&P 600 Small Cap ETF,Equity
-QTEC,First Trust NASDAQ-100 Technology Sector Index Fund,Equity
-PDBC,Invesco Optimum Yield Diversified Commodity Strategy No K-1 ETF,Commodity
-MGC,Vanguard Mega Cap ETF,Equity
-IDV,iShares International Select Dividend ETF,Equity
-BOND,PIMCO Active Bond ETF,Bond
-SJNK,SPDR Bloomberg Short Term High Yield Bond ETF,Bond
-GDXJ,VanEck Junior Gold Miners ETF,Equity
-GLDM,SPDR Gold MiniShares Trust,Commodity
-FTSM,First Trust Enhanced Short Maturity ETF,Bond
-DBEF,Xtrackers MSCI EAFE Hedged Equity ETF,Equity
-SPMB,SPDR Portfolio Mortgage Backed Bond ETF,Bond
-VIGI,Vanguard International Dividend Appreciation ETF,Equity
-VOX,Vanguard Communication Services ETF,Equity
-TFI,SPDR Nuveen Bloomberg Municipal Bond ETF,Bond
-XT,iShares Exponential Technologies ETF,Equity
-AAXJ,iShares MSCI All Country Asia ex-Japan ETF,Equity
-SPHQ,Invesco S&P 500® Quality ETF,Equity
-DSI,iShares MSCI KLD 400 Social ETF,Equity
-VAW,Vanguard Materials ETF,Equity
-IQLT,iShares MSCI Intl Quality Factor ETF,Equity
-BBAX,JPMorgan BetaBuilders Developed Asia ex-Japan ETF,Equity
-IGM,iShares Expanded Tech Sector ETF,Equity
-ARKW,ARK Next Generation Internet ETF,Equity
-XSOE,WisdomTree Emerging Markets ex-State-Owned Enterprises Fund,Equity
-SPTS,SPDR Portfolio Short Term Treasury ETF,Bond
-IAGG,iShares Core International Aggregate Bond ETF,Bond
-EWC,iShares MSCI Canada ETF,Equity
-IOO,iShares Global 100 ETF,Equity
-SPXL,Direxion Daily S&P 500 Bull 3X Shares,Equity
-TECL,Direxion Daily Technology Bull 3X Shares,Equity
-EEMV,iShares MSCI Emerging Markets Min Vol Factor ETF,Equity
-HYD,VanEck High Yield Muni ETF,Bond
-SCHC,Schwab International Small-Cap Equity ETF,Equity
-SPIP,SPDR Portfolio TIPS ETF,Bond
-IXJ,iShares Global Healthcare ETF,Equity
-FAS,Direxion Daily Financial Bull 3X Shares,Equity
-UPRO,ProShares UltraPro S&P500,Equity
-RPV,Invesco S&P 500® Pure Value ETF,Equity
-REET,iShares Global REIT ETF,Real Estate
-SCHR,Schwab Intermediate-Term U.S. Treasury ETF,Bond
-SPTI,SPDR Portfolio Intermediate Term Treasury ETF,Bond
-DLN,WisdomTree U.S. LargeCap Dividend Fund,Equity
-EMLC,VanEck J. P. Morgan EM Local Currency Bond ETF,Bond
-HEFA,iShares Currency Hedged MSCI EAFE ETF,Equity
-XOP,SPDR S&P Oil & Gas Exploration & Production ETF,Equity
-KBE,SPDR S&P Bank ETF,Equity
-IYH,iShares U.S. Healthcare ETF,Equity
-VWOB,Vanguard Emerging Markets Government Bond ETF,Bond
-GSIE,Goldman Sachs ActiveBeta International Equity ETF,Equity
-VSGX,Vanguard ESG International Stock ETF,Equity
-ITB,iShares U.S. Home Construction ETF,Equity
-IGF,iShares Global Infrastructure ETF,Equity
-VYMI,Vanguard International High Dividend Yield ETF,Equity
-DON,WisdomTree U.S. MidCap Dividend Fund,Equity
-JETS,U.S. Global Jets ETF,Equity
-RYT,Invesco S&P 500® Equal Weight Technology ETF,Equity
-FTSL,First Trust Senior Loan Fund,Bond
-SPHD,Invesco S&P 500® High Dividend Low Volatility ETF,Equity
-KBWB,Invesco KBW Bank ETF,Equity
-FHLC,Fidelity MSCI Health Care Index ETF,Equity
-TAN,Invesco Solar ETF,Equity
-TOTL,SPDR DoubleLine Total Return Tactical ETF,Bond
-VONE,Vanguard Russell 1000 ETF,Equity
-VGLT,Vanguard Long-Term Treasury ETF,Bond
-QCLN,First Trust NASDAQ Clean Edge Green Energy Index Fund,Equity
-GSY,Invesco Ultra Short Duration ETF,Bond
-FV,First Trust Dorsey Wright Focus 5 ETF,Equity
-SLYG,SPDR S&P 600 Small Cap Growth ETF,Equity
-VOOV,Vanguard S&P 500 Value ETF,Equity
-ICF,iShares Cohen & Steers REIT ETF,Real Estate
-EWU,iShares MSCI United Kingdom ETF,Equity
-IXG,iShares Global Financials ETF,Equity
-ASHR,Xtrackers Harvest CSI 300 China A-Shares ETF,Equity
-USRT,iShares Core U.S. REIT ETF,Real Estate
-VNLA,Janus Henderson Short Duration Income ETF,Bond
-BOTZ,Global X Robotics & Artificial Intelligence ETF,Equity
-FNDC,Schwab Fundamental International Small Co. Index ETF,Equity
-GVI,iShares Intermediate Government/Credit Bond ETF,Bond
-PCY,Invesco Emerging Markets Sovereign Debt ETF,Bond
-IYG,iShares U.S. Financial Services ETF,Equity
-NFRA,FlexShares STOXX Global Broad Infrastructure Index Fund,Equity
-PBUS,Invesco PureBeta MSCI USA ETF,Equity
-DBC,Invesco DB Commodity Index Tracking Fund,Commodity
-XHB,SPDR S&P Homebuilders ETF,Equity
-PZA,Invesco National AMT-Free Municipal Bond ETF,Bond
-JHMM,John Hancock Multifactor Mid Cap ETF,Equity
-SLQD,iShares 0-5 Year Investment Grade Corporate Bond ETF,Bond
-PFFD,Global X U.S. Preferred ETF,Preferred Stock
-IGLB,iShares 10+ Year Investment Grade Corporate Bond ETF,Bond
-EWG,iShares MSCI Germany ETF,Equity
-FMB,First Trust Managed Municipal ETF,Bond
-BAB,Invesco Taxable Municipal Bond ETF,Bond
-IYE,iShares U.S. Energy ETF,Equity
-XLG,Invesco S&P 500® Top 50 ETF,Equity
-FEZ,SPDR EURO STOXX 50 ETF,Equity
-ITA,iShares U.S. Aerospace & Defense ETF,Equity
-KOMP,SPDR S&P Kensho New Economies Composite ETF,Equity
-IYF,iShares U.S. Financials ETF,Equity
-FLRN,SPDR Bloomberg Investment Grade Floating Rate ETF,Bond
-USO,United States Oil Fund LP,Commodity
-BSCM,Invesco BulletShares 2022 Corporate Bond ETF,Bond
-SGOL,Aberdeen Standard Physical Gold Shares ETF,Commodity
-COMT,iShares U.S. ETF Trust iShares GSCI Commodity Dynamic Roll Strategy ETF,Multi-Asset
-SCHK,Schwab 1000 Index ETF,Equity
-GNR,SPDR S&P Global Natural Resources ETF,Equity
-DGS,WisdomTree Emerging Markets SmallCap Dividend Fund,Equity
-BSCN,Invesco BulletShares 2023 Corporate Bond ETF,Bond
-HYLS,First Trust Tactical High Yield ETF,Bond
-JMST,JPMorgan Ultra-Short Municipal Income ETF,Bond
-ILCG,iShares Morningstar Growth ETF,Equity
-EPP,iShares MSCI Pacific ex Japan ETF,Equity
-HACK,ETFMG Prime Cyber Security ETF,Equity
-ARKQ,ARK Autonomous Technology & Robotics ETF,Equity
-FREL,Fidelity MSCI Real Estate Index ETF,Real Estate
-OIH,VanEck Oil Services ETF,Equity
-AOR,iShares Core Growth Allocation ETF,Multi-Asset
-AIA,iShares Asia 50 ETF,Equity
-FBND,Fidelity Total Bond ETF,Bond
-EMLP,First Trust North American Energy Infrastructure Fund,Equity
-HEDJ,WisdomTree Europe Hedged Equity Fund,Equity
-PHO,Invesco Water Resources ETF,Equity
-IEV,iShares Europe ETF,Equity
-RWR,SPDR Dow Jones REIT ETF,Real Estate
-PTLC,Pacer Trendpilot US Large Cap ETF,Multi-Asset
-FTGC,First Trust Global Tactical Commodity Strategy Fund,Commodity
-VRP,Invesco Variable Rate Preferred ETF,Multi-Asset
-DXJ,WisdomTree Japan Hedged Equity Fund,Equity
-OMFL,Invesco Russell 1000 Dynamic Multifactor ETF,Equity
-TNA,Direxion Daily Small Cap Bull 3X Shares,Equity
-AMJ,J.P. Morgan Alerian MLP Index ETN,Equity
-PULS,PGIM Ultra Short Bond ETF,Bond
-FXL,First Trust Technology AlphaDEX Fund,Equity
-FNGU,MicroSectors FANG+™ Index 3X Leveraged ETN,Equity
-EMXC,iShares MSCI Emerging Markets ex China ETF,Equity
-URTH,iShares MSCI World ETF,Equity
-MDYV,SPDR S&P 400 Mid Cap Value ETF,Equity
-CMF,iShares California Muni Bond ETF,Bond
-ITM,VanEck Intermediate Muni ETF,Bond
-FXD,First Trust Consumer Discretionary AlphaDEX Fund,Equity
-ROBO,ROBO Global Robotics & Automation Index ETF,Equity
-FNCL,Fidelity MSCI Financials Index ETF,Equity
-VIOO,Vanguard S&P Small-Cap 600 ETF,Equity
-HYMB,SPDR Nuveen Bloomberg High Yield Municipal Bond ETF,Bond
-FXR,First Trust Industrials/Producer Durables AlphaDEX Fund,Equity
-DEM,WisdomTree Emerging Markets High Dividend Fund,Equity
-DES,WisdomTree U.S. SmallCap Dividend Fund,Equity
-PDP,Invesco DWA Momentum ETF,Equity
-RODM,Hartford Multifactor Developed Markets (ex-US) ETF,Equity
-USMC,Principal U.S. Mega-Cap ETF,Equity
-PRFZ,Invesco FTSE RAFI US 1500 Small-Mid ETF,Equity
-MDYG,SPDR S&P 400 Mid Cap Growth ETF,Equity
-AOM,iShares Core Moderate Allocation ETF,Multi-Asset
-USFR,WisdomTree Floating Rate Treasury Fund,Bond
-FPX,First Trust US Equity Opportunities ETF,Equity
-SLY,SPDR S&P 600 Small Cap ETF,Equity
-IYY,iShares Dow Jones U.S. ETF,Equity
-FDIS,Fidelity MSCI Consumer Discretionary Index ETF,Equity
-TDIV,First Trust NASDAQ Technology Dividend Index Fund,Equity
-GBIL,Goldman Sachs Access Treasury 0-1 Year ETF,Bond
-CWI,SPDR MSCI ACWI ex-US ETF,Equity
-PGF,Invesco Financial Preferred ETF,Preferred Stock
-RWO,SPDR Dow Jones Global Real Estate ETF,Real Estate
-HYS,PIMCO 0-5 Year High Yield Corporate Bond Index ETF,Bond
-IYT,iShares US Transportation ETF,Equity
-XSD,SPDR S&P Semiconductor ETF,Equity
-EAGG,iShares ESG Aware US Aggregate Bond ETF,Bond
-TILT,FlexShares Morningstar US Market Factor Tilt Index Fund,Equity
-FDL,First Trust Morningstar Dividend Leaders Index Fund,Equity
-EWL,iShares MSCI Switzerland ETF,Equity
-BSCO,Invesco BulletShares 2024 Corporate Bond ETF,Bond
-QDF,FlexShares Quality Dividend Index Fund,Equity
-FBT,First Trust NYSE Arca Biotechnology Index Fund,Equity
-PBW,Invesco WilderHill Clean Energy ETF,Equity
-FXO,First Trust Financials AlphaDEX Fund,Equity
-IYC, iShares U.S. Consumer Discretionary ETF,Equity
-IBDO,iShares iBonds Dec 2023 Term Corporate ETF,Bond
-AOA,iShares Core Aggressive Allocation ETF,Multi-Asset
-COPX,Global X Copper Miners ETF,Equity
-IVOO,Vanguard S&P Mid-Cap 400 ETF,Equity
-ICVT,iShares Convertible Bond ETF,Bond
-IYJ,iShares U.S. Industrials ETF,Equity
-XME,SPDR S&P Metals & Mining ETF,Equity
-SQQQ,ProShares UltraPro Short QQQ,Equity
-VIOV,Vanguard S&P Small-Cap 600 Value ETF,Equity
-GXC,SPDR S&P China ETF,Equity
-SRVR,Pacer Benchmark Data & Infrastructure Real Estate SCTR ETF,Real Estate
-IBDN,iShares iBonds Dec 2022 Term Corporate ETF,Bond
-FXH,First Trust Health Care AlphaDEX Fund,Equity
-EUFN,iShares MSCI Europe Financials ETF,Equity
-FIW,First Trust Water ETF,Equity
-TLH,iShares 10-20 Year Treasury Bond ETF,Bond
-IXC,iShares Global Energy ETF,Equity
-JPHY,JPMORGAN HIGH YIELD RESEARCH ENHANCED ETF,Bond
-SPHB,Invesco S&P 500® High Beta ETF,Equity
-BBRE,JPMorgan BetaBuilders MSCI US REIT ETF,Real Estate
-IBDP,iShares iBonds Dec 2024 Term Corporate ETF,Bond
-IMCG,iShares Morningstar Mid-Cap Growth ETF,Equity
-QQEW,First Trust Nasdaq-100 Equal Weighted Index Fund,Equity
-PKW,Invesco BuyBack Achievers™ ETF,Equity
-TDTT,FlexShares iBoxx 3-Year Target Duration TIPS Index Fund,Bond
-TBT,ProShares UltraShort 20+ Year Treasury,Bond
-PSK,SPDR ICE Preferred Securities ETF,Preferred Stock
-RSX,VanEck Russia ETF,Equity
-BLOK,Amplify Transformational Data Sharing ETF,Equity
-HNDL,Strategy Shares Nasdaq 7HANDL Index ETF,Multi-Asset
-CQQQ,Invesco China Technology ETF,Equity
-EWA,iShares MSCI-Australia ETF,Equity
-DLS,WisdomTree International SmallCap Dividend Fund,Equity
-GSG,iShares S&P GSCI Commodity-Indexed Trust,Commodity
-SPYX,SPDR S&P 500 Fossil Fuel Reserves Free ETF,Equity
-SH,ProShares Short S&P500,Equity
-IAT,iShares U.S. Regional Banks ETF,Equity
-DRIV,Global X Autonomous & Electric Vehicles ETF,Equity
-PXH,Invesco FTSE RAFI Emerging Markets ETF,Equity
-XMLV,Invesco S&P MidCap Low Volatility ETF,Equity
-CRBN,iShares MSCI ACWI Low Carbon Target ETF,Equity
-GEM,Goldman Sachs ActiveBeta Emerging Markets Equity ETF,Equity
-ESML,iShares ESG Aware MSCI USA Small-Cap ETF,Equity
-REM,iShares Mortgage Real Estate ETF,Real Estate
-IHF,iShares U.S. Healthcare Providers ETF,Equity
-EDV,Vanguard Extended Duration Treasury ETF,Bond
-FTC,First Trust Large Cap Growth AlphaDEX Fund,Equity
-STPZ,PIMCO 1-5 Year US TIPS Index ETF,Bond
-NULV,Nuveen ESG Large-Cap Value ETF,Equity
-IBDQ,iShares iBonds Dec 2025 Term Corporate ETF,Bond
-LRGF,iShares MSCI USA Multifactor ETF,Equity
-HYEM,VanEck Emerging Markets High Yield Bond ETF,Bond
-CGW,Invesco S&P Global Water Index ETF,Equity
-PEJ,Invesco Dynamic Leisure & Entertainment ETF,Equity
-FTXR,First Trust Nasdaq Transportation ETF,Equity
-URA,Global X Uranium ETF,Equity
-IWX,iShares Russell Top 200 Value ETF,Equity
-VTHR,Vanguard Russell 3000 ETF,Equity
-FEX,First Trust Large Cap Core AlphaDEX Fund,Equity
-FUTY,Fidelity MSCI Utilities Index ETF,Equity
-LDUR,PIMCO Enhanced Low Duration Active ETF,Bond
-FINX,Global X FinTech ETF,Equity
-DIAL,Columbia Diversified Fixed Income Allocation ETF,Bond
-IWC,iShares Micro-Cap ETF,Equity
-XSLV,Invesco S&P SmallCap Low Volatility ETF,Equity
-PSC,Principal U.S. Small Cap Multi-Factor ETF,Equity
-EBND,SPDR Bloomberg Emerging Markets Local Bond ETF,Bond
-UITB,VictoryShares USAA Core Intermediate-Term Bond ETF,Bond
-IGOV,iShares International Treasury Bond ETF,Bond
-SDOG,ALPS Sector Dividend Dogs ETF,Equity
-ROM,ProShares Ultra Technology,Equity
-QLTA,iShares Aaa - A Rated Corporate Bond ETF,Bond
-COWZ,Pacer US Cash Cows 100 ETF,Equity
-RWL,Invesco S&P 500 Revenue ETF,Equity
-MOO,VanEck Agribusiness ETF,Equity
-IVLU,iShares MSCI Intl Value Factor ETF,Equity
-NUSC,Nuveen ESG Small-Cap ETF,Equity
-FTA,First Trust Large Cap Value AlphaDEX Fund,Equity
-REZ,iShares Residential and Multisector Real Estate ETF,Real Estate
-BSCP,Invesco BulletShares 2025 Corporate Bond ETF,Bond
-IVOG,Vanguard S&P Mid-Cap 400 Growth ETF,Equity
-TIPX,SPDR Bloomberg 1-10 Year TIPS ETF,Bond
-PXF,Invesco FTSE RAFI Developed Markets ex-U.S. ETF,Equity
-JAGG,JPMorgan U.S. Aggregate Bond ETF,Bond
-IHDG,WisdomTree International Hedged Quality Dividend Growth Fund,Equity
-PPLT,Aberdeen Standard Physical Platinum Shares ETF,Commodity
-AGGY,WisdomTree Yield Enhanced U.S. Aggregate Bond Fund,Bond
-XAR,SPDR S&P Aerospace & Defense ETF,Equity
-IGHG,ProShares Investment Grade-Interest Rate Hedged,Bond
-PFXF,VanEck Preferred Securities ex Financials ETF,Preferred Stock
-SMLF,iShares MSCI USA Small-Cap Multifactor ETF,Equity
-CXSE,WisdomTree China ex-State-Owned Enterprises Fund,Equity
-GTO,Invesco Total Return Bond ETF,Bond
-NXTG,First Trust Indxx NextG ETF,Equity
-SECT,Main Sector Rotation ETF,Equity
-REMX,VanEck Rare Earth/Strategic Metals ETF,Equity
-CDC,VictoryShares US EQ Income Enhanced Volatility Wtd ETF,Equity
-IPAC,iShares Core MSCI Pacific ETF,Equity
-LQDH,iShares Interest Rate Hedged Corporate Bond ETF,Bond
-SUSB,iShares ESG Aware 1-5 Year USD Corporate Bond ETF,Bond
-SPLB,SPDR Portfolio Long Term Corporate Bond ETF,Bond
-HTRB,Hartford Total Return Bond ETF,Bond
-QUS,SPDR MSCI USA StrategicFactors ETF,Equity
-REGL,ProShares S&P MidCap 400 Dividend Aristocrats ETF,Equity
-AOK,iShares Core Conservative Allocation ETF,Multi-Asset
-UDOW,ProShares UltraPro Dow30,Equity
-LABU,Direxion Daily S&P Biotech Bull 3x Shares,Equity
-IVOV,Vanguard S&P Mid-Cap 400 Value ETF,Equity
-CFO,VictoryShares US 500 Enhanced Volatility Wtd ETF,Equity
-UCO,ProShares Ultra Bloomberg Crude Oil,Commodity
-PEY,Invesco High Yield Equity Dividend Achievers™ ETF,Equity
-EMQQ,Emerging Markets Internet & Ecommerce ETF,Equity
-FNX,First Trust Mid Cap Core AlphaDEX Fund,Equity
-DTD,WisdomTree U.S. Total Dividend Fund,Equity
-HYDW,Xtrackers Low Beta High Yield Bond ETF,Bond
-FLCO,Franklin Liberty Investment Grade Corporate ETF,Bond
-DBA,Invesco DB Agriculture Fund,Commodity
-FDVV,Fidelity High Dividend ETF,Equity
-VTWV,Vanguard Russell 2000 Value ETF,Equity
-XMMO,Invesco S&P MidCap Momentum ETF,Equity
-FENY,Fidelity MSCI Energy Index ETF,Equity
-FLQL,Franklin LibertyQ U.S. Equity ETF,Equity
-RYH,Invesco S&P 500® Equal Weight Health Care ETF,Equity
-IWL,iShares Russell Top 200 ETF,Equity
-SIL,Global X Silver Miners ETF,Equity
-IPAY,ETFMG Prime Mobile Payments ETF,Equity
-PICK,iShares MSCI Global Metals & Mining Producers ETF,Equity
-PHB,Invesco Fundamental High Yield® Corporate Bond ETF,Bond
-MLPA,Global X MLP ETF,Equity
-NTSX,WisdomTree U.S. Efficient Core Fund,Multi-Asset
-IAI,iShares U.S. Broker-Dealers & Securities Exchanges ETF,Equity
-KXI,iShares Global Consumer Staples ETF,Equity
-XTN,SPDR S&P Transportation ETF,Equity
-FYX,First Trust Small Cap Core AlphaDEX Fund,Equity
-KSA,iShares MSCI Saudi Arabia ETF,Equity
-PNQI,Invesco NASDAQ Internet ETF,Equity
-NULG,Nuveen ESG Large-Cap Growth ETF,Equity
-EPI,WisdomTree India Earnings Fund,Equity
-SWAN,Amplify BlackSwan Growth & Treasury Core ETF,Multi-Asset
-BWX,SPDR Bloomberg International Treasury Bond ETF,Bond
-LTPZ,PIMCO 15+ Year US TIPS Index ETF,Bond
-PCEF,Invesco CEF Income Composite ETF,Multi-Asset
-FPXI,First Trust International Equity Opportunities ETF,Equity
-ILCB,iShares Morningstar U.S. Equity ETF,Equity
-SIVR,Aberdeen Standard Physical Silver Shares ETF,Commodity
-EWH,iShares MSCI Hong Kong ETF,Equity
-DJP,iPath Bloomberg Commodity Index Total Return ETN,Commodity
-IBDR,iShares iBonds Dec 2026 Term Corporate ETF,Bond
-GLTR,Aberdeen Standard Physical Precious Metals Basket Shares ETF,Commodity
-GSEW,Goldman Sachs Equal Weight U.S. Large Cap Equity ETF,Equity
-UYG,ProShares Ultra Financials,Equity
-PSI,Invesco Dynamic Semiconductors ETF,Equity
-BSJM,Invesco BulletShares 2022 High Yield Corporate Bond ETF,Bond
-FIDU,Fidelity MSCI Industrial Index ETF,Equity
-INTF,iShares MSCI Intl Multifactor ETF,Equity
-ACES,ALPS Clean Energy ETF,Equity
-SUSC,iShares ESG Aware USD Corporate Bond ETF,Bond
-QEFA,SPDR MSCI EAFE StrategicFactors ETF,Equity
-FCOM,Fidelity MSCI Communication Services Index ETF,Equity
-IMTM,iShares MSCI Intl Momentum Factor ETF,Equity
-FTXN,First Trust Nasdaq Oil & Gas ETF,Equity
-DIVO,Amplify CWP Enhanced Dividend Income ETF,Multi-Asset
-FSTA,FIDELITY COVINGTON TRUST MSCI CONSUMER STAPLES INDEX ETF,Equity
-SDIV,Global X SuperDividend ETF,Equity
-IMCB,iShares Morningstar Mid-Cap ETF,Equity
-BAR,GraniteShares Gold Shares,Commodity
-JMBS,Janus Henderson Mortgage-Backed Securities ETF,Bond
-SMDV,ProShares Russell 2000 Dividend Growers ETF,Equity
-SPGP,Invesco S&P 500 GARP ETF,Equity
-ILF,iShares Latin America 40 ETF,Equity
-IDU,iShares U.S. Utilities ETF,Equity
-EMGF,iShares MSCI Emerging Markets Multifactor ETF,Equity
-RWX,SPDR Dow Jones International Real Estate ETF,Real Estate
-SMMV,iShares MSCI USA Small-Cap Min Vol Factor ETF,Equity
-CMBS,iShares CMBS ETF,Bond
-DRSK,Aptus Defined Risk ETF,Multi-Asset
-XYLD,Global X S&P 500 Covered Call ETF,Multi-Asset
-DHS,WisdomTree US High Dividend Fund,Equity
-EWW,iShares MSCI Mexico ETF,Equity
-HDEF,Xtrackers MSCI EAFE High Dividend Yield Equity ETF,Equity
-JPIN,J.P. Morgan Diversified Return International Equity ETF,Equity
-MJ,ETFMG Alternative Harvest ETF,Equity
-XNTK,SPDR NYSE Technology ETF,Equity
-VXX,iPath Series B S&P 500 VIX Short-Term Futures ETN,Volatility
-GRID,First Trust Nasdaq Clean Edge Smart GRID Infrastructure Index,Equity
-QAI,IQ Hedge Multi-Strategy Tracker ETF,Alternatives
-IGBH,iShares Interest Rate Hedged Long-Term Corporate Bond ETF,Bond
-CORP,PIMCO Investment Grade Corporate Bond Index ETF,Bond
-PTNQ,Pacer Trendpilot 100 ETF,Multi-Asset
-UCON,First Trust TCW Unconstrained Plus Bond ETF,Bond
-PWB,Invesco Dynamic Large Cap Growth ETF,Equity
-EZM,WisdomTree U.S. MidCap Fund,Equity
-FLJP,Franklin FTSE Japan ETF,Equity
-DVYE,iShares Emerging Markets Dividend ETF,Equity
-ILCV,iShares Morningstar Value ETF,Equity
-PWV,Invesco Dynamic Large Cap Value ETF,Equity
-IFRA,iShares U.S. Infrastructure ETF,Equity
-EEMA,iShares MSCI Emerging Markets Asia ETF,Equity
-GWX,SPDR S&P International Small Cap ETF,Equity
-JHML,John Hancock Multifactor Large Cap ETF,Equity
-GIGB,Goldman Sachs Access Investment Grade Corporate Bond ETF,Bond
-CNYA,iShares MSCI China A ETF,Equity
-OUSA,OShares U.S. Quality Dividend ETF,Equity
-HEWJ,iShares Currency Hedged MSCI Japan ETF,Equity
-RWJ,Invesco S&P SmallCap 600 Revenue ETF,Equity
-AGZ,iShares Agency Bond ETF,Bond
-LVHD,Legg Mason Low Volatility High Dividend ETF,Equity
-FLTR,VanEck Investment Grade Floating Rate ETF,Bond
-TDTF,FlexShares iBoxx 5-Year Target Duration TIPS Index Fund,Bond
-KBA,KraneShares Bosera MSCI China A Share ETF,Equity
-GUSH,Direxion Daily S&P Oil & Gas Exp. & Prod. Bull 2X Shares,Equity
-IYM,iShares U.S. Basic Materials ETF,Equity
-MLPX,Global X MLP & Energy Infrastructure ETF,Equity
-PFM,Invesco Dividend Achievers™ ETF,Equity
-IYK,iShares U.S. Consumer Staples ETF,Equity
-RDIV,Invesco S&P Ultra Dividend Revenue ETF,Equity
-BSJN,Invesco BulletShares 2023 High Yield Corporate Bond ETF,Bond
-ONEY,SPDR Russell 1000 Yield Focus ETF,Equity
-SILJ,ETFMG Prime Junior Silver Miners ETF,Equity
-EWQ,iShares MSCI France ETF,Equity
-ONLN,ProShares Online Retail ETF,Equity
-VTC,Vanguard Total Corporate Bond ETF,Bond
-EQAL,Invesco Russell 1000 Equal Weight ETF,Equity
-BCI,abrdn Bloomberg All Commodity Strategy K-1 Free ETF,Commodity
-TBF,ProShares Short 20+ Year Treasury,Bond
-JHEM,John Hancock Multifactor Emerging Markets ETF,Equity
-VTWG,Vanguard Russell 2000 Growth ETF,Equity
-CFA,VictoryShares US 500 Volatility Wtd ETF,Equity
-MUNI,PIMCO Intermediate Municipal Bond Active ETF,Bond
-IDLV,Invesco S&P International Developed Low Volatility ETF,Equity
-MNA,IQ Merger Arbitrage ETF,Alternatives
-JPUS,JPMorgan Diversified Return US Equity ETF,Equity
-KRMA,Global X Conscious Companies ETF,Equity
-DIV,Global X SuperDividend U.S. ETF,Equity
-UVXY,ProShares Ultra VIX Short-Term Futures ETF,Volatility
-XHE,SPDR S&P Health Care Equipment ETF,Equity
-NUGT,Direxion Daily Gold Miners Index Bull 2x Shares,Equity
-SPGM,SPDR Portfolio MSCI Global Stock Market ETF,Equity
-EWD,iShares MSCI Sweden ETF,Equity
-INDY,iShares India 50 ETF,Equity
-XRT,SPDR S&P Retail ETF,Equity
-BSCQ,Invesco BulletShares 2026 Corporate Bond ETF,Bond
-EWX,SPDR S&P Emerging Markets Small Cap ETF,Equity
-EES,WisdomTree U.S. SmallCap Fund,Equity
-EPS,WisdomTree U.S. LargeCap Fund,Equity
-LGLV,SPDR SSGA US Large Cap Low Volatility Index ETF,Equity
-CATH,Global X S&P 500 Catholic Values Custom ETF,Equity
-VIOG,Vanguard S&P Small-Cap 600 Growth ETF,Equity
-IBUY,Amplify Online Retail ETF,Equity
-PPA,Invesco Aerospace & Defense ETF,Equity
-ESPO,VanEck Video Gaming and eSports ETF,Equity
-FCTR,First Trust Lunt U.S. Factor Rotation ETF,Equity
-EWI,iShares MSCI Italy ETF,Equity
-CLTL,Invesco Treasury Collateral ETF,Bond
-MXI,iShares Global Materials ETF,Equity
-DWX,SPDR S&P International Dividend ETF,Equity
-TLTD,FlexShares Morningstar Developed Markets ex-US Factor Tilt,Equity
-HYGV,FlexShares High Yield Value-Scored US Bond Index Fund,Bond
-ONEV,SPDR Russell 1000 Low Volatility Focus ETF,Equity
-DWM,WisdomTree International Equity Fund,Equity
-IQDF,FlexShares International Quality Dividend Index Fund,Equity
-PID,Invesco International Dividend Achievers™ ETF,Equity
-CALF,Pacer US Small Cap Cash Cows 100 ETF,Equity
-KBWD,Invesco KBW High Dividend Yield Financial ETF,Equity
-UUP,Invesco DB US Dollar Index Bullish Fund,Currency
-DBEU,Xtrackers MSCI Europe Hedged Equity ETF,Equity
-SIZE,iShares MSCI USA Size Factor ETF,Equity
-BNDW,Vanguard Total World Bond ETF,Bond
-VNM,VanEck Vietnam ETF,Equity
-HEZU,iShares Currency Hedged MSCI Eurozone ETF,Equity
-BBH,VanEck Biotech ETF,Equity
-USD,ProShares Ultra Semiconductors,Equity
-FLGB,Franklin FTSE United Kingdom ETF,Equity
-OUNZ,VanEck Merk Gold Trust,Commodity
-TMFC,Motley Fool 100 Index ETF,Equity
-XSVM,Invesco S&P SmallCap Value with Momentum ETF,Equity
-GMF,SPDR S&P Emerging Asia Pacific ETF,Equity
-PWZ,Invesco California AMT-Free Municipal Bond ETF,Bond
-SMMU,PIMCO Short Term Municipal Bond Active ETF,Bond
-FEP,First Trust Europe AlphaDEX Fund,Equity
-DMRL,DeltaShares S&P 500 Managed Risk ETF,Multi-Asset
-SPXU,ProShares UltraPro Short S&P500,Equity
-HAUZ,Xtrackers International Real Estate ETF,Real Estate
-FDRR,Fidelity Dividend ETF for Rising Rates,Equity
-EWS,iShares MSCI Singapore ETF,Equity
-CHIQ,Global X MSCI China Consumer Discretionary ETF,Equity
-NYF,iShares New York Muni Bond ETF,Bond
-ERUS,iShares MSCI Russia ETF,Equity
-PFFA,Virtus InfraCap U.S. Preferred Stock ETF,Preferred Stock
-DTN,WisdomTree US Dividend ex-Financials Fund,Equity
-EWP,iShares MSCI Spain ETF,Equity
-CEMB,iShares J.P. Morgan EM Corporate Bond ETF,Bond
-DSTL,Distillate US Fundamental Stability & Value ETF,Equity
-FPEI,First Trust Institutional Preferred Securities & Income ETF,Multi-Asset
-DWAS,Invesco DWA SmallCap Momentum ETF,Equity
-PSCT,Invesco S&P SmallCap Information Technology ETF,Equity
-SDG,iShares MSCI Global Impact ETF,Equity
-IBDS,iShares iBonds Dec 2027 Term Corporate ETF,Bond
-SNSR,Global X Internet of Things ETF,Equity
-PSQ,ProShares Short QQQ,Equity
-BIZD,VanEck BDC Income ETF,Equity
-SDS,ProShares UltraShort S&P500,Equity
-IYZ,iShares U.S. Telecommunications ETF,Equity
-RFG,Invesco S&P MidCap 400® Pure Growth ETF,Equity
-JHMD,John Hancock Multifactor Developed International ETF,Equity
-CSM,Proshares Large Cap Core Plus,Equity
-FGD,First Trust Dow Jones Global Select Dividend Index Fund,Equity
-LEMB,iShares J.P. Morgan EM Local Currency Bond ETF,Bond
-EMHY,iShares J.P. Morgan EM High Yield Bond ETF,Bond
-FMAT,Fidelity MSCI Materials Index ETF,Equity
-RGI,Invesco S&P 500® Equal Weight Industrials ETF,Equity
-RCD,Invesco S&P 500® Equal Weight Consumer Discretionary ETF,Equity
-MMIN,IQ MacKay Municipal Insured ETF,Bond
-FM,iShares MSCI Frontier and Select EM ETF,Equity
-DDM,ProShares Ultra Dow30,Equity
-FDLO,Fidelity Low Volatility Factor ETF,Equity
-FXZ,First Trust Materials AlphaDEX Fund,Equity
-RYF,Invesco S&P 500® Equal Weight Financials ETF,Equity
-OGIG,O’Shares Global Internet Giants ETF,Equity
-EUSA,iShares MSCI USA Equal Weighted ETF,Equity
-IG,Principal Investment Grade Corporate Active ETF,Bond
-NANR,SPDR S&P North American Natural Resources ETF,Equity
-IMCV,iShares Morningstar Mid-Cap ETF,Equity
-VFVA,Vanguard U.S. Value Factor ETF,Equity
-CAPE,iPath Shiller CAPE ETN,Equity
-FVAL,Fidelity Value Factor ETF,Equity
-ERX,Direxion Daily Energy Bull 2X Shares,Equity
-YINN,Direxion Daily FTSE China Bull 3X Shares,Equity
-RTM,Invesco S&P 500® Equal Weight Materials ETF,Equity
-RHS,Invesco S&P 500® Equal Weight Consumer Staples ETF,Equity
-VRIG,Invesco Variable Rate Investment Grade ETF,Bond
-PDN,Invesco FTSE RAFI Developed Markets ex-U.S. Small-Mid ETF,Equity
-ECH,iShares MSCI Chile ETF,Equity
-DBB,Invesco DB Base Metals Fund,Commodity
-GSSC,Goldman Sachs ActiveBeta US Small Cap Equity ETF,Equity
-EMCR,Xtrackers Emerging Markets Carbon Reduction and Climate Improvers ETF,Equity
-PSCH,Invesco S&P SmallCap Health Care ETF,Equity
-URTY,ProShares UltraPro Russell2000,Equity
-QDEF,FlexShares Quality Dividend Defensive Index Fund,Equity
-MDIV,First Trust Multi-Asset Diversified Income Index Fund,Multi-Asset
-FTLS,First Trust Long/Short Equity ETF,Alternatives
-VUSE,Vident Core US Equity Fund,Equity
-IRBO,iShares Robotics and Artificial Intelligence Multisector ETF,Equity
-GII,SPDR S&P Global Infrastructure ETF,Equity
-RING,iShares MSCI Global Gold Miners ETF,Equity
-KIE,SPDR S&P Insurance ETF,Equity
-WIP,SPDR FTSE International Government Inflation-Protected Bond ETF,Bond
-AGQ,ProShares Ultra Silver,Commodity
-DNL,WisdomTree Global ex-U.S. Quality Dividend Growth Fund,Equity
-GQRE,FlexShares Global Quality Real Estate Index Fund,Real Estate
-IGE,iShares North American Natural Resources ETF,Equity
-GBF,iShares Government/Credit Bond ETF,Bond
-GNMA,iShares GNMA Bond ETF,Bond
-JQUA,JPMorgan U.S. Quality Factor ETF,Equity
-PTMC,Pacer Trendpilot US Mid Cap ETF,Multi-Asset
-RXI,iShares Global Consumer Discretionary ETF,Equity
-ULST,SPDR SSgA Ultra Short Term Bond ETF,Bond
-FNY,First Trust Mid Cap Growth AlphaDEX Fund,Equity
-FCG,First Trust Natural Gas ETF,Equity
-PREF,Principal Spectrum Preferred Secs Active ETF,Preferred Stock
-VIDI,Vident International Equity Fund,Equity
-JVAL,JPMorgan U.S. Value Factor ETF,Equity
-FEM,First Trust Emerging Markets AlphaDEX Fund,Equity
-SVXY,ProShares Short VIX Short-Term Futures ETF,Volatility
-YYY,Amplify High Income ETF,Multi-Asset
-ISCG,iShares Morningstar Small-Cap Growth ETF,Equity
-SHYD,VanEck Short High Yield Muni ETF,Bond
-BSJO,Invesco BulletShares 2024 High Yield Corporate Bond ETF,Bond
-DBO,Invesco DB Oil Fund,Commodity
-ERTH,Invesco MSCI Sustainable Future ETF,Equity
-PJP,Invesco Dynamic Pharmaceuticals ETF,Equity
-SRET,Global X SuperDividend REIT ETF,Real Estate
-RWK,Invesco S&P MidCap 400 Revenue ETF,Equity
-TPYP,Tortoise North American Pipeline Fund,Equity
-DPST,Direxion Daily Regional Banks Bull 3X Shares,Equity
-JHSC,John Hancock Multifactor Small Cap ETF,Equity
-FXN,First Trust Energy AlphaDEX Fund,Equity
-JNUG,Direxion Daily Junior Gold Miners Index Bull 2x Shares,Equity
-QQQE,Direxion NASDAQ-100 Equal Weighted Index Shares,Equity
-VBND,Vident Core U.S. Bond Strategy ETF,Bond
-NAIL,Direxion Daily Homebuilders & Supplies Bull 3X Shares,Equity
-FTSD,Franklin Liberty Short Duration U.S. Government ETF,Bond
-PLW,Invesco 1-30 Laddered Treasury ETF,Bond
-TMF,Direxion Daily 20+ Year Treasury Bull 3X Shares,Bond
-SDVY,First Trust SMID Cap Rising Dividend Achievers ETF,Equity
-FDT,First Trust Developed Markets ex-US AlphaDEX Fund,Equity
-FNDB,Schwab Fundamental U.S. Broad Market Index ETF,Equity
-AAAU,Goldman Sachs Physical Gold ETF,Commodity
-FLHY,Franklin Liberty High Yield Corporate ETF,Bond
-SPEU,SPDR Portfolio Europe ETF,Equity
-ISCV,iShares Morningstar Small Cap Value ETF,Equity
-NUMG,Nuveen ESG Mid-Cap Growth ETF,Equity
-EIDO,iShares MSCI Indonesia ETF,Equity
-IPO,Renaissance IPO ETF,Equity
-ZROZ,PIMCO 25+ Year Zero Coupon US Treasury Index ETF,Bond
-SMIN,iShares MSCI India Small-Cap ETF,Equity
-KCE,SPDR S&P Capital Markets ETF,Equity
-RZV,Invesco S&P SmallCap 600® Pure Value ETF,Equity
-INDS,Pacer Benchmark Industrial Real Estate SCTR ETF,Real Estate
-IHE,iShares U.S. Pharmaceuticals ETF,Equity
-EXI,iShares Global Industrials ETF,Equity
-ROUS,Hartford Multifactor US Equity ETF,Equity
-CNRG,SPDR S&P Kensho Clean Power ETF,Equity
-PSJ,Invesco Dynamic Software ETF,Equity
-PTH,Invesco DWA Healthcare Momentum ETF,Equity
-XSW,SPDR S&P Software & Services ETF,Equity
-PRNT,3D Printing ETF,Equity
-DUSA,Davis Select U.S. Equity ETF,Equity
-UNG,United States Natural Gas Fund LP,Commodity
-THD,iShares MSCI Thailand ETF,Equity
-USTB,VictoryShares USAA Core Short-Term Bond ETF,Bond
-EEMS,iShares MSCI Emerging Markets Small-Cap ETF,Equity
-ONEO,SPDR Russell 1000 Momentum Focus ETF,Equity
-FMHI,First Trust Municipal High Income ETF,Bond
-PTF,Invesco DWA Technology Momentum ETF,Equity
-IBMK,iShares iBonds Dec 2022 Term Muni Bond ETF,Bond
-ULVM,VictoryShares USAA MSCI USA Value Momentum ETF,Equity
-SMMD,iShares Russell 2500 ETF,Equity
-BSCR,Invesco BulletShares 2027 Corporate Bond ETF,Bond
-SDOW,ProShares UltraPro Short Dow30,Equity
-SPBO,SPDR Portfolio Corporate Bond ETF,Bond
-KBWY,Invesco KBW Premium Yield Equity REIT ETF,Real Estate
-NUAG,Nuveen Enhanced Yield U.S. Aggregate Bond ETF,Bond
-DWLD,Davis Select Worldwide ETF,Equity
-EELV,Invesco S&P Emerging Markets Low Volatility ETF,Equity
-DOL,WisdomTree International LargeCap Dividend Fund,Equity
-RAVI,FlexShares Ready Access Variable Income Fund,Bond
-SPXS,Direxion Daily S&P 500 Bear 3X Shares,Equity
-EWN,iShares MSCI Netherlands ETF,Equity
-FYC,First Trust Small Cap Growth AlphaDEX Fund,Equity
-ILTB,iShares Core 10+ Year USD Bond ETF,Bond
-PIO,Invesco Global Water ETF,Equity
-KNG,FT Cboe Vest S&P 500 Dividend Aristocrats Target Income ETF,Equity
-XITK,SPDR FactSet Innovative Technology ETF,Equity
-VSDA,VictoryShares Dividend Accelerator ETF,Equity
-TMV,Direxion Daily 20+ Year Treasury Bear 3x Shares,Bond
-KARS,KraneShares Electric Vehicles & Future Mobility Index ETF,Equity
-PBD,Invesco Global Clean Energy ETF,Equity
-FAN,First Trust Global Wind Energy ETF,Equity
-XMHQ,Invesco S&P MidCap Quality ETF,Equity
-UIVM,VictoryShares USAA MSCI International Value Momentum ETF,Equity
-DEF,Invesco Defensive Equity ETF,Equity
-PPH,VanEck Pharmaceutical ETF,Equity
-IBML,iShares iBonds Dec 2023 Term Muni Bond ETF,Bond
-TAIL,Cambria Tail Risk ETF,Multi-Asset
-SOCL,Global X Social Media ETF,Equity
-SMB,VanEck Short Muni ETF,Bond
-IEUS,iShares MSCI Europe Small-Cap ETF,Equity
-SYLD,Cambria Shareholder Yield ETF,Equity
-PHDG,Invesco S&P 500® Downside Hedged ETF,Equity
-PAWZ,ProShares Pet Care ETF,Equity
-TZA,Direxion Daily Small Cap Bear 3X Shares,Equity
-CLRG,IQ Chaikin U.S. Large Cap ETF,Equity
-ADME,Aptus Drawdown Managed Equity ETF,Multi-Asset
-SKOR,FlexShares Credit-Scored US Corporate Bond Index Fund,Bond
-IQDG,WisdomTree International Quality Dividend Growth Fund,Equity
-TLTE,FlexShares Morningstar Emerging Markets Factor Tilt Index,Equity
-HFXI,IQ 50 Percent Hedged FTSE International ETF,Equity
-BSJP,Invesco BulletShares 2025 High Yield Corporate Bond ETF,Bond
-IEO,iShares U.S. Oil & Gas Exploration & Production ETF,Equity
-IBDT,iShares iBonds Dec 2028 Term Corporate ETF,Bond
-JPIB,JPMorgan International Bond Opportunities ETF,Bond
-DFE,WisdomTree Europe SmallCap Dividend Fund,Equity
-FLGE,Credit Suisse FI Large Cap Growth Enhanced ETN,Equity
-WOOD,iShares Global Timber & Forestry ETF,Equity
-UWM,ProShares Ultra Russell2000,Equity
-JUST,Goldman Sachs JUST U.S. Large Cap Equity ETF,Equity
-ISDX,Invesco RAFI Strategic Developed ex-US ETF,Equity
-FDHY,Fidelity High Yield Factor ETF,Bond
-MORT,VanEck Mortgage REIT Income ETF,Real Estate
-IXP,iShares Global Comm Services ETF,Equity
-CWEB,Direxion Daily CSI China Internet Index Bull 2x Shares,Equity
-TUR,iShares MSCI Turkey ETF,Equity
-PALL,Aberdeen Standard Physical Palladium Shares ETF,Commodity
-EZA,iShares MSCI South Africa ETF,Equity
-SMOG,VanEck Low Carbon Energy ETF,Equity
-PKB,Invesco Dynamic Building & Construction ETF,Equity
-MEAR,BlackRock Short Maturity Municipal Bond ETF,Bond
-EDIV,SPDR S&P Emerging Markets Dividend ETF,Equity
-NUMV,Nuveen ESG Mid-Cap Value ETF,Equity
-WDIV,SPDR S&P Global Dividend ETF,Equity
-ROBT,First Trust Nasdaq Artificial Intelligence & Robotics ETF,Equity
-FDD,First Trust STOXX European Select Dividend Index Fund,Equity
-FLTB,Fidelity Limited Term Bond ETF,Bond
-GAL,SPDR SSgA Global Allocation ETF,Multi-Asset
-USVM,VictoryShares USAA MSCI USA Small Cap Value Momentum ETF,Equity
-JMOM,JPMorgan U.S. Momentum Factor ETF,Equity
-SHE,SPDR SSGA Gender Diversity Index ETF,Equity
-FCOR,Fidelity Corporate Bond ETF,Bond
-BIBL,Inspire 100 ETF,Equity
-DFEN,Direxion Daily Aerospace & Defense Bull 3X Shares,Equity
-FTXO,First Trust Nasdaq Bank ETF,Equity
-PSP,Invesco Global Listed Private Equity ETF,Equity
-PBE,Invesco Dynamic Biotechnology & Genome ETF,Equity
-MMIT,IQ MacKay Municipal Intermediate ETF,Bond
-BLCN,Siren ETF Trust Siren Nasdaq NexGen Economy ETF,Equity
-VIXY,ProShares VIX Short-Term Futures ETF,Volatility
-EPOL,iShares MSCI Poland ETF,Equity
-IFGL,iShares International Developed Real Estate ETF,Real Estate
-FXG,First Trust Consumer Staples AlphaDEX Fund,Equity
-EFAX,SPDR MSCI EAFE Fossil Fuel Free ETF,Equity
-IGRO,iShares International Dividend Growth ETF,Equity
-AMZA,InfraCap MLP ETF,Equity
-BGRN,iShares Global Green Bond ETF,Bond
-DOG,ProShares Short Dow30,Equity
-RYE,Invesco S&P 500® Equal Weight Energy ETF,Equity
-NUBD,Nuveen ESG U.S. Aggregate Bond ETF,Bond
-COM,Direxion Auspice Broad Commodity Strategy ETF,Commodity
-FEMB,First Trust Emerging Markets Local Currency Bond ETF,Bond
-MLN,VanEck Long Muni ETF,Bond
-AIRR,First Trust RBA American Industrial Renaissance ETF,Equity
-COMB,GraniteShares Bloomberg Commodity Broad Strategy No K-1 ETF,Commodity
-TFLO,iShares Treasury Floating Rate Bond ETF,Bond
-PRN,Invesco DWA Industrials Momentum ETF,Equity
-FQAL,Fidelity Quality Factor ETF,Equity
-FAD,First Trust Multi Cap Growth AlphaDEX Fund,Equity
-CURE,Direxion Daily Healthcare Bull 3x Shares,Equity
-CCOR,Core Alternative ETF,Equity
-RTH,VanEck Retail ETF,Equity
-FCVT,First Trust SSI Strategic Convertible Securities ETF,Bond
-FXF,Invesco CurrencyShares Swiss Franc Trust,Currency
-IBMM,iShares iBonds Dec 2024 Term Muni Bond ETF,Bond
-YLD,Principal Active High Yield ETF,Multi-Asset
-CSB,VictoryShares US Small Cap High Dividend Volatility Wtd ETF,Equity
-JPME,JPMorgan Diversified Return US Mid Cap Equity ETF,Equity
-BATT,Amplify Lithium & Battery Technology ETF,Equity
-KOLD,ProShares UltraShort Bloomberg Natural Gas,Commodity
-XMVM,Invesco S&P MidCap Value with Momentum ETF,Equity
-FNGO,MicroSectors FANG+ Index 2X Leveraged ETNs,Equity
-DINT,Davis Select International ETF,Equity
-QGRO,American Century STOXX U.S. Quality Growth ETF,Equity
-QVAL,Alpha Architect U.S. Quantitative Value ETF,Equity
-DTEC,ALPS Disruptive Technologies ETF,Equity
-IQIN,IQ 500 International ETF,Equity
-UEVM,VictoryShares USAA MSCI Emerging Markets Value Momentum ETF,Equity
-BSCS,Invesco BulletShares 2028 Corporate Bond ETF,Bond
-TIPZ,PIMCO Broad US TIPS Index ETF,Bond
-PGHY,Invesco Global Short Term High Yield Bond ETF,Bond
-FFTY,Innovator IBD 50 ETF,Equity
-VLU,SPDR S&P 1500 Value Tilt ETF,Equity
-ISCB,iShares Morningstar Small-Cap ETF,Equity
-PIZ,Invesco DWA Developed Markets Momentum ETF,Equity
-CDL,VictoryShares US Large Cap High Dividend Volatility Wtd ETF,Equity
-RWM,ProShares Short Russell2000,Equity
-AGZD,WisdomTree Interest Rate Hedged U.S. Aggregate Bond Fund,Bond
-SPFF,Global X SuperIncome Preferred ETF,Preferred Stock
-FLBR,Franklin FTSE Brazil ETF,Equity
-FLDR,Fidelity Low Duration Bond Factor ETF,Bond
-IFV,First Trust Dorsey Wright International Focus 5 ETF,Equity
-CZA,Invesco Zacks Mid-Cap ETF,Equity
-FYT,First Trust Small Cap Value AlphaDEX Fund,Equity
-IYLD,iShares Morningstar Multi-Asset Income ETF,Multi-Asset
-CPER,United States Copper Index Fund,Commodity
-HMOP,Hartford Municipal Opportunities ETF,Bond
-DFJ,WisdomTree Japan SmallCap Dividend Fund,Equity
-FLIA,Franklin Liberty International Aggregate Bond ETF,Bond
-SLVP,iShares MSCI Global Silver Miners ETF,Equity
-IBD,Inspire Corporate Bond Impact ETF,Bond
-MILN,Global X Millennial Consumer ETF,Equity
-CACG,ClearBridge All Cap Growth ESG ETF,Equity
-CSML,IQ Chaikin U.S. Small Cap ETF,Equity
-USCI,United States Commodity Index Fund,Commodity
-EWM,iShares MSCI Malaysia ETF,Equity
-FVC,First Trust Dorsey Wright Dynamic Focus 5 ETF,Multi-Asset
-FNK,First Trust Mid Cap Value AlphaDEX Fund,Equity
-XPH,SPDR S&P Pharmaceuticals ETF,Equity
-TTAC,FCF US Quality ETF,Equity
-FXE,Invesco CurrencyShares Euro Trust,Currency
-FRI,First Trust S&P REIT Index Fund,Real Estate
-EQL,Alps Equal Sector Weight ETF,Equity
-DFNL,Davis Select Financial ETF,Equity
-RYU,Invesco S&P 500® Equal Weight Utilities ETF,Equity
-QID,ProShares UltraShort QQQ,Equity
-IZRL,ARK Israel Innovative Technology ETF,Equity
-EPRF,Innovator S&P Investment Grade Preferred ETF,Preferred Stock
-QINT,American Century Quality Diversified International ETF,Equity
-PJUL,Innovator U.S. Equity Power Buffer ETF - July,Equity
-SMLV,SPDR SSGA US Small Cap Low Volatility Index ETF,Equity
-BNO,United States Brent Oil Fund LP,Commodity
-GVIP,Goldman Sachs Hedge Industry VIP ETF,Equity
-DGRS,WisdomTree US Smallcap Quality Dividend Growth Fund,Equity
-XMPT,VanEck CEF Muni Income ETF,Bond
-UGL,ProShares Ultra Gold,Commodity
-FLBL,Franklin Liberty Senior Loan ETF,Bond
-JSMD,Janus Henderson Small/Mid Cap Growth Alpha ETF,Equity
-PIE,Invesco DWA Emerging Markets Momentum ETF,Equity
-FBGX,UBS AG FI Enhanced Large Cap Growth ETN,Equity
-HAIL,SPDR S&P Kensho Smart Mobility ETF,Equity
-SGDM,Sprott Gold Miners ETF,Equity
-SLVO,Credit Suisse X-Links Silver Shares Covered Call ETN,Multi-Asset
-POCT,Innovator U.S. Equity Power Buffer ETF - October,Equity
-ESG,FlexShares STOXX US ESG Select Index Fund,Equity
-BIB,ProShares Ultra Nasdaq Biotechnology,Equity
-TTT,ProShares UltraPro Short 20+ Year Treasury,Bond
-BWZ,SPDR Bloomberg Short Term International Treasury Bond ETF,Bond
-GCC,WisdomTree Enhanced Commodity Strategy Fund,Commodity
-EIS,iShares MSCI Israel ETF,Equity
-HEEM,iShares Currency Hedged MSCI Emerging Markets ETF,Equity
-FLEE,Franklin FTSE Europe ETF,Equity
-DEUS,Xtrackers Russell US Multifactor ETF,Equity
-XSMO,Invesco S&P SmallCap Momentum ETF,Equity
-HYZD,WisdomTree Interest Rate Hedged High Yield Bond Fund,Bond
-VALQ,American Century STOXX U.S. Quality Value ETF,Equity
-DBJP,Xtrackers MSCI Japan Hedged Equity ETF,Equity
-GTIP,Goldman Sachs Access Inflation Protected USD Bond ETF,Bond
-TAXF,American Century Diversified Municipal Bond ETF,Bond
-ETHO,Etho Climate Leadership U.S. ETF,Equity
-BRZU,Direxion Daily MSCI Brazil Bull 2X Shares,Equity
-KLDW,Knowledge Leaders Developed World ETF,Equity
-GHYB,Goldman Sachs Access High Yield Corporate Bond ETF,Bond
-RFV,Invesco S&P MidCap 400® Pure Value ETF,Equity
-VFMO,Vanguard U.S. Momentum Factor ETF,Equity
-GHYG,iShares US & Intl High Yield Corp Bond ETF,Bond
-TOK,iShares MSCI Kokusai ETF,Equity
-ISCF,iShares MSCI Intl Small-Cap Multifactor ETF,Equity
-IUS,Invesco RAFI Strategic US ETF,Equity
-ESGG,FlexShares STOXX Global ESG Select Index Fund,Equity
-ITEQ,BlueStar Israel Technology ETF,Equity
-RZG,Invesco S&P SmallCap 600® Pure Growth ETF,Equity
-DIG,ProShares Ultra Oil & Gas,Equity
-PGJ,Invesco Golden Dragon China ETF,Equity
-LRGE,ClearBridge Large Cap Growth ESG ETF,Equity
-RLY,SPDR SSgA Multi-Asset Real Return ETF,Alternatives
-FXY,Invesco Currencyshares Japanese Yen Trust,Currency
-JPSE,JPMorgan Diversified Return U.S. Small Cap Equity ETF,Equity
-AIQ,Global X Artificial Intelligence & Technology ETF,Equity
-OSCV,Opus Small Cap Value ETF,Equity
-MVV,ProShares Ultra MidCap400,Equity
-IBMN,iShares iBonds Dec 2025 Term Muni Bond ETF,Bond
-OPER,ClearShares Ultra-Short Maturity ETF,Bond
-USOI,Credit Suisse X-Links Crude Oil Shares Covered Call ETN,Multi-Asset
-CMDY,iShares Bloomberg Roll Select Commodity Strategy ETF,Commodity
-FXU,First Trust Utilities AlphaDEX Fund,Equity
-KGRN,KraneShares MSCI China Clean Technology Index ETF,Equity
-PBP,Invesco S&P 500 BuyWrite ETF,Multi-Asset
-WFHY,WisdomTree U.S. High Yield Corporate Bond Fund,Bond
-FSMB,First Trust Short Duration Managed Municipal ETF,Bond
-MLPB,ETRACS Alerian MLP Infrastructure Index ETN Series B,Equity
-FFTI,FormulaFolios Tactical Income ETF,Bond
-RFDI,First Trust RiverFront Dynamic Developed International ETF,Equity
-SBIO,ALPS Medical Breakthroughs ETF,Equity
-BOIL,ProShares Ultra Bloomberg Natural Gas,Commodity
-AUSF,Global X Adaptive U.S. Factor ETF,Equity
-HYDB,iShares High Yield Bond Factor ETF,Bond
-FUMB,First Trust Ultra Short Duration Municipal ETF,Bond
-DMRI,DeltaShares S&P International Managed Risk ETF,Multi-Asset
-QTUM,Defiance Quantum ETF,Equity
-OMFS,Invesco Russell 2000 Dynamic Multifactor ETF,Equity
-JPEM,J.P. Morgan Diversified Return Emerging Markets Equity ETF,Equity
-DJD,Invesco Dow Jones Industrial Average Dividend ETF,Equity
-RVNU,Xtrackers Municipal Infrastructure Revenue Bond ETF,Bond
-FDM,First Trust Dow Jones Select MicroCap Index Fund,Equity
-DTH,WisdomTree International High Dividend Fund,Equity
-IGEB,iShares Investment Grade Bond Factor ETF,Bond
-EBIZ,Global X E-commerce ETF,Equity
-ADRE,Invesco BLDRS Emerging Markets 50 ADR Index Fund,Equity
-NUDM,Nuveen ESG International Developed Markets Equity ETF,Equity
-KURE,KraneShares MSCI All China Health Care Index ETF,Equity
-EDEN,iShares MSCI Denmark ETF,Equity
-VFQY,Vanguard U.S. Quality Factor ETF,Equity
-AIEQ,AI Powered Equity ETF,Equity
-FXC,Invesco CurrencyShares Canadian Dollar Trust,Currency
-ATMP,Barclays ETN+ Select MLP ETN,Equity
-DDWM,WisdomTree Dynamic Currency Hedged International Equity Fund,Equity
-VSMV,VictoryShares US Multi-Factor Minimum Volatility ETF,Equity
-MUST,Columbia Multi-Sector Municipal Income ETF,Bond
-OUSM,OShares U.S. Small-Cap Quality Dividend ETF,Equity
-STOT,SPDR DoubleLine Short Duration Total Return Tactical ETF,Bond
-PXI,Invesco DWA Energy Momentum ETF,Equity
-IDOG,ALPS International Sector Dividend Dogs ETF,Equity
-IETC,iShares Evolved U.S. Technology ETF,Equity
-PPTY,US Diversified Real Estate ETF,Real Estate
-FAB,First Trust Multi Cap Value AlphaDEX Fund,Equity
-BFOR,ALPS Barron's 400 ETF,Equity
-SHAG,WisdomTree Yield Enhanced U.S. Short-Term Aggregate Bond Fund,Bond
-USMF,WisdomTree US Multifactor Fund,Equity
-MFMS,Motley Fool Small-Cap Growth ETF,Equity
-WTMF,WisdomTree Managed Futures Strategy Fund,Alternatives
-SPVU,Invesco S&P 500® Enhanced Value ETF,Equity
-KORP,American Century Diversified Corporate Bond ETF,Bond
-RXL,ProShares Ultra Health Care,Equity
-DIVB,iShares U.S. Dividend & Buyback ETF,Equity
-JXI,iShares Global Utilities ETF,Equity
-IBND,SPDR Bloomberg International Corporate Bond ETF,Bond
-BSJQ,Invesco BulletShares 2026 High Yield Corp Bond ETF,Bond
-HYHG,ProShares High Yield-Interest Rate Hedged ETF,Bond
-EDC,Direxion Daily MSCI Emerging Markets Bull 3x Shares,Equity
-REML,Credit Suisse X-Links Monthly Pay 2xLeveraged Mortgage REIT ETN,Real Estate
-QLC,FlexShares US Quality Large Cap Index Fund,Equity
-RJA,Elements Rogers International Commodity Index-Agriculture Total Return ETN,Commodity
-LEGR,First Trust Indxx Innovative Transaction & Process ETF,Equity
-ACWF,iShares MSCI Global Multifactor ETF,Equity
-PYZ,Invesco DWA Basic Materials Momentum ETF,Equity
-JSML,Janus Henderson Small Cap Growth Alpha ETF,Equity
-RIGS,RiverFront Strategic Income Fund,Bond
-QQXT,First Trust Nasdaq-100 Ex-Technology Sector Index Fund,Equity
-FEMS,First Trust Emerging Markets Small Cap AlphaDEX Fund,Equity
-PEZ,Invesco DWA Consumer Cyclicals Momentum ETF,Equity
-IGN,iShares North American Tech-Multimedia Networking ETF,Equity
-FLLV,Franklin Liberty U.S. Low Volatility ETF,Equity
-BYLD,iShares Yield Optimized Bond ETF,Bond
-DBAW,Xtrackers MSCI All World ex US Hedged Equity ETF,Equity
-TOLZ,ProShares DJ Brookfield Global Infrastructure ETF,Equity
-PSR,Invesco Active U.S. Real Estate Fund,Real Estate
-ENZL,iShares MSCI New Zealand ETF,Equity
-EFAD,ProShares MSCI EAFE Dividend Growers ETF,Equity
-EEMX,SPDR MSCI Emerging Markets Fossil Fuel Free ETF,Equity
-DIM,WisdomTree International MidCap Dividend Fund,Equity
-EDOW,First Trust Dow 30 Equal Weight ETF,Equity
-EWMC,Invesco S&P MidCap 400® Equal Weight ETF,Equity
-OCIO,ClearShares OCIO ETF,Multi-Asset
-DRN,Direxion Daily Real Estate Bull 3x Shares,Real Estate
-EPU,iShares MSCI Peru ETF,Equity
-RETL,Direxion Daily Retail Bull 3X Shares,Equity
-USDU,WisdomTree Bloomberg U.S. Dollar Bullish Fund,Currency
-RYJ,Invesco Raymond James SB-1 Equity ETF,Equity
-DOO,WisdomTree International Dividend ex-Financials Fund,Equity
-IVAL,Alpha Architect International Quantitative Value ETF,Equity
-ECON,Columbia Emerging Markets Consumer ETF,Equity
-GCOW,Pacer Global Cash Cows Dividend ETF,Equity
-XHS,SPDR S&P Health Care Services ETF,Equity
-HUSV,First Trust Horizon Managed Volatility Domestic ETF,Equity
-HYLD,High Yield ETF,Bond
-IDHQ,Invesco S&P International Developed High Quality ETF,Equity
-HAWX,iShares Currency Hedged MSCI ACWI ex U.S. ETF,Equity
-XES,SPDR S&P Oil & Gas Equipment & Services ETF,Equity
-BNDC,FlexShares Core Select Bond Fund,Bond
-HSRT,Hartford Short Duration ETF,Bond
-DALI,First Trust Dorsey Wright DALI 1 ETF,Equity
-HYGH,iShares Interest Rate Hedged High Yield Bond ETF,Bond
-AFIF,Anfield Universal Fixed Income ETF,Bond
-PWC,Invesco Dynamic Market ETF,Equity
-RNRG,Global X Funds Global X Renewable Energy Producers ETF,Equity
-SPDN,Direxion Daily S&P 500 Bear 1x Shares,Equity
-USL,United States 12 Month Oil Fund LP,Commodity
-PXE,Invesco Dynamic Energy Exploration & Production ETF,Equity
-LSAF,LeaderShares AlphaFactor US Core Equity ETF,Equity
-URE,ProShares Ultra Real Estate,Real Estate
-DVOL,First Trust Dorsey Wright Momentum & Low Volatility ETF,Equity
-RBIN,Nationwide Risk-Based International Equity ETF,Equity
-BLES,Inspire Global Hope ETF,Equity
-RBUS,Nationwide Risk-Based U.S. Equity ETF,Equity
-SRTY,ProShares UltraPro Short Russell2000,Equity
-BKF,iShares MSCI BRIC ETF,Equity
-EWRE,Invesco S&P 500® Equal Weight Real Estate ETF,Real Estate
-CHAD,Direxion Daily CSI 300 China A Share Bear 1X Shares,Equity
-PSCI,Invesco S&P SmallCap Industrials ETF,Equity
-PICB,Invesco International Corporate Bond ETF,Bond
-IMTB,iShares Core 5-10 Year USD Bond ETF,Bond
-EPHE,iShares MSCI Philippines ETF,Equity
-RFDA,RiverFront Dynamic US Dividend Advantage ETF,Equity
-WBND,Western Asset Total Return ETF,Bond
-FDMO,Fidelity Momentum Factor ETF,Equity
-CVY,Invesco Zacks Multi-Asset Income ETF,Equity
-FLMB,Franklin Liberty Federal Tax-Free Bond ETF,Bond
-SLX,VanEck Steel ETF,Equity
-NUEM,Nuveen ESG Emerging Markets Equity ETF,Equity
-CBON,VanEck China Bond ETF,Bond
-GREK,Global X MSCI Greece ETF,Equity
-FAAR,First Trust Alternative Absolute Return Strategy ETF,Commodity
-CORN,Teucrium Corn Fund,Commodity
-GDMA,Gadsden Dynamic Multi-Asset ETF,Multi-Asset
-FLCH,Franklin FTSE China ETF,Equity
-MFEM,PIMCO RAFI Dynamic Multi-Factor Emerging Markets Equity ETF,Equity
-MBSD,FlexShares Disciplined Duration MBS Index Fund,Bond
-EQWL,Invesco S&P 100 Equal Weight ETF,Equity
-GVAL,Cambria Global Value ETF,Equity
-LOWC,SPDR MSCI ACWI Low Carbon Target ETF,Equity
-PIN,Invesco India ETF,Equity
-INKM,SPDR SSgA Income Allocation ETF,Multi-Asset
-FCAL,First Trust California Municipal High Income ETF,Bond
-ISMD,Inspire Small/Mid Cap Impact ETF,Equity
-ENTR,ERShares Entrepreneurs ETF,Equity
-PZT,Invesco New York AMT-Free Municipal Bond ETF,Bond
-FXA,Invesco CurrencyShares Australian Dollar Trust,Currency
-PFI,Invesco DWA Financial Momentum ETF,Equity
-QABA,First Trust NASDAQ ABA Community Bank Index Fund,Equity
-ELD,WisdomTree Emerging Markets Local Debt Fund,Bond
-PSCE,Invesco S&P SmallCap Energy ETF,Equity
-RFCI,RiverFront Dynamic Core Income ETF,Bond
-BOCT,Innovator U.S. Equity Buffer ETF - October,Equity
-HSCZ,iShares Currency Hedged MSCI EAFE Small Cap ETF,Equity
-FXB,Invesco CurrencyShares British Pound Sterling Trust,Currency
-FIBR,iShares U.S. Fixed Income Balanced Risk Factor ETF,Bond
-CIL,VictoryShares International Volatility Wtd ETF,Equity
-GLDI,Credit Suisse X-Links Gold Shares Covered Call ETN,Multi-Asset
-HTAB,Hartford Schroders Tax-Aware Bond ETF,Bond
-VIXM,ProShares VIX Mid-Term Futures ETF,Volatility
-IPKW,Invesco International BuyBack Achievers™ ETF,Equity
-SGDJ,Sprott Junior Gold Miners ETF,Equity
-FAZ,Direxion Daily Financial Bear 3X Shares,Equity
-DBEM,Xtrackers MSCI Emerging Markets Hedged Equity ETF,Equity
-CHGX,Change Finance U.S. Large Cap Fossil Fuel Free ETF,Equity
-VFMF,Vanguard U.S. Multifactor ETF,Equity
-RJI,Elements Rogers International Commodity Index-Total Return ETN,Commodity
-SPMO,Invesco S&P 500® Momentum ETF,Equity
-IIGD,Invesco Investment Grade Defensive ETF,Bond
-MXDU,Nationwide Maximum Diversification U.S. Core Equity ETF,Equity
-FTXL,First Trust Nasdaq Semiconductor ETF,Equity
-DBP,Invesco DB Precious Metals Fund,Commodity
-JO,iPath Series B Bloomberg Coffee Subindex Total Return ETN,Commodity
-BJUL,Innovator U.S. Equity Buffer ETF - July,Equity
-PBDM,Invesco PureBeta FTSE Developed ex-North America ETF,Equity
-CHAU,Direxion Daily CSI 300 China A Share Bull 2x Shares,Equity
-FNI,First Trust Chindia ETF,Equity
-NURE,Nuveen Short-Term REIT ETF,Real Estate
-BTAL,AGFiQ US Market Neutral Anti-Beta Fund,Alternatives
-QSY,WisdomTree U.S. Quality Shareholder Yield Fund,Equity
-FSZ,First Trust Switzerland AlphaDEX Fund,Equity
-RESP,WisdomTree US ESG Fund,Equity
-PBJ,Invesco Dynamic Food & Beverage ETF,Equity
-DBE,Invesco DB Energy Fund,Commodity
-GRNB,VanEck Green Bond ETF,Bond
-EMTL,SPDR DoubleLine Emerging Markets Fixed Income ETF,Bond
-PSL,Invesco DWA Consumer Staples Momentum ETF,Equity
-GAMR,Wedbush ETFMG Video Game Tech ETF,Equity
-HAP,VanEck Natural Resources ETF,Equity
-FGM,First Trust Germany AlphaDEX Fund,Equity
-JMUB,JPMorgan Municipal ETF,Bond
-MINC,AdvisorShares Newfleet Multi-Sector Income ETF,Bond
-DMRM,DeltaShares S&P 400 Managed Risk ETF,Multi-Asset
-BTEC,Principal Healthcare Innovators ETF,Equity
-TBX,ProShares Short 7-10 Year Treasury,Bond
-DGT,SPDR Global Dow ETF,Equity
-XTL,SPDR S&P Telecom ETF,Equity
-QAT,iShares MSCI Qatar ETF,Equity
-EWUS,iShares MSCI United Kingdom Small-Cap ETF,Equity
-DXD,ProShares UltraShort Dow30,Equity
-IHY,VanEck International High Yield Bond ETF,Bond
-GENY,Principal Millennials ETF,Equity
-FKU,First Trust United Kingdom AlphaDEX Fund,Equity
-MMTM,SPDR S&P 1500 Momentum Tilt ETF,Equity
-PSET,Principal Quality ETF,Equity
-INCO,Columbia India Consumer ETF,Equity
-IAK,iShares U.S. Insurance ETF,Equity
-MFDX,PIMCO RAFI Dynamic Multi-Factor International Equity ETF,Equity
-KEMQ,KraneShares Emerging Markets Consumer Technology Index ETF,Equity
-CUT,Invesco MSCI Global Timber ETF,Equity
-DGRE,WisdomTree Emerging Markets Quality Dividend Growth Fund,Equity
-SZNE,Pacer CFRA-Stovall Equal Weight Seasonal Rotation ETF,Equity
-UTRN,Vesper U.S. Large Cap Short-Term Reversal Strategy ETF,Equity
-MIDU,Direxion Daily Mid Cap Bull 3X Shares,Equity
-MFUS,PIMCO RAFI Dynamic Multi-Factor U.S. Equity ETF,Equity
-DGP,DB Gold Double Long Exchange Traded Notes,Commodity
-LQDI,iShares Inflation Hedged Corporate Bond ETF,Bond
-DRIP,Direxion Daily S&P Oil & Gas Exp. & Prod. Bear 2X Shares,Equity
-IEZ,iShares U.S. Oil Equipment & Services ETF,Equity
-EWO,iShares MSCI Austria ETF,Equity
-QMOM,Alpha Architect U.S. Quantitative Momentum ETF,Equity
-BJK,VanEck Gaming ETF,Equity
-CEFS,Saba Closed-End Funds ETF,Multi-Asset
-INDL,Direxion Daily MSCI India Bull 2X Shares,Equity
-EWZS,iShares MSCI Brazil Small-Cap ETF,Equity
-GOAU,US Global GO GOLD and Precious Metal Miners ETF,Equity
-SCO,ProShares UltraShort Bloomberg Crude Oil,Commodity
-JPXN,iShares JPX-Nikkei 400 ETF,Equity
-FILL,iShares MSCI Global Energy Producers ETF,Equity
-PFFR,InfraCap REIT Preferred ETF,Preferred Stock
-TTAI,FCF International Quality ETF,Equity
-EYLD,Cambria Emerging Shareholder Yield ETF,Equity
-FDNI,First Trust Dow Jones International Internet ETF,Equity
-FIDI,Fidelity International High Dividend ETF,Equity
-JHMT,John Hancock Multifactor Technology ETF,Equity
-ACSI,American Customer Satisfaction ETF,Equity
-EIRL,iShares MSCI Ireland ETF,Equity
-LVHI,Legg Mason International Low Volatility High Dividend ETF,Equity
-PY,Principal Value ETF,Equity
-QEMM,SPDR MSCI Emerging Markets StrategicFactors ETF,Equity
-SHYL,Xtrackers Short Duration High Yield Bond ETF,Bond
-IQDY,FlexShares International Quality Dividend Dynamic Index Fund,Equity
-FFIU,UVA Unconstrained Medium-Term Fixed Income ETF,Bond
-FEUZ,First Trust Eurozone AlphaDEX ETF,Equity
-ISRA,VanEck Israel ETF,Equity
-VEGI,iShares MSCI Global Agriculture Producers ETF,Equity
-OIL,iPath Pure Beta Crude Oil ETN,Commodity
-UGA,United States Gasoline Fund LP,Commodity
-EVX,VanEck Environmental Services ETF,Equity
-JJC,iPath Series B Bloomberg Copper Subindex Total Return ETN,Commodity
-JPMB,JPMorgan USD Emerging Markets Sovereign Bond ETF,Bond
-CARZ,First Trust NASDAQ Global Auto Index Fund,Equity
-BUFF,Innovator Laddered Fund of U.S. Equity Power Buffer ETF,Equity
-SCJ,iShares MSCI Japan Small Cap ETF,Equity
-WEAT,Teucrium Wheat Fund,Commodity
-EWSC,Invesco S&P SmallCap 600® Equal Weight ETF,Equity
-KBWP,Invesco KBW Property & Casualty Insurance ETF,Equity
-AADR,AdvisorShares Dorsey Wright ADR ETF,Equity
-HDMV,First Trust Horizon Managed Volatility Developed Intl ETF,Equity
-ISHG,iShares 1-3 Year International Treasury Bond ETF,Bond
-PST,ProShares UltraShort 7-10 Year Treasury,Bond
-PBS,Invesco Dynamic Media ETF,Equity
-ECNS,iShares MSCI China Small-Cap ETF,Equity
-LOUP,Innovator Loup Frontier Tech ETF,Equity
-GLIN,VanEck India Growth Leaders ETF,Equity
-HDGE,AdvisorShares Ranger Equity Bear ETF,Equity
-TPOR,Direxion Daily Transportation Bull 3X Shares,Equity
-WPS,iShares International Developed Property ETF,Real Estate
-IMOM,Alpha Architect International Quantitative Momentum ETF,Equity
-AMUB,ETRACS Alerian MLP Index ETN Class B,Equity
-FDIV,First Trust Strategic Income ETF,Multi-Asset
-BCD,abrdn Bloomberg All Commodity Longer Dated Strategy K-1 Free ETF,Commodity
-KBWR,Invesco KBW Regional Banking ETF,Equity
-PUTW,WisdomTree CBOE S&P 500 PutWrite Strategy Fund,Multi-Asset
-PHYL,PGIM Active High Yield Bond ETF,Bond
-DGL,Invesco DB Gold Fund,Commodity
-CSD,Invesco S&P Spin-Off ETF,Equity
-UYM,ProShares Ultra Basic Materials,Equity
-UOCT,Innovator U.S. Equity Ultra Buffer ETF - October,Equity
-HYXU,iShares International High Yield Bond ETF,Bond
-IQDE,FlexShares International Quality Dividend Defensive Index ETF,Equity
-HIPS,GraniteShares HIPS US High Income ETF,Multi-Asset
-GURU,Global X Guru Index ETF,Equity
-CSF,VictoryShares US Discovery Enhanced Volatility Wtd ETF,Equity
-MOTI,VanEck Morningstar International Moat ETF,Equity
-DALT,Anfield Diversified Alternatives ETF,Multi-Asset
-SDEM,Global X MSCI SuperDividend Emerging Markets ETF,Equity
-FMF,First Trust Managed Futures Strategy Fund,Alternatives
-TWM,ProShares UltraShort Russell2000,Equity
-DUST,Direxion Daily Gold Miners Index Bear 2x Shares,Equity
-IBDD,iShares iBonds Mar 2023 Term Corporate ETF,Bond
-EBLU,Ecofin Global Water ESG Fund,Equity
-SIMS,SPDR S&P Kensho Intelligent Structures ETF,Equity
-FLKR,Franklin FTSE South Korea ETF,Equity
-WBIY,WBI Power Factor High Dividend ETF,Equity
-WANT,Direxion Daily Consumer Discretionary Bull 3X Shares,Equity
-FLMI,Franklin Liberty Federal Intermediate Tax-Free Bond Opportunities ETF,Bond
-HEWG,iShares Currency Hedged MSCI Germany ETF,Equity
-YANG,Direxion Daily FTSE China Bear 3X Shares,Equity
-AGNG,Global X Aging Population ETF,Equity
-FLQM,Franklin LibertyQ U.S. Mid Cap Equity ETF,Equity
-NFTY,First Trust India NIFTY 50 Equal Weight ETF,Equity
-UBT,ProShares Ultra 20+ Year Treasury,Bond
-SPUU,Direxion Daily S&P 500 Bull 2x Shares,Equity
-EUDG,WisdomTree Europe Quality Dividend Growth Fund,Equity
-GMOM,Cambria Global Momentum ETF,Multi-Asset
-EUO,ProShares UltraShort Euro,Currency
-LKOR,FlexShares Credit-Scored U.S. Long Corporate Bond Index Fund,Bond
-LEAD,Siren DIVCON Leaders Dividend ETF,Equity
-FRLG,Large Cap Growth Index-Linked ETNs,Equity
-ENFR,Alerian Energy Infrastructure ETF,Equity
-MRGR,Proshares Merger ETF,Alternatives
-AFK,VanEck Africa Index ETF,Equity
-EMCB,WisdomTree Emerging Markets Corporate Bond Fund,Bond
-CHIX,Global X MSCI China Financials ETF,Equity
-SJB,ProShares Short High Yield,Bond
-DEW,WisdomTree Global High Dividend Fund,Equity
-CPI,IQ Real Return ETF,Alternatives
-OILK,ProShares K-1 Free Crude Oil Strategy ETF,Commodity
-DEEF,Xtrackers FTSE Developed ex US Multifactor ETF,Equity
-EUSC,WisdomTree Europe Hedged SmallCap Equity Fund,Equity
-PBTP,Invesco PureBeta 0-5 Yr US TIPS ETF,Bond
-DRW,WisdomTree Global ex-US Real Estate Fund,Real Estate
-UCIB,ETRACS CMCI Total Return ETN Series B,Commodity
-PSCD,Invesco S&P SmallCap Consumer Discretionary ETF,Equity
-BDCZ,ETRACS MVIS Business Development Companies Index ETN,Equity
-UMDD,ProShares UltraPro MidCap400,Equity
-JDIV,JPMorgan U.S. Dividend ETF,Equity
-PWS,Pacer WealthShield ETF,Multi-Asset
-QWLD,SPDR MSCI World StrategicFactors ETF,Equity
-BDRY,Breakwave Dry Bulk Shipping ETF,Commodity
-JIGB,JPMorgan Corporate Bond Research Enhanced ETF,Bond
-UDN,Invesco DB US Dollar Index Bearish Fund,Currency
-DEEP,Roundhill Acquirers Deep Value ETF,Equity
-ENOR,iShares MSCI Norway ETF,Equity
-JHMH,John Hancock Multifactor Healthcare ETF,Equity
-XCEM,Columbia EM Core ex-China ETF,Equity
-IDX,VanEck Indonesia Index ETF,Equity
-ICOW,Pacer Developed Markets International Cash Cows 100 ETF,Equity
-DUSL,Direxion Daily Industrials Bull 3X Shares,Equity
-IIGV,Invesco Investment Grade Value ETF,Bond
-CLIX,ProShares Long Online/Short Stores ETF,Alternatives
-XRLV,Invesco S&P 500® ex-Rate Sensitive Low Volatility ETF,Equity
-DDIV,First Trust Dorsey Wright Momentum & Dividend ETF,Equity
-RUSL,Direxion Daily Russia Bull 2x Shares,Equity
-UJUL,Innovator U.S. Equity Ultra Buffer ETF - July,Equity
-VFLQ,Vanguard U.S. Liquidity Factor ETF,Equity
-WBII,WBI Bull|Bear Global Income ETF,Bond
-GAA,Cambria Global Asset Allocation ETF,Multi-Asset
-DURA,VanEck Morningstar Durable Dividend ETF,Equity
-PVI,Invesco VRDO Tax-Free ETF,Bond
-PSCC,Invesco S&P SmallCap Consumer Staples ETF,Equity
-ARCM,Arrow Reserve Capital Management ETF,Bond
-EET,ProShares Ultra MSCI Emerging Markets,Equity
-PTEU,Pacer Trendpilot European Index ETF,Multi-Asset
-DVYA,iShares Asia/Pacific Dividend ETF,Equity
-VFMV,Vanguard U.S. Minimum Volatility ETF,Equity
-SPDV,AAM S&P 500 High Dividend Value ETF,Equity
-FLSW,Franklin FTSE Switzerland ETF,Equity
-WFIG,WisdomTree U.S. Corporate Bond Fund,Bond
-WBIF,WBI BullBear Value 3000 ETF,Equity
-SPVM,Invesco S&P 500 Value with Momentum ETF,Equity
-FFTG,FormulaFolios Tactical Growth ETF,Multi-Asset
-PSCF,Invesco S&P SmallCap Financials ETF,Equity
-DBLV,AdvisorShares DoubleLine Value Equity ETF,Equity
-LSST,Natixis ETF Trust,Bond
-IVES,Wedbush ETFMG Global Cloud Technology ETF,Equity
-RFEM,First Trust RiverFront Dynamic Emerging Markets ETF,Equity
-FTHI,First Trust BuyWrite Income ETF,Equity
-TECS,Direxion Daily Technology Bear 3X Shares,Equity
-LFEQ,VanEck Long/Flat Trend ETF,Equity
-IUSS,Invesco RAFI Strategic US Small Company ETF,Equity
-EWCO,Invesco S&P 500 Equal Weight Communication Services ETF,Equity
-CNXT,VanEck ChiNext ETF,Equity
-FLIN,Franklin FTSE India ETF,Equity
-PFIG,Invesco Fundamental Investment Grade Corporate Bond ETF,Bond
-PUI,Invesco DWA Utilities Momentum ETF,Equity
-DDLS,WisdomTree Dynamic Currency Hedged International SmallCap Equity Fund,Equity
-GOEX,Global X Gold Explorers ETF,Equity
-EURL,Direxion Daily FTSE Europe Bull 3x Shares,Equity
-VMOT,Alpha Architect Value Momentum Trend ETF,Equity
-ROOF,IQ US Real Estate Small Cap ETF,Real Estate
-FYLD,Cambria Foreign Shareholder Yield ETF,Equity
-TRTY,Cambria Trinity ETF,Multi-Asset
-FLTW,Franklin FTSE Taiwan ETF,Equity
-RFFC,RiverFront Dynamic US Flex-Cap ETF,Equity
-HDG,ProShares Hedge Replication ETF,Alternatives
-PXQ,Invesco Dynamic Networking ETF,Equity
-NGE,Global X MSCI Nigeria ETF,Equity
-WBIG,WBI BullBear Yield 3000 ETF,Equity
-ZSL,ProShares UltraShort Silver,Commodity
-WBIL,WBI BullBear Quality 3000 ETF,Equity
-FID,First Trust S&P International Dividend Aristocrats ETF,Equity
-FFHG,Formula Folios Hedged Growth ETF,Multi-Asset
-RINF,ProShares Inflation Expectations ETF,Bond
-DMRS,DeltaShares S&P 600 Managed Risk ETF,Multi-Asset
-SAA,ProShares Ultra SmallCap600,Equity
-KORU,Direxion MSCI Daily South Korea Bull 3X Shares,Equity
-BSBE,Invesco BulletShares 2022 USD Emerging Markets Debt ETF,Bond
-EUM,ProShares Short MSCI Emerging Markets,Equity
-SMHB,ETRACS 2xMonthly Pay Leveraged US Small Cap High Dividend ETN Series B,Equity
-IEIH,iShares Evolved U.S. Innovative Healthcare ETF,Equity
-FFSG,FormulaFolios Smart Growth ETF,Multi-Asset
-UTES,Virtus Reaves Utilities ETF,Equity
-PQIN,PGIM QMA Strategic Alpha International Equity ETF,Equity
-ASHS,Xtrackers Harvest CSI 500 China A-Shares Small Cap ETF,Equity
-PBSM,Invesco PureBeta MSCI USA Small Cap ETF,Equity
-ROAM,Hartford Multifactor Emerging Markets ETF,Equity
-SOYB,Teucrium Soybean Fund,Commodity
-TCTL,Premise Capital Diversified Tactical ETF,Multi-Asset
-DAX,Global X DAX Germany ETF,Equity
-XWEB,SPDR S&P Internet ETF,Equity
-UBOT,"Direxion Daily Robotics, Artificial Intelligence & Automation Index Bull 2X Shares",Equity
-SFIG,WisdomTree U.S. Short Term Corporate Bond Fund,Bond
-FIVA,Fidelity International Value Factor ETF,Equity
-CIZ,VictoryShares Developed Enhanced Volatility Wtd ETF,Equity
-BFIT,Global X Health & Wellness ETF,Equity
-OEUR,OShares Europe Quality Dividend ETF,Equity
-DFND,Siren DIVCON Dividend Defender ETF,Equity
-NUSA,Nuveen Enhanced Yield 1-5 Year U.S. Aggregate Bond ETF,Bond
-EWGS,iShares MSCI Germany Small-Cap ETF,Equity
-NACP,Impact Shares NAACP Minority Empowerment ETF,Equity
-WOMN,Impact Shares YWCA Women’s Empowerment ETF,Equity
-FCEF,First Trust CEF Income Opportunity ETF,Multi-Asset
-FTRI,First Trust Indxx Global Natural Resources Income ETF,Equity
-XSHQ,Invesco S&P SmallCap Quality ETF,Equity
-SNLN,Highland iBoxx Senior Loan ETF,Bond
-UTSL,Direxion Daily Utilities Bull 3X Shares,Equity
-IEHS,iShares Evolved U.S. Healthcare Staples ETF,Equity
-HYLV,IQ S&P High Yield Low Volatility Bond ETF,Bond
-UCC,ProShares Ultra Consumer Services,Equity
-FFR,First Trust FTSE EPRA/NAREIT Developed Markets Real Estate,Real Estate
-DWMF,WisdomTree International Multifactor Fund,Equity
-GYLD,Arrow Dow Jones Global Yield ETF,Multi-Asset
-SPXB,ProShares S&P 500 Bond ETF,Bond
-WLDR,Affinity World Leaders Equity ETF,Equity
-ALTY,Global X Alternative Income ETF,Multi-Asset
-CYB,WisdomTree Chinese Yuan Strategy Fund,Currency
-ROSC,Hartford Multifactor Small Cap ETF,Equity
-FJP,First Trust Japan AlphaDEX Fund,Equity
-NLR,VanEck Uranium + Nuclear Energy ETF,Equity
-HOLD,AdvisorShares North Square McKee Core Reserves ETF,Bond
-DWSH,AdvisorShares Dorsey Wright Short ETF,Equity
-DXJS,WisdomTree Japan Hedged SmallCap Equity Fund,Equity
-GXG,Global X MSCI Colombia ETF,Equity
-FLRT,Pacer Pacific Asset Floating Rate High Income ETF,Bond
-ICOL,iShares MSCI Colombia ETF,Equity
-PLTM,GraniteShares Platinum Trust,Commodity
-ASEA,Global X FTSE Southeast Asia ETF,Equity
-FTXD,First Trust Nasdaq Retail ETF,Equity
-XDIV,US Equity Ex-Dividends Fund-Series 2027,Multi-Asset
-IDIV,U.S. Equity Cumulative Dividends FundSeries 2027,Multi-Asset
-CHIK,Global X MSCI China Information Technology ETF,Equity
-BSCE,Invesco BulletShares 2023 USD Emerging Markets Debt ETF,Bond
-LABD,Direxion Daily S&P Biotech Bear 3x Shares,Equity
-BCM,iPath Pure Beta Broad Commodity ETN,Commodity
-BBC,Virtus LifeSci Biotech Clinical Trials ETF,Equity
-RNLC,First Trust Large Cap US Equity Select ETF,Equity
-KHYB,KraneShares Asia Pacific High Income Bond ETF,Bond
-CNCR,Loncar Cancer Immunotherapy ETF,Equity
-GLL,ProShares UltraShort Gold,Commodity
-CWS,AdvisorShares Focused Equity ETF,Equity
-BRF,VanEck Brazil Small-Cap ETF,Equity
-RAAX,VanEck Inflation Allocation ETF,Multi-Asset
-EFZ,ProShares Short MSCI EAFE,Equity
-UAE,iShares MSCI UAE ETF,Equity
-FLCA,Franklin FTSE Canada ETF,Equity
-FLAX,Franklin FTSE Asia ex Japan ETF,Equity
-KOIN,Capital Link NextGen Protocol ETF,Equity
-SPXE,ProShares S&P 500 Ex-Energy ETF,Equity
-IBCE,iShares iBonds Mar 2023 Term Corporate ex-Financials ETF,Bond
-DXGE,WisdomTree Germany Hedged Equity Fund,Equity
-FIHD,UBS AG FI Enhanced Global High Yield ETN,Equity
-ASET,FlexShares Real Assets Allocation Index Fund,Multi-Asset
-EDZ,Direxion Daily MSCI Emerging Markets Bear 3X Shares,Equity
-RNDM,First Trust Developed International Equity Select ETF,Equity
-JHMF,John Hancock Multifactor Financials ETF,Equity
-TYO,Direxion Daily 7-10 Year Treasury Bear 3x Shares,Bond
-IAUF,iShares Gold Strategy ETF,Commodity
-EWK,iShares MSCI Belgium ETF,Equity
-RDOG,ALPS REIT Dividend Dogs ETF,Real Estate
-UXI,ProShares Ultra Industrials,Equity
-ESEB,Xtrackers J.P. Morgan ESG Emerging Markets Sovereign ETF,Bond
-ALFA,AlphaClone Alternative Alpha ETF,Equity
-GRES,IQ Global Resources ETF,Equity
-VEGA,AdvisorShares STAR Global Buy-Write ETF,Multi-Asset
-PSCU,Invesco S&P SmallCap Utilities & Communication Services ETF,Equity
-IEDI,iShares Evolved U.S. Discretionary Spending ETF,Equity
-ARGT,Global X MSCI Argentina ETF,Equity
-FLQD,Franklin LibertyQ Global Dividend ETF,Equity
-HTUS,Hull Tactical US ETF,Alternatives
-GLCN,VanEck China Growth Leaders ETF,Equity
-FITE,SPDR S&P Kensho Future Security ETF,Equity
-RESE,WisdomTree Emerging Markets ESG Fund,Equity
-SPMV,Invesco S&P 500 Minimum Variance ETF,Equity
-ERY,Direxion Daily Energy Bear 2X Shares,Equity
-DBV,Invesco DB G10 Currency Harvest Fund,Currency
-SGG,iPath Series B Bloomberg Sugar Subindex Total Return ETN,Commodity
-PILL,Direxion Daily Pharmaceutical & Medical Bull 3X Shares,Equity
-CSA,VictoryShares US Small Cap Volatility Wtd ETF,Equity
-ISEM,Invesco RAFI Strategic Emerging Markets ETF,Equity
-QARP,Xtrackers Russell 1000 US Quality at a Reasonable Price ETF,Equity
-SMCP,AlphaMark Actively Managed Small Cap ETF,Equity
-EFNL,iShares MSCI Finland ETF,Equity
-PBND,Invesco PureBeta US Aggregate Bond ETF,Bond
-FPA,First Trust Asia Pacific ex-Japan AlphaDEX Fund,Equity
-EDOG,ALPS Emerging Sector Dividend Dogs ETF,Equity
-RSXJ,VanEck Russia Small-Cap ETF,Equity
-PEX,ProShares Global Listed Private Equity ETF,Equity
-EMSG,Xtrackers MSCI Emerging Markets ESG Leaders Equity ETF,Equity
-TUSA,First Trust Total US Market AlphaDEX ETF,Equity
-PSMB,Invesco Balanced Multi-Asset Allocation ETF,Multi-Asset
-HDAW,Xtrackers MSCI All World ex US High Dividend Yield Equity ETF,Equity
-DVLU,First Trust Dorsey Wright Momentum & Value ETF,Equity
-FLAU,Franklin FTSE Australia ETF,Equity
-YCS,ProShares UltraShort Yen,Currency
-BICK,First Trust BICK Index Fund,Equity
-NIB,iPath Bloomberg Cocoa Subindex Total Return ETN,Commodity
-ESHY,Xtrackers J.P. Morgan ESG USD High Yield Corporate Bond ETF,Bond
-TYD,Direxion Daily 7-10 Year Treasury Bull 3x Shares,Bond
-JJN,iPath Series B Bloomberg Nickel Subindex Total Return ETN,Commodity
-PSCM,Invesco S&P SmallCap Materials ETF,Equity
-FLQE,Franklin LibertyQ Emerging Markets ETF,Equity
-HYUP,Xtrackers High Beta High Yield Bond ETF,Bond
-VAMO,Cambria Value & Momentum ETF,Alternatives
-ERM,EquityCompass Risk Manager ETF,Multi-Asset
-BSDE,Invesco BulletShares 2024 USD Emerging Markets Debt ETF,Bond
-CANE,Teucrium Sugar Fund,Commodity
-RFEU,First Trust RiverFront Dynamic Europe ETF,Equity
-JHMS,John Hancock Multifactor Consumer Staples ETF,Equity
-JHMC,John Hancock Multifactor Consumer Discretionary ETF,Equity
-USAI,Pacer American Energy Independence ETF,Equity
-EGPT,VanEck Egypt Index ETF,Equity
-EINC,VanEck Energy Income ETF,Equity
-FLRU,Franklin FTSE Russia ETF,Equity
-QDYN,FlexShares Quality Dividend Dynamic Index Fund,Equity
-NFLT,Virtus Newfleet Multi-Sector Bond ETF,Bond
-ESGS,Columbia Sustainable US Equity Income ETF,Equity
-ROKT,SPDR S&P Kensho Final Frontiers ETF,Equity
-FXP,ProShares UltraShort FTSE China 50,Equity
-GSP,iPath S&P GSCI Total Return Index ETN,Commodity
-PXJ,Invesco Dynamic Oil & Gas Services ETF,Equity
-MLPO,Credit Suisse S&P MLP Index ETN,Equity
-FLEH,Franklin FTSE Europe Hedged ETF,Equity
-RNMC,First Trust Mid Cap US Equity Select ETF,Equity
-PAK,Global X MSCI Pakistan ETF,Equity
-CN,Xtrackers MSCI All China Equity ETF,Equity
-PSMM,Invesco Moderately Conservative Multi-Asset Allocation ETF,Multi-Asset
-SQLV,Legg Mason Small-Cap Quality Value ETF,Equity
-PSMG,Invesco Growth Multi-Asset Allocation ETF,Multi-Asset
-JJG,iPath Series B Bloomberg Grains Subindex Total Return ETN,Commodity
-EMFM,Global X MSCI Next Emerging & Frontier ETF,Equity
-KALL,KraneShares MSCI All China Index ETF,Equity
-JMIN,JPMorgan U.S. Minimum Volatility ETF,Equity
-UPW,ProShares Ultra Utilities,Equity
-UST,ProShares Ultra 7-10 Year Treasury,Bond
-COW,iPath Series B Bloomberg Livestock Subindex Total Return ETN,Commodity
-JHME,John Hancock Multifactor Energy ETF,Equity
-EASG,Xtrackers MSCI EAFE ESG Leaders Equity ETF,Equity
-XSHD,Invesco S&P SmallCap High Dividend Low Volatility ETF,Equity
-QED,IQ Hedge Event-Driven Tracker ETF,Alternatives
-GSEU,Goldman Sachs ActiveBeta Europe Equity ETF,Equity
-RNDV,US Equity Dividend Select ETF,Equity
-MCEF,First Trust Municipal CEF Income Opportunity ETF,Bond
-DRV,Direxion Daily MSCI Real Estate Bear 3X Shares,Real Estate
-CRAK,VanEck Oil Refiners ETF,Equity
-JPN,Xtrackers Japan JPX-Nikkei 400 Equity ETF,Equity
-EMDV,ProShares MSCI Emerging Markets Dividend Growers ETF,Equity
-YLDE,ClearBridge Dividend Strategy ESG ETF,Equity
-QLS,IQ Hedge Long/Short Tracker ETF,Alternatives
-IPOS,Renaissance International IPO ETF,Equity
-CID,VictoryShares International High Div Volatility Wtd ETF,Equity
-BBP,Virtus LifeSci Biotech Products ETF,Equity
-RNSC,Furst Trust Small Cap US Equity Select ETF,Equity
-HEWC,iShares Currency Hedged MSCI Canada ETF,Equity
-IDHD,Invesco S&P Intl Developed High Dividend Low Volatility ETF,Equity
-FLGR,Franklin FTSE Germany ETF,Equity
-PFFL,ETRACS 2xMonthly Pay Leveraged Preferred Stock Index ETN,Multi-Asset
-FLHK,Franklin FTSE Hong Kong ETF,Equity
-JHMA,John Hancock Multifactor Materials ETF,Equity
-JHMU,John Hancock Multifactor Utilities ETF,Equity
-BAL,iPath Series B Bloomberg Cotton Subindex Total Return ETN,Commodity
-JJT,iPath Series B Bloomberg Tin Subindex Total Return ETN,Commodity
-DBS,Invesco DB Silver Fund,Commodity
-JHMI,John Hancock Multifactor Industrials ETF,Equity
-PYPE,ETRACS NYSE Pickens Core Midstream Index ETN,Equity
-FLQS,Franklin LibertyQ U.S. Small Cap Equity ETF,Equity
-QMN,IQ Hedge Market Neutral Tracker ETF,Alternatives
-FTXH,First Trust Nasdaq Pharmaceuticals ETF,Equity
-FEUL,Credit Suisse FI Enhanced Europe 50 ETN,Equity
-FLQH,Franklin LibertyQ International Equity Hedged ETF,Equity
-BOUT,Innovator IBD Breakout Opportunities ETF,Equity
-UGE,ProShares Ultra Consumer Goods,Equity
-XPP,ProShares Ultra FTSE China 50,Equity
-UNL,United States 12 Month Natural Gas Fund LP,Commodity
-EMIF,iShares Emerging Markets Infrastructure ETF,Equity
-DUG,ProShares UltraShort Oil & Gas,Equity
-BZQ,ProShares UltraShort MSCI Brazil Capped,Equity
-FLQG,Franklin LibertyQ Global Equity ETF,Equity
-DWCR,Arrow DWA Country Rotation ETF,Equity
-CEY,VictoryShares Emerging Market High Dividend Volatility Wtd ETF,Equity
-IEME,iShares Evolved U.S. Media and Entertainment ETF,Equity
-PSMC,Invesco Conservative Multi-Asset Allocation ETF,Multi-Asset
-FIEE,UBS AG FI Enhanced Europe 50 ETN,Equity
-DBEZ,Xtrackers MSCI Eurozone Hedged Equity ETF,Equity
-BOSS,Global X Founder-Run Companies ETF,Equity
-IECS,iShares Evolved U.S. Consumer Staples ETF,Equity
-SRS,ProShares UltraShort Real Estate,Real Estate
-GSJY,Goldman Sachs ActiveBeta Japan Equity ETF,Equity
-CHIS,Global X MSCI China Consumer Staples ETF,Equity
-MEXX,Direxion Daily MSCI Mexico Bull 3X Shares,Equity
-ASHX,Xtrackers MSCI China A Inclusion Equity ETF,Equity
-EFAS,Global X MSCI SuperDividend® EAFE ETF,Equity
-CHIH,Global X MSCI China Health Care ETF,Equity
-FDTS,First Trust Developed Markets ex-US Small Cap AlphaDEX Fund,Equity
-CEW,WisdomTree Emerging Currency Strategy Fund,Currency
-HEWU,iShares Currency Hedged MSCI United Kingdom ETF,Equity
-MAGA,Point Bridge GOP Stock Tracker ETF,Equity
-GNAF,MicroSectors FANG+ Index Inverse ETNS,Equity
-EFO,ProShares Ultra MSCI EAFE,Equity
-LBJ,Direxion Daily Latin America Bull 2X Shares,Equity
-DBGR,Xtrackers MSCI Germany Hedged Equity ETF,Equity
-EUDV,ProShares MSCI Europe Dividend Growers ETF,Equity
-INFR,Legg Mason Global Infrastructure ETF,Equity
-FLJH,Franklin FTSE Japan Hedged ETF,Equity
-SKF,ProShares UltraShort Financials,Equity
-JJM,iPath Series B Bloomberg Industrial Metals Subindex Total Return ETN,Commodity
-DWPP,First Trust Dorsey Wright People's Portfolio ETF,Multi-Asset
-QDIV,Global X S&P 500 Quality Dividend ETF,Equity
-CHIC,Global X MSCI China Communication Services ETF,Equity
-KFYP,KraneShares CICC China Leaders 100 Index ETF,Equity
-IMLP,iPath S&P MLP ETN,Equity
-DWMC,AdvisorShares Dorsey Wright Micro-Cap ETF,Equity
-AIIQ,AI Powered International Equity ETF,Equity
-JJA,iPath Series B Bloomberg Agriculture Subindex Total Return ETN,Commodity
-PBEE,Invesco PureBeta FTSE Emerging Markets ETF,Equity
-FLM,First Trust Global Engineering and Construction ETF,Equity
-FPXE,First Trust IPOX Europe Equity Opportunities ETF,Equity
-EQRR,ProShares Equities for Rising Rates ETF,Equity
-EMSH,ProShares Short Term USD Emerging Markets Bond ETF,Bond
-FLFR,Franklin FTSE France ETF,Equity
-JJU,iPath Series B Bloomberg Aluminum Subindex Total Return ETN,Commodity
-USLB,Invesco Russell 1000 Low Beta Equal Weight ETF,Equity
-FLMX,Franklin FTSE Mexico ETF,Equity
-CHNA,Loncar China BioPharma ETF,Equity
-PGAL,Global X MSCI Portugal ETF,Equity
-TAGS,Teucrium Agricultural Fund,Commodity
-UJB,ProShares Ultra High Yield,Bond
-ALTS,ProShares Morningstar Alternatives Solution ETF,Alternatives
-MYY,ProShares Short S&P Mid Cap400,Equity
-YXI,ProShares Short FTSE China 50,Equity
-FCA,First Trust China AlphaDEX Fund,Equity
-FTLB,First Trust Hedged BuyWrite Income ETF,Equity
-CHIM,Global X MSCI China Materials ETF,Equity
-SPXT,ProShares S&P 500 Ex-Technology ETF,Equity
-EZJ,ProShares Ultra MSCI Japan,Equity
-SPXN,ProShares S&P 500 Ex-Financials ETF,Equity
-OBOR,KraneShares MSCI One Belt One Road Index ETF,Equity
-IDMO,Invesco S&P International Developed Momentum ETF,Equity
-GAZ,iPath Series B Bloomberg Natural Gas Subindex Total Return ETN,Commodity
-AFTY,Pacer CSOP FTSE China A50 ETF,Equity
-IEFN,iShares Evolved U.S. Financials ETF,Equity
-BIS,ProShares UltraShort Nasdaq Biotechnology,Equity
-CHIE,Global X MSCI China Energy ETF,Equity
-CHII,Global X MSCI China Industrials ETF,Equity
-EPV,ProShares UltraShort FTSE Europe,Equity
-REK,ProShares Short Real Estate,Real Estate
-FLN,First Trust Latin America AlphaDEX Fund,Equity
-ESCR,Xtrackers Bloomberg US Investment Grade Corporate ESG ETF,Bond
-SDCI,USCF SummerHaven Dynamic Commodity Strategy No K-1 Fund,Commodity
-RESD,WisdomTree International ESG Fund,Equity
-FBZ,First Trust Brazil AlphaDEX Fund,Equity
-JJS,iPath Series B Bloomberg Softs Subindex Total Return ETN,Commodity
-IDLB,Invesco FTSE International Low Beta Equal Weight ETF,Equity
-EEMD,AAM S&P Emerging Markets High Dividend Value ETF,Equity
-SEF,ProShares Short Financials,Equity
-VWID,Virtus WMC International Dividend ETF,Equity
-DZZ,DB Gold Double Short Exchange Traded Notes,Commodity
-RNEM,First Trust Emerging Markets Equity Select ETF,Equity
-EEV,ProShares UltraShort MSCI Emerging Markets,Equity
-FTXG,First Trust Nasdaq Food & Beverage ETF,Equity
-SLT,Pacer Salt High truBeta US Market ETF,Equity
-AGT,iShares MSCI Argentina & Global Exposure ETF,Equity
-FUT,ProShares Managed Futures Strategy ETF,Alternatives
-BLHY,Virtus Newfleet High Yield Bond ETF,Bond
-JJP,iPath Series B Bloomberg Precious Metals Subindex Total Return ETN,Commodity
-EEMO,Invesco S&P Emerging Markets Momentum ETF,Equity
-GRU,ELEMENTS Linked to the ICE BofAML Commodity Index eXtra Grains Total Return,Commodity
-EMBH,iShares Interest Rate Hedged Emerging Markets Bond ETF,Bond
-ISZE,iShares MSCI Intl Size Factor ETF,Equity
-EMTY,ProShares Decline of the Retail Store ETF,Equity
-SDGA,Impact Shares Sustainable Development Goals Global ETF,Equity
-RODE,Hartford Multifactor Diversified International ETF,Equity
-FTAG,First Trust Indxx Global Agriculture ETF,Equity
-SMDD,ProShares UltraPro Short MidCap400,Equity
-RJZ,Elements Rogers International Commodity Index-Metals Total Return ETN,Commodity
-UBR,ProShares Ultra MSCI Brazil Capped,Equity
-CHIR,Global X MSCI China Real Estate ETF,Real Estate
-FAIL,Cambria Global Tail Risk ETF,Bond
-ESGN,Columbia Sustainable International Equity Income ETF,Equity
-UPV,ProShares Ultra FTSE Europe,Equity
-RALS,ProShares RAFI Long/Short ETF,Alternatives
-FLZA,Franklin FTSE South Africa ETF,Equity
-PGM,iPath Series B Bloomberg Platinum Subindex Total Return ETN,Commodity
-SPXV,ProShares S&P 500 Ex-Health Care ETF,Equity
-WIL,Barclays Women in Leadership ETN,Equity
-RJN,Elements Rogers International Commodity Index-Energy Total Return ETN,Commodity
-MCRO,IQ Hedge Macro Tracker ETF,Alternatives
-DWAT,Arrow DWA Tactical ETF,Multi-Asset
-SBB,ProShares Short SmallCap600,Equity
-FLIY,Franklin FTSE Italy ETF,Equity
-FLLA,Franklin FTSE Latin America ETF,Equity
-JJE,iPath Series B Bloomberg Energy Subindex Total Return ETN,Commodity
-DIVA,AGFiQ Hedged Dividend Income Fund,Alternatives
-HJPX,iShares Currency Hedged JPX-Nikkei 400 ETF,Equity
-DGZ,DB Gold Short Exchange Traded Notes,Commodity
-EWV,ProShares UltraShort MSCI Japan,Equity
-FLSA,Franklin FTSE Saudi Arabia ETF,Equity
-REW,ProShares UltraShort Technology,Equity
-ULE,ProShares Ultra Euro,Currency
-RXD,ProShares UltraShort Health Care,Equity
-SDD,ProShares UltraShort SmallCap600,Equity
-USEQ,Invesco Russell 1000 Enhanced Equal Weight ETF,Equity
-SMN,ProShares UltraShort Basic Materials,Equity
-KMED,KraneShares Emerging Markets Healthcare Index ETF,Equity
-RODI,Barclays Return on Disability ETN,Equity
-SSG,Proshares Ultrashort Semiconductors,Equity
-EURZ,Xtrackers Eurozone Equity ETF,Equity
-DDG,ProShares Short Oil & Gas,Equity
-FNGZ,MicroSectors FANG+ Index -2X Leveraged ETNS,Equity
-CROC,ProShares UltraShort Australian Dollar,Currency
-EMMF,WisdomTree Emerging Markets Multifactor Fund,Equity
-LTL,ProShares Ultra Telecommunications,Equity
-YCL,ProShares Ultra Yen,Currency
-DMDV,AAM S&P Developed Markets High Dividend Value ETF,Equity
-PEXL,Pacer US Export Leaders ETF,Equity
-EUFX,ProShares Short Euro,Currency
-SBM,ProShares Short Basic Materials,Equity
-CHIU,Global X MSCI China Utilities ETF,Equity
-MZZ,ProShares UltraShort MidCap400,Equity
-SIJ,ProShares UltraShort Industrials,Equity
-EEH,Elements Spectrum Large Cap US Sector Momentum Index ETN,Equity
-SDP,ProShares UltraShort Utilities,Equity
-FUE,ELEMENTS Linked to the ICE BofAML Commodity Index eXtra Biofuels Total Return,Commodity
-EFU,ProShares UltraShort MSCI EAFE,Equity
-SZK,ProShares UltraShort Consumer Goods,Equity
-LD,iPath Bloomberg Lead Subindex Total Return ETN,Commodity
-SCC,ProShares UltraShort Consumer Services,Equity
+Tickers
+SPY
+IVV
+VOO
+VTI
+QQQ
+VEA
+VUG
+VTV
+IEFA
+BND
+AGG
+IWF
+IJH
+IJR
+VIG
+IEMG
+VWO
+VXUS
+VGT
+XLK
+IWM
+VO
+GLD
+VB
+SCHD
+IWD
+VYM
+RSP
+ITOT
+BNDX
+EFA
+TLT
+VCIT
+IVW
+QUAL
+XLV
+SCHX
+XLE
+VEU
+XLF
+SCHF
+MUB
+IXUS
+VT
+VCSH
+IWB
+VV
+DIA
+VNQ
+JEPI
+IVE
+SPLG
+IWR
+LQD
+VTEB
+BSV
+BIL
+VBR
+MBB
+IEF
+IUSB
+SCHB
+DFAC
+IAU
+DGRO
+SCHG
+VGIT
+GOVT
+SPYG
+SHY
+USMV
+QQQM
+GBTC
+JPST
+COWZ
+TQQQ
+MDY
+SPYV
+IGSB
+SDY
+VGSH
+XLY
+SPDW
+VGK
+ACWI
+SGOV
+VONG
+MGK
+DVY
+TIP
+VXF
+SMH
+XLI
+VHT
+EEM
+SHV
+XLC
+VMBS
+VBK
+USFR
+BIV
+IBIT
+EFV
+SCHA
+IUSG
+IUSV
+HYG
+EWJ
+VOE
+IYW
+XLP
+IWP
+FNDX
+MOAT
+PFF
+IWS
+IWV
+EMB
+IEI
+VOT
+IDEV
+GDX
+SOXX
+IGIB
+FNDF
+EMXC
+ESGU
+DGRW
+GSLC
+IWN
+XLU
+EFG
+VGLT
+NOBL
+JEPQ
+USHY
+BBJP
+OEF
+IWO
+SCHM
+SCHP
+MINT
+VTIP
+SCHV
+SOXL
+AVUV
+USIG
+DFUV
+SCHO
+SPSM
+HDV
+MTUM
+RDVY
+SLV
+VOOG
+IWY
+FVD
+SPMD
+DFAT
+FBTC
+SCZ
+CALF
+FTEC
+IJK
+VFH
+VTWO
+SPTL
+FTCS
+INDA
+DFUS
+SUB
+JNK
+SPHQ
+SPIB
+VDE
+SPEM
+SCHE
+ESGV
+VONV
+VSS
+AMLP
+FNDA
+SPTM
+ESGD
+QYLD
+IQLT
+VCLT
+SCHR
+TLH
+DFAS
+FBND
+SPAB
+EZU
+BBEU
+ARKK
+STIP
+IBB
+SPLV
+SPSB
+IJJ
+SCHZ
+XBI
+IGV
+JAAA
+VYMI
+VLUE
+PAVE
+MGV
+FLOT
+VPL
+BKLN
+IJS
+DYNF
+DFIV
+EFAV
+CGDV
+BBCA
+PRF
+SPYD
+GLDM
+TFLO
+DFAX
+FTSM
+VDC
+CIBR
+VIGI
+AVUS
+GUNR
+SCHH
+SCHI
+FDN
+OMFL
+HEFA
+PULS
+QLD
+XLRE
+ONEQ
+ITA
+JIRE
+IJT
+SHYG
+DFIC
+IAGG
+XLB
+IHI
+BLV
+DFAI
+VCR
+AVDV
+SRLN
+ICSH
+GBIL
+FNDE
+DBEF
+DFAU
+MGC
+KWEB
+SPTS
+FPE
+SPTI
+VIS
+CGGR
+FIXD
+IOO
+DUHP
+EWY
+EWZ
+VPU
+AVEM
+SPMB
+TMF
+MCHI
+SPGP
+DFCF
+VONE
+DXJ
+PDBC
+ACWX
+VOOV
+PBUS
+IXN
+SSO
+SJNK
+PGX
+IEUR
+GDXJ
+BBAX
+XMHQ
+DSI
+FXI
+EEMV
+AVDE
+IGM
+ACWV
+FNGU
+IYR
+VWOB
+BOND
+JQUA
+VUSB
+IDV
+XOP
+SPHY
+SPXL
+BBIN
+XLG
+ISTB
+ESGE
+IXJ
+SCHC
+EWT
+FDL
+QTEC
+VOX
+DLN
+SDVY
+SLYV
+LMBS
+RSPT
+JMBS
+SHM
+JHMM
+FV
+VSGX
+BSCP
+BUFR
+DFAE
+CWB
+DON
+TFI
+GSIE
+REET
+VNQI
+EAGG
+IGF
+IYH
+SUSA
+GNR
+BSCO
+XT
+DFEM
+SCHK
+URTH
+FEZ
+AMJ
+IXC
+SLYG
+FNDC
+ITB
+EDV
+FHLC
+TECL
+UPRO
+CGGO
+HYLB
+GVI
+DIVO
+AVLV
+SKYY
+BBUS
+ANGL
+SQQQ
+TBIL
+ARKB
+PPA
+BITO
+EMLC
+MDYG
+VAW
+NEAR
+NUGO
+RWL
+KRE
+HYD
+BSCQ
+SPHD
+SGOL
+URA
+DFSV
+IBTE
+JCPB
+BOTZ
+XYLD
+EPI
+EWC
+TOTL
+DEM
+CMF
+BILS
+PZA
+DGS
+PTLC
+IBDP
+JMST
+VIOO
+IBDQ
+IYF
+EWU
+HYMB
+KNG
+MDYV
+DFSD
+IBDR
+FDVV
+CGUS
+FELC
+PFFD
+FELG
+EMLP
+ICLN
+FAS
+TDIV
+IHDG
+AAXJ
+PRFZ
+IFRA
+VTHR
+USRT
+CGXU
+BKLC
+NFRA
+FLRN
+USMC
+FTGC
+VNLA
+IBDS
+NRGU
+IBTF
+OIH
+JGLO
+TNA
+IGLB
+UCON
+QQEW
+FTSL
+RPV
+IWX
+PHO
+XAR
+BITB
+EWW
+SLQD
+ILCG
+IPAC
+ICF
+XMMO
+XHB
+IMCG
+CGCP
+USCA
+NVDL
+AOR
+DIHP
+IVOO
+IMTM
+USCL
+UITB
+KOMP
+FELV
+EBND
+DES
+FMB
+XSOE
+FXR
+BOXX
+EPP
+GCOW
+GSY
+FLJP
+IYY
+HEDJ
+AOA
+EWA
+ITM
+GSUS
+COPX
+ICVT
+DSTL
+TDTT
+EAGL
+FENY
+DISV
+XME
+FLCB
+LRGF
+HACK
+QDF
+PABU
+IVLU
+ARKW
+IBDT
+BSCR
+SPYX
+PXF
+BKAG
+DFLV
+ILF
+FALN
+BBMC
+IEV
+DBC
+RPG
+ASHR
+BBAG
+SECT
+FIW
+FNCL
+LIT
+AIQ
+GUSA
+ESML
+PFXF
+NULV
+VRP
+TILT
+DFGR
+FXD
+CWI
+MLPA
+ARKG
+REGL
+FMDE
+IYJ
+URNM
+TBLL
+SYLD
+KBE
+RWJ
+PCY
+BSCS
+HTRB
+KBWB
+HDEF
+FENI
+XSD
+HYLS
+AIA
+BITX
+FDIS
+FBCG
+FTXL
+PDP
+HYGV
+LCTU
+RYLD
+RWR
+FLTR
+MUNI
+AOM
+VIOV
+FXL
+USO
+ROBO
+NULG
+SPBO
+JETS
+JGRO
+ICOW
+IYG
+IYE
+IYK
+TIPX
+HYS
+BAB
+EUFN
+FXH
+SPIP
+QUS
+FPEI
+TCAF
+FLQL
+IWL
+TAN
+QQQE
+JMUB
+ZROZ
+GTO
+IBDU
+DFIS
+FTA
+DFNM
+PEY
+FEX
+BSVO
+DTD
+LABU
+SPMO
+PJAN
+RODM
+PXH
+FNX
+RWO
+PTNQ
+BULZ
+NUSC
+FBT
+EFIV
+SDOG
+ARKF
+SUSL
+SNPE
+JPIE
+DWAS
+RAVI
+PKW
+FUTY
+FTC
+XHLF
+PICK
+MSOS
+FSTA
+SIVR
+FTLS
+CORP
+DLS
+EWL
+USPX
+DHS
+FSIG
+USSG
+IAUM
+SUSC
+EQTY
+MLPX
+JAVA
+EWP
+SMMD
+JMEE
+QLTA
+FIDU
+SPYI
+INTF
+NTSX
+BIZD
+RSPH
+SMLF
+FDLO
+SH
+FCOM
+GSG
+JEMA
+IYC
+IVOG
+EWG
+AVSC
+GRID
+BAR
+USXF
+IBTG
+CGW
+VTC
+AGGY
+IQDG
+IYT
+QEFA
+FREL
+DFAR
+QVML
+XCEM
+QGRO
+PGF
+BCI
+VTWG
+GLTR
+YINN
+CRBN
+ILCV
+YEAR
+DBMF
+GEM
+PID
+PFFA
+DFSU
+PPLT
+TLTW
+IWC
+RDVI
+CDC
+LDUR
+BBHY
+ILCB
+IVOV
+BWX
+FYX
+FLIN
+ARKQ
+JMOM
+IDU
+PWV
+JHML
+USD
+KXI
+HNDL
+GLOV
+AIRR
+IMCB
+FXO
+SIL
+CCMG
+INDY
+SUSB
+BSCT
+IHF
+PWB
+PREF
+JVAL
+EPS
+PDEC
+OUNZ
+LVHI
+VIOG
+EWX
+IHAK
+PFEB
+FQAL
+IBDV
+TSLL
+CATH
+PAUG
+PSK
+VRIG
+PWZ
+KSA
+PJUL
+MOO
+XMLV
+EZM
+SVOL
+BSJP
+XNTK
+ONEY
+VTWV
+BBRE
+BUFD
+UNG
+PSI
+IVOL
+TDTF
+FRDM
+QCLN
+PNOV
+XSVM
+SPLB
+FPX
+SMMV
+DBA
+SCHY
+FVAL
+IBDW
+BNDW
+BUG
+SPGM
+FFEB
+IBTH
+PNQI
+RDIV
+KIE
+DIVI
+SMDV
+TMFC
+IEO
+EUSA
+GSID
+PCEF
+SDIV
+OUSA
+RWK
+SMIN
+FJUL
+FDEC
+BLOK
+FNDB
+LTPZ
+GIGB
+FJAN
+ACIO
+POCT
+TSLY
+JHMD
+LGLV
+PSEP
+FLGV
+VFVA
+QQQJ
+SFY
+PMAR
+DPST
+RSPN
+HAUZ
+SILJ
+AGZ
+UYG
+AVIG
+BSJO
+ROM
+JHEM
+EWQ
+PHB
+DVYE
+GOVI
+IRBO
+NYF
+JPMB
+SSUS
+JCPI
+ONEV
+PFM
+IGRO
+IHE
+LVHD
+BSCU
+MMIT
+GSEW
+WCLD
+FLGB
+SOXS
+IAK
+IAT
+EES
+RPAR
+DMXF
+GWX
+COMT
+DNL
+INFL
+KRMA
+SCHQ
+MEAR
+FMAR
+AAAU
+IYM
+SPHB
+EQWL
+IMCV
+BKIE
+ILTB
+FXN
+UDOW
+REZ
+REM
+DIV
+AOK
+EUSB
+APUE
+CLOU
+FLQM
+FAUG
+FJUN
+EQAL
+DBEU
+VOTE
+DRIV
+SPXU
+FMHI
+QAI
+IGEB
+CQQQ
+SDS
+FNOV
+RSPG
+USTB
+ULST
+NUGT
+PSQ
+HODL
+UCO
+BALT
+GSST
+EMGF
+FIVG
+VUSE
+BBEM
+DWM
+KOKU
+EXI
+ISCF
+OUSM
+ECH
+DFEV
+SMMU
+EMCR
+VNM
+IQDF
+HFXI
+IGE
+ISCG
+ROBT
+TCHP
+JPEF
+FGD
+IBDX
+PLDR
+FTHI
+FMAY
+PPH
+TZA
+RLY
+VCEB
+NANR
+IBMN
+SPXS
+CFA
+FDRR
+TLTD
+PTF
+FMAT
+IGOV
+FOCT
+BOIL
+PDN
+BRRR
+FESM
+PSC
+STPZ
+DOL
+VFMO
+PAPR
+GUSH
+SPUS
+HYDB
+DFIP
+GSSC
+XRT
+EIDO
+BUFC
+BUFQ
+FSEP
+EWH
+XLSR
+FLIA
+STRV
+GGUS
+TPYP
+IBMM
+BSJQ
+DUSA
+IBHD
+JPSE
+BBSC
+BKMC
+IAI
+DJP
+GXC
+CONL
+SRVR
+IBHE
+IMFL
+SEIV
+NBOS
+CFO
+DWX
+SEIM
+PJUN
+TAFI
+RSPS
+IBTI
+EELV
+FAPR
+MMIN
+BBH
+YYY
+FM
+IBMO
+DRSK
+TMFG
+MLN
+LEMB
+RECS
+GXUS
+JPUS
+SMIG
+HELO
+KJAN
+RSPD
+FXG
+QLTY
+IUS
+FXZ
+AVRE
+FCG
+PMAY
+JHSC
+RING
+TAXF
+MDIV
+CMBS
+CEMB
+GCOR
+EWI
+QQH
+EWS
+BSCW
+METV
+CSM
+BUYW
+IDLV
+ISCV
+DCOR
+ROUS
+JPIB
+HLAL
+BSCV
+VBND
+FEM
+FDT
+IBMP
+DIAL
+PVAL
+FLDR
+FSMB
+HEZU
+PTMC
+NUDM
+TECB
+XONE
+WIP
+EEMA
+DFSI
+FLCA
+JANW
+JSCP
+AVES
+BUFF
+IQSU
+DDM
+AGQ
+TDVG
+NVDX
+TTAC
+GSPY
+HMOP
+IXG
+GII
+BTCO
+SCHJ
+NUMG
+VTES
+LGOV
+HYEM
+URTY
+GFEB
+QDEC
+SIXH
+NXTG
+CAPE
+DBJP
+AMZA
+NUSI
+VIDI
+XSW
+GRPM
+GVUS
+XDEC
+ERX
+JPME
+JPIN
+WINN
+CONY
+XSMO
+OMFS
+AIVL
+BIBL
+EDIV
+KBWD
+JBBB
+SOXQ
+QMAR
+EMHY
+IBHF
+HYBB
+QDEF
+EEMS
+FLCO
+LCTD
+EMQQ
+PBW
+LGH
+JSMD
+IPAY
+GINN
+CXSE
+FINX
+CDL
+EMHC
+SIZE
+NVDY
+EWJV
+DRLL
+AVIV
+AVSF
+VGSR
+NUMV
+BGRN
+USOI
+NUBD
+DGRS
+VLU
+XSLV
+DJUL
+FXY
+JUST
+QVAL
+DTH
+UTWO
+SMRI
+ATMP
+CARK
+URNJ
+DDEC
+DIVB
+AVGE
+SKOR
+GMF
+EQL
+SMOT
+REMX
+VFQY
+CWEB
+EZBC
+UUP
+GNMA
+EYLD
+HEQT
+SDOW
+VXX
+NAIL
+MODL
+SHYD
+FLBL
+FEMS
+DFAW
+JPRE
+RFG
+XES
+FNY
+QGRW
+NTSI
+KCE
+KBWP
+CSB
+DAUG
+QJUN
+PSCT
+RFV
+HEWJ
+TBT
+HAPI
+UBND
+LONZ
+LQDH
+JTEK
+QDPL
+SVXY
+IBMQ
+JUCY
+GQRE
+JPEM
+SDG
+CGBL
+QVMM
+BNKU
+PALC
+RWX
+KRBN
+JNUG
+FLKR
+FDHY
+PKB
+DJD
+PEJ
+TSLT
+EPOL
+FNGO
+PSFF
+DWLD
+PIO
+RSPM
+USMF
+MJ
+IEZ
+QQQY
+CVLC
+FWD
+MNA
+PJP
+HCMT
+SNSR
+FFLG
+FYLD
+BKHY
+CLOI
+DFEB
+IGPT
+XHE
+GJAN
+TBFC
+IGHG
+APIE
+EIPX
+DMAR
+ALTL
+RSPF
+TDV
+SPEU
+EWD
+TBFG
+NJAN
+EDEN
+WTV
+IXP
+DFSB
+GDIV
+QSPT
+IDHQ
+DJAN
+IDOG
+OSCV
+UVXY
+RXI
+FYC
+DNOV
+FLHY
+GJUL
+TLTE
+MORT
+NBCM
+EFAX
+EZA
+KMLM
+VFMF
+TDSC
+DDLS
+BJAN
+DDWM
+PRN
+HCRB
+FNGS
+EWN
+PFLD
+IDRV
+QID
+DBND
+MXI
+FTQI
+VFLO
+KCCA
+AGOX
+WWJD
+QTUM
+VSDA
+IBD
+ESPO
+PFUT
+AVSU
+XVV
+EDOW
+HTAB
+KORP
+EWM
+THD
+COM
+MFDX
+GMAR
+DFJ
+UMI
+PFFV
+RZV
+DBO
+ARKX
+SMB
+GDXU
+RSPU
+FFLC
+UIVM
+PBE
+UAUG
+TPHD
+WTAI
+INCO
+CGDG
+AUSF
+MLPB
+NUEM
+PSCE
+PIN
+GAL
+GBF
+SHE
+XMPT
+HEGD
+VALQ
+TJUL
+FNK
+IETC
+MAGS
+BTAL
+SIXA
+PSP
+QINT
+TPLC
+IYZ
+DFSE
+EWZS
+BRNY
+CHIQ
+CMDY
+HYGH
+ISCB
+WFHY
+ACES
+UWM
+SEIQ
+LRGE
+FLV
+FLRT
+CMDT
+USVM
+IBTJ
+FXU
+FLTW
+SGDM
+PSCH
+BFEB
+FISR
+XMVM
+TMV
+PALL
+MOTI
+FTXN
+XPH
+INDS
+AVLC
+TACK
+ESGB
+BSMP
+HYDW
+FUMB
+SRET
+FCOR
+IBTK
+JSML
+RTH
+HAWX
+FEBW
+FCAL
+CURE
+FDG
+FEP
+XJUN
+FSMD
+QMOM
+CNRG
+TOK
+IAPR
+IJAN
+BSMO
+FBGX
+FJP
+IQIN
+BCD
+CZA
+CCOR
+POWA
+UGL
+WTMF
+LSAF
+WOOD
+GJUN
+TUR
+ESG
+UJAN
+XEMD
+CLSM
+PTRB
+GOVZ
+TMFM
+BUFG
+WDIV
+FXE
+SCO
+DEHP
+FUNL
+DGT
+ESGA
+IBTM
+GDEC
+PSCI
+QLC
+KBWY
+FLMI
+SPUU
+IFV
+GREK
+IQSM
+FYT
+NJUL
+MARW
+FTGS
+MUSI
+FAD
+BJUL
+IGTR
+XTN
+IPO
+PRAE
+DFE
+ERTH
+RWM
+FDMO
+IQSI
+KBA
+ETHO
+FAN
+BSJR
+DFNL
+WEBL
+AGGH
+NFTY
+USNZ
+QVMS
+BMAR
+FTRI
+TUG
+ECML
+SQEW
+DJUN
+FLSP
+ARGT
+CNYA
+SPSK
+ISVL
+SMLV
+DSEP
+IBUY
+CSML
+PTBD
+ESGG
+DOCT
+BAUG
+CAOS
+SPDN
+CEFS
+GTEK
+XJH
+ISMD
+THNQ
+BOCT
+BLES
+XMAR
+GVIP
+FDM
+SWAN
+INCM
+BSMQ
+BNDC
+QUVU
+JSTC
+UEVM
+TECS
+DAPR
+LQDW
+BSJS
+GNOV
+IDMO
+EIS
+IMTB
+EMNT
+BWZ
+STOT
+DOG
+SFLR
+YLD
+IJUL
+TSPA
+IBTL
+SLVP
+BYLD
+HYZD
+DFVX
+DINT
+USCI
+YJUN
+FVC
+NOCT
+AGZD
+DFEN
+OPER
+DVAL
+USDU
+TSME
+BKCH
+SPFF
+GVLU
+SOCL
+ADME
+IBND
+KLIP
+FLBR
+CTA
+BSEP
+PPIE
+FDD
+FEPI
+QLV
+FEMB
+FPXI
+BBLU
+FAB
+LSAT
+EMC
+DEUS
+VIXY
+TEQI
+IVAL
+CPER
+PTIN
+ULVM
+EJAN
+WEAT
+SIXL
+ONEO
+BAPR
+XCOR
+JULW
+IDUB
+KJUL
+GDMA
+IWMY
+BDEC
+DBAW
+QQXT
+DMAY
+PGJ
+OACP
+PTH
+FCPI
+FTSD
+HYBL
+FXF
+ROOF
+PXE
+XSHQ
+NLR
+MFUS
+MVV
+FDTX
+CWS
+OGIG
+LSGR
+DBP
+GMOM
+NVDU
+FLTB
+FMF
+BFOR
+DUBS
+AUGW
+FAAR
+SMOG
+MGMT
+IDNA
+HKND
+OVL
+JEPY
+SRHQ
+AVSD
+YANG
+AVMU
+MINO
+BITQ
+XSVN
+OILK
+HEEM
+LABD
+TOLZ
+RUNN
+ENFR
+EMBD
+KLDW
+UMAR
+SCJ
+PINK
+VSMV
+SCYB
+DIM
+MRSK
+TMAT
+PGHY
+OCTW
+CAML
+DGRE
+OCIO
+HYHG
+PFIX
+NETZ
+PRNT
+FAZ
+GLIN
+VEGI
+XSEP
+CHAT
+MSTB
+GHYG
+BNO
+BGIG
+HERO
+PBJ
+PIE
+TBUX
+GHYB
+RFDI
+MJUS
+HGER
+SARK
+SHDG
+HAPS
+PIZ
+XTEN
+EPHE
+PPTY
+HYXF
+CHGX
+FNGD
+SELV
+UCRD
+FBCV
+JANT
+PICB
+SIHY
+RVNU
+CACG
+HSCZ
+SRTY
+GLOF
+PHYL
+GSEP
+JXI
+USSE
+GCC
+HYFI
+SEIX
+MILN
+PBD
+BSMR
+TPSC
+TDSB
+STNC
+EIRL
+MPRO
+FLLV
+BKCI
+FRI
+KAPR
+UPGD
+GTIP
+IYLD
+UGA
+INTL
+DALI
+SURI
+OAIM
+HFGO
+COWG
+DBB
+PHDG
+XXXX
+IFGL
+FIVA
+DIG
+IEUS
+GVAL
+ONOF
+SPVU
+OWNS
+CVY
+RSPR
+IOCT
+EPRF
+QYLG
+SBIO
+FTXO
+HDUS
+CLOA
+QWLD
+WGMI
+TRTY
+BKSE
+TOTR
+FLMB
+AMJB
+SLX
+FLCH
+NZAC
+HAP
+DEW
+DAPP
+DCRE
+CSMD
+AIEQ
+GSEE
+IZRL
+FBOT
+AFIF
+VSLU
+BMAY
+MDCP
+EPU
+AMDY
+BNOV
+ZECP
+VFMV
+LDSF
+HSRT
+CGIE
+WCBR
+MSOX
+SGDJ
+BUSA
+BUFB
+NAPR
+LEGR
+SIXJ
+GAUG
+KARS
+DWUS
+CGV
+SJB
+NBSM
+FLRG
+SIO
+TPIF
+BUFT
+JOET
+IGBH
+IDVO
+GNOM
+FEBT
+TSLQ
+UTEN
+DBEM
+TIPZ
+RZG
+OALC
+FILL
+XITK
+RIGS
+SHYL
+SLVO
+SPRE
+BMVP
+FDIF
+FICS
+GOCT
+BITI
+FDIG
+BSMS
+XBJA
+DTEC
+XTWO
+KOLD
+APRW
+MART
+MMTM
+ONLN
+FIDI
+HERD
+BKEM
+YDEC
+MBOX
+TMSL
+SPD
+IBHG
+PIFI
+GMAY
+BRZU
+MFEM
+FFTY
+AESR
+CIL
+UOCT
+PUTW
+PZT
+UFEB
+VEGN
+ACTV
+BIB
+EJUL
+DRV
+SSPY
+RXL
+BETZ
+ZALT
+BJUN
+SVIX
+GAPR
+FMCX
+RISN
+FDV
+PBP
+FDIV
+FPAG
+GRNB
+UDEC
+PXJ
+CVIE
+TAGG
+TBJL
+BSMT
+TBF
+DBE
+JIG
+JPXN
+XJAN
+BATT
+IGLD
+HYMU
+ENZL
+MIDU
+QPFF
+AWAY
+GOAU
+FDLS
+NFLT
+STXE
+ECOW
+XHS
+KOCT
+GBUY
+TAIL
+HUSV
+DGP
+IMOM
+OSEA
+PSL
+UPAR
+QVOY
+ITEQ
+COMB
+PFFR
+TMFS
+LCR
+FSZ
+EFAD
+ENTR
+VIXM
+INDL
+UMMA
+PSTP
+ELD
+ABEQ
+DECW
+DJIA
+AMNA
+MBCC
+MSFU
+UBT
+PCGG
+BSMU
+ACVF
+FMAG
+AMUB
+SGLC
+PSCC
+VAMO
+ROE
+TOUS
+FCVT
+SFYX
+EMTL
+ASIA
+LGRO
+LRGC
+YMAX
+PJFG
+LEXI
+MOHR
+RAAX
+AJAN
+EEMX
+QABA
+MBSD
+ISHG
+DXD
+RSSB
+EDC
+UJUL
+ACSI
+QAT
+DUST
+PSMD
+BLCN
+GQI
+FCLD
+EBIZ
+XFIV
+FID
+XBJL
+KEMX
+IQDY
+NUHY
+IG
+CVRD
+DWAW
+RFDA
+SDVD
+FCTR
+TGRT
+SVAL
+UVIX
+BAMG
+AMZU
+NRGD
+EVX
+SIXS
+BAMV
+TFPN
+KWT
+UAPR
+EMXF
+BKUI
+TGRW
+IFED
+INKM
+SPRX
+XJR
+XBOC
+EAPR
+AIVI
+TPLE
+CLSE
+CRDT
+AGQI
+EETH
+DYLD
+PXI
+GPIX
+EUDG
+TPHE
+OARK
+RSPC
+PBDC
+BUFZ
+FBL
+LCG
+HDGE
+BINV
+SPC
+FLEE
+PAWZ
+XYLG
+BAMD
+XBAP
+MAMB
+AVSE
+BUZZ
+NVDS
+TVAL
+QFLR
+HIPS
+PSR
+BKF
+YMAR
+ARB
+PYZ
+GLDI
+AMTR
+IPKW
+AUGT
+MMLG
+DRN
+OILU
+FLLA
+IBHH
+YALL
+FXA
+ISPY
+FFOG
+CORN
+DXJS
+JDST
+DIVL
+NANC
+SAMT
+TTAI
+FXB
+MINV
+ISRA
+LCLG
+FLN
+HIBL
+QARP
+FDEV
+CHAU
+MKOR
+SPYC
+AVGV
+ICLO
+WBIY
+WUCT
+HYGW
+TUSI
+DIVZ
+FIBR
+CDX
+HTEC
+PEXL
+RETL
+TARK
+PBTP
+SPDV
+USL
+URE
+USEP
+UDIV
+DEED
+GGLL
+PPI
+UDN
+VPN
+AMZY
+FKU
+GTR
+TSLS
+SHOC
+FGDL
+CUT
+RUFF
+SMCO
+STXG
+QQQI
+DSMC
+NETL
+SIXF
+PSMJ
+DYTA
+BDRY
+PEZ
+PY
+TWM
+CRPT
+RIET
+GLRY
+PGRO
+OVT
+IEDI
+DURA
+DEEF
+HRTS
+RPHS
+EWO
+AGNG
+ECON
+VEGA
+PFRL
+TBG
+MEM
+HSUN
+SPXN
+DRUP
+XDSQ
+CSD
+MSSS
+FXC
+CAMX
+LEAD
+ESGS
+MLPR
+GEMD
+XTL
+LQIG
+BSMV
+XRLX
+UNOV
+ADPV
+FTXG
+NXTE
+PFI
+XHYI
+FFSM
+DAX
+AMID
+KGRN
+FITE
+TDI
+XCCC
+XBB
+FBY
+XISE
+BTF
+FIGB
+UTES
+NTSE
+MFUL
+LOUP
+KBWR
+EMCB
+CVMC
+APLY
+UJUN
+PABD
+FMED
+WOMN
+PRAY
+MVPA
+EBLU
+SFEB
+BSTP
+XOCT
+YOLO
+USAI
+SBND
+DRIP
+AAPU
+MISL
+ICAP
+RISR
+PFIG
+SPXT
+SFIG
+CTEC
+PAMC
+SRHR
+XTRE
+VETZ
+EDOC
+TRND
+ECNS
+GAA
+RINC
+RAFE
+GINX
+XJUL
+BSJT
+CVSB
+FLJH
+DECT
+WBIG
+THLV
+SURE
+STLG
+FEDM
+EASG
+SPXE
+ISEP
+OVB
+NORW
+FDEM
+BBCB
+DVOL
+BUL
+PSET
+MSMR
+HYXU
+CSF
+RSEE
+SNAV
+MBND
+IIGD
+QLVD
+UTSL
+OAEM
+MTGP
+CRAK
+NURE
+KURE
+MSTY
+MARB
+FDFF
+ARCM
+RAYE
+BSJU
+RAYD
+FLMX
+FEUS
+UYM
+DECZ
+MSFO
+SFLO
+FLSW
+DALT
+CCRV
+SZNE
+DFRA
+DFNV
+TYA
+HTUS
+FDCF
+TUGN
+FEDL
+YLDE
+GPIQ
+QEMM
+ASEA
+FNGG
+SDEM
+BTEC
+BJK
+LQDI
+WBIL
+ZIG
+PAB
+EUSC
+NACP
+NFLY
+DDIV
+UMAY
+AMND
+GSFP
+LBAY
+PSFD
+STXK
+ZHDG
+BOAT
+JHCB
+PSCD
+IDGT
+TYD
+PSMO
+FFIU
+HYRM
+GURU
+UBOT
+BSMC
+FTHF
+TTT
+MVFG
+XC
+LRNZ
+IHYF
+DWMF
+QULL
+TMFE
+XRLV
+GXG
+DJCB
+HOMZ
+RULE
+YCL
+QCON
+KORU
+DVYA
+REVS
+PTEU
+SRS
+FEIG
+AZTD
+IVVB
+GAMR
+AFK
+EINC
+SAUG
+JHMB
+KNCT
+EWUS
+MBNE
+MARZ
+PSMR
+DSCF
+FTXR
+PP
+SPVM
+QQMG
+UAE
+RNRG
+OCTT
+DUSL
+HYSA
+WBIF
+SSFI
+APRJ
+XHYC
+DBEZ
+SHLD
+XHYE
+SIXO
+MAYW
+ISWN
+XHYF
+DYNI
+RNSC
+STCE
+HYDR
+HAIL
+CARZ
+ROMO
+OEUR
+WBND
+EUO
+CNBS
+SMHB
+SEPW
+STXV
+BCHP
+PUI
+SOVF
+JHPI
+JHPI
+FDRV
+CIZ
+EOCT
+STXD
+SHAG
+OBND
+AAPD
+SAGP
+SCDL
+EFIX
+PVI
+SXQG
+WPS
+VXZ
+TRFM
+SEMI
+AOTG
+YSEP
+VPC
+RFEM
+IWDL
+CRTC
+PAPI
+RDFI
+CRUZ
+FLQS
+HIBS
+RAYC
+IWFL
+BAMA
+AHLT
+PLTM
+CDEI
+JULT
+GDXD
+XHYT
+DEEP
+IVVM
+SHUS
+HEWG
+MVFD
+DBEH
+DSTX
+ALTY
+LCF
+UFO
+USML
+ITAN
+IBHI
+GHTA
+GOEX
+FLAX
+IAUF
+VNSE
+XFEB
+FPFD
+TWIO
+UMDD
+LQDB
+INNO
+MCSE
+MDPL
+AHYB
+FXED
+INQQ
+SOYB
+HDMV
+BAMO
+GFGF
+SIFI
+SSXU
+BDCX
+OVLH
+LOWV
+HISF
+DEMZ
+LDEM
+SAA
+BAMY
+DVND
+IVES
+NVBW
+SMCP
+XRMI
+FRTY
+LKOR
+WLDR
+YCS
+SQY
+PHEQ
+DIVS
+EALT
+DFHY
+GGME
+THY
+MGNR
+KVLE
+YMAG
+SCRD
+IHY
+FCEF
+TRFK
+WUGI
+ROSC
+CVAR
+IMSI
+XDQQ
+XSHD
+SDSI
+ILDR
+NULC
+KNGZ
+BNDD
+IBBQ
+NVD
+DOGG
+SPTE
+NUAG
+GOOY
+CVSE
+PBL
+SMIZ
+AEMB
+FMET
+BCUS
+SQLV
+WANT
+TPOR
+IWLG
+NBCT
+CNCR
+ENOR
+WFH
+SNOV
+HDG
+AIYY
+FORH
+EAOA
+ESUS
+BRF
+APRT
+VMOT
+BITS
+ADFI
+IDX
+UCIB
+DIVY
+QTJA
+CSA
+MYLD
+FLAU
+XTWY
+KONG
+FIG
+ECLN
+FCSH
+FRNW
+TMFX
+PSFJ
+BDCZ
+JDVI
+LFEQ
+AADR
+CCSO
+EMM
+EURL
+EPV
+FCUS
+BTR
+CBON
+FDAT
+GDOC
+FHYS
+FDNI
+XNAV
+ZSL
+MTUL
+BALI
+EDOG
+GSC
+EMSG
+GRN
+XHYH
+JULJ
+MOON
+DVLU
+QDIV
+XNOV
+GDVD
+RFCI
+TSLZ
+EFZ
+BCIM
+MMCA
+BLLD
+QPX
+GXTG
+WLTG
+FMQQ
+BBLB
+APRH
+XIDE
+REIT
+UXI
+PIT
+KSTR
+SIXP
+PQDI
+TEMP
+SMAY
+CLIA
+RFFC
+IQDE
+JULH
+JUNW
+PPEM
+GSJY
+KOCG
+FLJJ
+EMMF
+JANJ
+IBLC
+MRNY
+GMET
+IMAR
+BLDG
+EFNL
+RHCB
+NUSA
+JHMU
+MSVX
+OCTJ
+APRQ
+SAEF
+BGLD
+WZRD
+FTDS
+UTRN
+TXS
+PWS
+GYLD
+EMIF
+MAGA
+IPDP
+PSFM
+ARKA
+HIDE
+OVM
+TDVI
+GK
+HJEN
+TIME
+HDRO
+EWK
+DUG
+FTXH
+MCH
+SHRY
+FLEU
+QQQN
+XTJA
+PSCX
+IQM
+SPXV
+ASHS
+WISE
+RINF
+ERY
+RTAI
+RENW
+AAPB
+IWML
+EDZ
+PCIG
+AVMV
+FLGR
+BBP
+CPAI
+CEFD
+WTRE
+MUSQ
+WEBS
+PSCF
+ROAM
+NERD
+REK
+CID
+GGM
+MINN
+EMSF
+OCTH
+XUSP
+SPBC
+SYUS
+BDGS
+AMAX
+LOCT
+FLSA
+EAOR
+RSHO
+INMU
+CANC
+FOVL
+PST
+XTOC
+SIMS
+EQRR
+FSYD
+HSMV
+XPND
+GDE
+SMI
+GREI
+KEMQ
+MOTG
+CEFA
+DTRE
+RNMC
+MVRL
+OVF
+UCC
+RNEM
+SSLY
+RODE
+LSST
+SEPZ
+MEDX
+NOVZ
+FMNY
+AAA
+EUM
+SKF
+AMOM
+FXP
+IVVW
+FDGR
+DGIN
+XOMO
+FEUZ
+BKGI
+XAUG
+AVDS
+UNL
+VRAI
+EMFM
+ROKT
+SPAQ
+ATFV
+CANE
+AVNM
+MEXX
+IWMW
+PSCM
+AVMC
+NBDS
+SFYF
+HYIN
+LJAN
+AUGZ
+JPSV
+TSLR
+SUPP
+SPAX
+PSFO
+SDCI
+BTEK
+TBX
+ESGY
+EET
+SHRT
+MOOD
+PSCU
+CNXT
+KHYB
+IDEC
+PILL
+BOUT
+MSTQ
+GLL
+OILD
+ULTR
+UST
+BKIV
+TFJL
+BBSA
+TAGS
+INAV
+CPII
+JANQ
+PSCJ
+CVRT
+OILT
+HOCT
+DARP
+XB
+TYO
+BABX
+FPA
+PJFV
+JIVE
+PYPY
+IFEB
+KRUZ
+SEPT
+NVDQ
+VNAM
+GABF
+WFIG
+KOIN
+QTJL
+SEF
+FSST
+DFVE
+FPRO
+QRMI
+EMDV
+BKWO
+HAPY
+SPCX
+HIDV
+DIEM
+RHRX
+CBSE
+MIG
+QTOC
+MMSC
+USBF
+MAYT
+PSCW
+HYUP
+RORO
+OOTO
+LVOL
+HDLB
+QQQA
+ELQD
+LOPP
+MEMX
+PJBF
+FGM
+DWSH
+QLVE
+TXSS
+OCTQ
+JPMO
+ESMV
+SETM
+RDOG
+DISO
+KEUA
+AETH
+FSBD
+SPWO
+BBC
+GCLN
+HEAT
+NDIV
+BNKD
+MNTL
+FFND
+NRES
+IPPP
+SROI
+BUYZ
+PJFM
+XHYD
+HDAW
+PJIO
+COPP
+GERM
+DEFI
+UPW
+MOTO
+GSEU
+NDVG
+OVS
+EZJ
+TGLR
+NDIA
+ASET
+SMDY
+WINC
+TOKE
+CLIX
+MDLV
+DFND
+AVEE
+HCOM
+HLGE
+PFFL
+BTOP
+BERZ
+CBLS
+JULZ
+HIYS
+MRGR
+JCHI
+XTJL
+EFO
+FTAG
+MEDI
+GMUN
+ISDB
+FLHK
+NVBT
+IBOT
+HELX
+RFEU
+EFAS
+AQWA
+QTAP
+NRSH
+FDHT
+VABS
+PEX
+JUNT
+VWID
+ABCS
+RHTX
+SATO
+SPXB
+BYRE
+GSIG
+JANH
+RBLD
+KFVG
+FLYU
+BCDF
+IWFG
+NVDD
+ERET
+FTWO
+HART
+RSPE
+SPMV
+FDCE
+GFOF
+PSCQ
+JDOC
+XPP
+JULQ
+BFIX
+AVMA
+HJAN
+SSPX
+ITDC
+OFOS
+EUDV
+MBBB
+TMDV
+FDTS
+QRFT
+LUX
+CAFG
+INFR
+TYLG
+SYII
+QDTE
+ANEW
+IBAT
+JHDV
+EVMT
+NUDV
+BETH
+IQQQ
+QQQS
+RYLG
+JHID
+APRD
+TOLL
+LRND
+INDF
+EEMD
+DMCY
+SNPG
+ESGN
+DWCR
+IWIN
+SPYT
+COPJ
+EAOK
+VICE
+HYTR
+AFMC
+SXUS
+PEMX
+MIDE
+GDMN
+NWLG
+ITDB
+WEIX
+PSIL
+CGRO
+IRBA
+GDEF
+XVOL
+XDJA
+BLCV
+WRND
+XDOC
+CEW
+IDAT
+EQUL
+JANZ
+BLCR
+UGE
+DIVD
+BTHM
+NSCS
+MSFD
+ICOP
+WEED
+CLDL
+ULE
+UJB
+XDAT
+BZQ
+EV
+FBZ
+MOTE
+RAYS
+GOOX
+YXI
+INDE
+IVRS
+CHPS
+GPOW
+NSI
+RITA
+FCA
+CCEF
+VCLN
+RJMG
+SBB
+DIVP
+JRNY
+ITDE
+NTZG
+MKAM
+MID
+TCHI
+ITDD
+EEMO
+XDJL
+XDAP
+USVT
+KALL
+LALT
+FEBZ
+XTAP
+MSFX
+IWTR
+SNPV
+DMAT
+PSWD
+BETE
+EAOM
+MEMS
+NBGR
+SEA
+EATV
+EGUS
+UDI
+LITP
+VMAX
+MYY
+ITDF
+HQGO
+SPUC
+GBLD
+CLNR
+AFSM
+NBCC
+EEV
+QQJG
+DAT
+EMDM
+MVPL
+XDTE
+GGLS
+PWER
+SPDG
+IPOS
+NSCR
+SYNB
+ISZE
+SNPD
+SSG
+VERS
+JCTR
+KTEC
+AGRH
+BNE
+SPCZ
+OCEN
+BILD
+FPXE
+GCAD
+IVEG
+PTL
+ROIS
+AVIE
+BNGE
+SOLR
+BBBI
+TSL
+OAIA
+GAST
+IQRA
+JAND
+TINY
+BBBL
+SHNY
+BPAY
+NBCE
+EFRA
+BEEZ
+SKRE
+EMTY
+OCTD
+RYSE
+APRZ
+IVRA
+BWTG
+FEEM
+UPV
+QQQU
+AFLG
+EVNT
+ARKD
+UCYB
+UBR
+MAYZ
+AWEG
+ESIX
+ISHP
+UPGR
+CTEX
+EVUS
+LTL
+VNMC
+JULD
+GGRW
+KROP
+AFTY
+WBAT
+BEDZ
+LQAI
+BMED
+REW
+OBOR
+QMID
+BBIB
+ITDG
+RVRB
+EWV
+FLOW
+PBMR
+COAL
+OCTZ
+AMDL
+EVAV
+GLIF
+FDWM
+BDVG
+DZZ
+IBRN
+MAPP
+VCAR
+CARU
+KLNE
+FSLD
+USE
+FLUD
+KEM
+JETU
+FEBP
+SKYU
+FLDZ
+ERUS
+SPQ
+NIKL
+VIRS
+PBFB
+TSDD
+WTIU
+IRVH
+CFCV
+ITDI
+BIS
+INOV
+WCEO
+NVIR
+ETEC
+BRAZ
+REAI
+VSHY
+IRTR
+YUMY
+ADIV
+JFWD
+JETD
+JOJO
+HCOW
+BECO
+GOLY
+MDEV
+PTEC
+GHEE
+FSEC
+JANP
+CRED
+KNGS
+IWFH
+IOPP
+EATZ
+MRCP
+BLKC
+JHAC
+SCAP
+DGZ
+AVXC
+BWEB
+SMDD
+XTR
+JUNZ
+BBSB
+AHOY
+ITDH
+AAPX
+AMZD
+KPOP
+QOWZ
+DIVG
+HYLG
+JRE
+ITDA
+DYLG
+ILIT
+MVPS
+KSEA
+KDIV
+TILL
+XCLR
+KLXY
+XXCH
+FYLG
+HYGI
+PBJA
+FIXT
+WDNA
+QSWN
+KBUF
+QCLR
+SCLZ
+FAIL
+WNDY
+QTR
+KPRO
+EKG
+BBBS
+AGIH
+JPAN
+QYLE
+DULL
+QQQD
+AVNV
+WTID
+NZUS
+XIMR
+SDD
+RNWZ
+ALUM
+ION
+CARD
+DWAT
+NUKZ
+VWI
+HAUS
+EMFQ
+DMDV
+MCHS
+SUPL
+REC
+CRIT
+LBO
+MPAY
+LGHT
+RATE
+AMDS
+SETH
+FLYD
+ARVR
+RNEW
+EMCC
+TINT
+ADVE
+IRET
+MZZ
+ZSB
+FDVL
+AUMI
+PCCE
+TSLP
+SIJ
+SPAM
+SMLE
+CLOD
+LUXX
+XYLE
+QSML
+SCC
+CANQ
+BITC
+BCIL
+ZZZ
+FTIF
+FCFY
+KDRN
+DIP
+SHPP
+DESK
+RXD
+FFLV
+AMZZ
+MSFL
+FDND
+EAFG
+BBIP
+SMN
+BULD
+MAKX
+MRAD
+TSLH
+AMZP
+SDP
+ODDS
+MSFY
+SZK
+KARB
+INC
+CETF
+LNGG
+OND
+HYKE
+EFU
+NFLP
+SMCF
+USRD
+DVDN
+USCF
+CZAR
+GOOP
+GSIB
+AIRL
+FINE
+AAPY
+ROYA
+LNGZ
+PSLV
+BITW
+MAGX
+ULTY
+USDX
+MAGQ
