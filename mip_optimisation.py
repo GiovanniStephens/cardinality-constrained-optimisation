@@ -63,6 +63,7 @@ def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk
 if __name__ == '__main__':
     # Load data
     prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = prices_df.iloc[:-213]
     log_returns = calculate_returns(prices_df)
     expected_returns = calculate_expected_returns(log_returns)
     volatilities = np.sqrt(calculate_variances(log_returns))
