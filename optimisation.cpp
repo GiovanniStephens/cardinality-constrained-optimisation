@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include "csv.hpp"
+#include <thread>
+#include <mutex>
 
 Eigen::MatrixXd readETFData(const std::string& filename, std::vector<std::string>& tickers) {
     // Prepare to read the file
@@ -272,11 +274,39 @@ double calculateFitness(const Eigen::RowVectorXi& individual, const Eigen::Matri
     return sharpeRatio;
 }
 
+
+void run_island(int id, const Eigen::MatrixXd& logReturns, const Eigen::VectorXd& expectedReturns, int populationSize, int numGenerations, double mutationRate, int maxNumETFs, int numETFs) {
+    Eigen::MatrixXi population = initializePopulation(populationSize, numETFs, maxNumETFs);
+    Eigen::VectorXd fitness = Eigen::VectorXd::Zero(populationSize);
+
+    for (int generation = 0; generation < numGenerations; ++generation) {
+        // Evaluate fitness
+        for (int i = 0; i < population.rows(); ++i) {
+            fitness(i) = calculateFitness(population.row(i), logReturns, expectedReturns, 0.0);
+        }
+
+        // Selection, Crossover, and Mutation
+        Eigen::MatrixXi parents = selectParents(population, fitness, populationSize / 100);
+        Eigen::MatrixXi offspring = crossover(parents, populationSize - parents.rows());
+        mutate(offspring, mutationRate);
+
+        // Elitism
+        int numElites = populationSize / 100;
+        Eigen::MatrixXi elites = elitism(population, fitness, numElites);
+        population.topRows(numElites) = elites;
+        population.middleRows(numElites, parents.rows() - numElites) = parents.bottomRows(parents.rows() - numElites);
+        population.bottomRows(offspring.rows()) = offspring;
+
+        // Print the best fitness in the current generation
+        std::cout << "Island " << id << ": Generation " << generation << ": Best fitness = " << fitness.maxCoeff() << std::endl;
+        // Optionally handle migration here if implementing migration between islands
+    }
+
+    // Output the best solution found on this island
+    std::cout << "Island " << id << ": Best fitness achieved = " << fitness.maxCoeff() << std::endl;
+}
+
 int main() {
-    int populationSize = 1125;
-    int numGenerations = 1000;
-    int maxNumETFs = 10;
-    double mutationRate = 0.005;
     std::vector<std::string> tickers;
     Eigen::MatrixXd etfData = readETFData("Data/ETF_Prices.csv", tickers);
     Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData);
@@ -285,45 +315,24 @@ int main() {
     int numETFs = filteredData.cols();
     Eigen::MatrixXd logReturns = calculateLogReturns(filteredData);
     Eigen::VectorXd expectedReturns = calculateExpectedReturn(logReturns);
-    Eigen::MatrixXi population = initializePopulation(populationSize, numETFs, maxNumETFs);
-    Eigen::VectorXd fitness = Eigen::VectorXd::Zero(populationSize);
-    Eigen::RowVectorXi bestIndividual(numETFs);
-    double overallBestFitness = -1e4;
-    for (int generation = 0; generation < numGenerations; ++generation) {
-        for (int i = 0; i < population.rows(); ++i) {
-            fitness(i) = calculateFitness(population.row(i), logReturns, expectedReturns, 0.0);
-        }
-        Eigen::MatrixXi parents = selectParents(population, fitness, populationSize / 100);
-        Eigen::MatrixXi offspring = crossover(parents, populationSize - parents.rows());
-        mutate(offspring, mutationRate);
-        int numElites = populationSize / 100;  // Retain top 1% of individuals as elites
-        Eigen::MatrixXi elites = elitism(population, fitness, numElites);
-        population.topRows(numElites) = elites;
-        population.middleRows(numElites, parents.rows() - numElites) = parents.bottomRows(parents.rows() - numElites);
-        population.bottomRows(offspring.rows()) = offspring;
 
-        double maxFitness = fitness.maxCoeff();
-        if (maxFitness > overallBestFitness) {
-            overallBestFitness = maxFitness;
-        }
-        int maxIndex = 0;
-        for (int i = 0; i < fitness.size(); ++i) {
-            if (fitness(i) == maxFitness) {
-                maxIndex = i;
-                break;
-            }
-        }
-        bestIndividual = population.row(maxIndex);
-        std::cout << "Generation " << generation << ": Best fitness = " << maxFitness << std::endl;
+    int numIslands = 8;
+    int populationSizePerIsland = 1125;
+    int numGenerations = 200;
+    double mutationRate = 0.0015;
+    int maxNumETFs = 10;
+    std::vector<std::thread> islands;
+
+    for (int i = 0; i < numIslands; ++i) {
+        islands.emplace_back(run_island, i, std::cref(logReturns),
+                             std::cref(expectedReturns), populationSizePerIsland,
+                             numGenerations, mutationRate, maxNumETFs, numETFs);
     }
-    std::cout << "Best individual: " << bestIndividual << std::endl;
-    std::cout << "Best fitness: " << overallBestFitness << std::endl;
-    std::cout << "Selected ETFs: ";
-    for (int i = 0; i < bestIndividual.size(); ++i) {
-        if (bestIndividual(i) == 1) {
-            std::cout << tickers[i] << " ";
-        }
+
+    // Wait for all islands to complete
+    for (auto& island : islands) {
+        island.join();
     }
-    std::cout << std::endl;
+
     return 0;
 }
