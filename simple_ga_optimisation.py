@@ -152,22 +152,22 @@ def run_parallel_ga(data, num_generations, total_population_size, mutation_rate,
             best_solution = solution
     return best_solution, best_fitness
 
+if __name__ == '__main__':    
+    # Load data and run the GA
+    data = load_data('Data/ETF_Prices.csv')
+    # data = data.iloc[:-213]
+    best_solution, best_fitness = run_parallel_ga(data,
+                                                num_generations=100,
+                                                total_population_size=10000,
+                                                mutation_rate=0.0015,
+                                                num_elites=100,
+                                                migration_interval=50,
+                                                migration_rate=0.1)
+    print("Best Solution:", best_solution)
+    print("Best Sharpe Ratio:", best_fitness)
 
-# Load data and run the GA
-data = load_data('Data/ETF_Prices.csv')
-data = data.iloc[:-213]
-best_solution, best_fitness = run_parallel_ga(data,
-                                              num_generations=100,
-                                              total_population_size=10000,
-                                              mutation_rate=0.0015,
-                                              num_elites=100,
-                                              migration_interval=50,
-                                              migration_rate=0.1)
-print("Best Solution:", best_solution)
-print("Best Sharpe Ratio:", best_fitness)
-
-# Print the selected ETFs
-selected_etfs = data.columns[best_solution == 1]
-print("Selected ETFs:")
-print(selected_etfs)
-print(len(selected_etfs))
+    # Print the selected ETFs
+    selected_etfs = data.columns[best_solution == 1]
+    print("Selected ETFs:")
+    print(selected_etfs)
+    print(len(selected_etfs))
