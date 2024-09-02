@@ -120,7 +120,7 @@ def genetic_algorithm(island_id, data, num_generations, population_size, mutatio
             fitness.append(calculate_fitness(ind, expected_returns, cov_matrix))
         fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
-        # print(f"Island {island_id}, Generation {generation}, Best Fitness: {np.max(fitness)}")
+        print(f"Island {island_id}, Generation {generation}, Best Fitness: {np.max(fitness)}")
         if generation % migration_interval == 0 and generation != 0 and island_id in return_dict:
             migrants = return_dict.pop(island_id, None)
             if migrants is not None:
@@ -159,12 +159,12 @@ def run_parallel_ga(data, num_generations, total_population_size, mutation_rate,
 
 if __name__ == '__main__':    
     # Load data and run the GA
-    data = load_data('Data/NZ_ETF_Prices.csv')
+    data = load_data('Data/ETF_Prices.csv')
     # data = data.iloc[:-213]
     mutation_rate = 1/ data.shape[1]
     best_solution, best_fitness = run_parallel_ga(data,
-                                                num_generations=10,
-                                                total_population_size=8000,
+                                                num_generations=30,
+                                                total_population_size=16000,
                                                 mutation_rate=mutation_rate,
                                                 num_elites=100,
                                                 migration_interval=50,
