@@ -49,18 +49,18 @@ def calculate_fitness(individual, expected_returns, cov_matrix):
     """ Calculate Sharpe Ratio as the fitness of the individual with constraints on holdings. """
     selected_indices = individual == 1
     num_selected_etfs = np.sum(selected_indices)
-    if num_selected_etfs < 3 or num_selected_etfs > 10:
+    if num_selected_etfs < 3 or num_selected_etfs > 5:
         return -1e4  # Penalize solutions that do not meet the holding constraints
     if not selected_indices.any():
         return 0  # Avoid division by zero if no ETFs are selected
 
     # Calculate portfolio metrics for the selected ETFs
-    cov_matrix_np = cov_matrix.values
     filtered_returns = expected_returns[selected_indices]
-    filtered_cov_matrix = cov_matrix_np[np.ix_(selected_indices, selected_indices)]
     weights = np.ones(num_selected_etfs) / num_selected_etfs
     portfolio_return = np.dot(weights, filtered_returns)
-    portfolio_variance = np.dot(weights, np.dot(filtered_cov_matrix, weights))
+    if portfolio_return < 0.10:
+        return -1e4
+    portfolio_variance = np.dot(weights, np.dot(cov_matrix, weights))
     return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
 
 
@@ -109,13 +109,18 @@ def genetic_algorithm(island_id, data, num_generations, population_size, mutatio
     population = initialize_population(population_size, num_etfs, max_num_etfs=10)
     log_returns = calculate_returns(data)
     expected_returns = calculate_expected_returns(log_returns)
-    cov_matrix = calculate_covariance_matrix(log_returns)
+    # cov_matrix = calculate_covariance_matrix(log_returns)
     best_overall_fitness = float('-inf')
     best_overall_individual = None
     for generation in range(num_generations):
-        fitness = np.array([calculate_fitness(ind, expected_returns, cov_matrix) for ind in population])
+        fitness = []
+        for ind in population:
+            # Calculate the covariance matrix for the filtered subset of ETF log returns
+            cov_matrix = calculate_covariance_matrix(log_returns.iloc[:, ind == 1])
+            fitness.append(calculate_fitness(ind, expected_returns, cov_matrix))
+        fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
-        print(f"Island {island_id}, Generation {generation}, Best Fitness: {np.max(fitness)}")
+        # print(f"Island {island_id}, Generation {generation}, Best Fitness: {np.max(fitness)}")
         if generation % migration_interval == 0 and generation != 0 and island_id in return_dict:
             migrants = return_dict.pop(island_id, None)
             if migrants is not None:
@@ -132,7 +137,7 @@ def genetic_algorithm(island_id, data, num_generations, population_size, mutatio
             return_dict[island_id] = migrants
         if np.max(fitness) > best_overall_fitness:
             best_overall_fitness = np.max(fitness)
-            best_overall_individual = population[np.argmax(fitness)].copy()
+            best_overall_individual = population[np.argmax(best_overall_fitness)].copy()
     return best_overall_individual, best_overall_fitness
 
 
@@ -154,12 +159,13 @@ def run_parallel_ga(data, num_generations, total_population_size, mutation_rate,
 
 if __name__ == '__main__':    
     # Load data and run the GA
-    data = load_data('Data/ETF_Prices.csv')
+    data = load_data('Data/NZ_ETF_Prices.csv')
     # data = data.iloc[:-213]
+    mutation_rate = 1/ data.shape[1]
     best_solution, best_fitness = run_parallel_ga(data,
-                                                num_generations=100,
-                                                total_population_size=10000,
-                                                mutation_rate=0.0015,
+                                                num_generations=10,
+                                                total_population_size=8000,
+                                                mutation_rate=mutation_rate,
                                                 num_elites=100,
                                                 migration_interval=50,
                                                 migration_rate=0.1)
