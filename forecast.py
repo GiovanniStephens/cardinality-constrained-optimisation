@@ -34,7 +34,7 @@ for ticker in tqdm.tqdm(data.columns):
                                           forecast.iloc[-1])/forecast.iloc[0])
 expected_returns = pd.DataFrame.from_dict(expected_returns,
                                           orient='index')
-expected_returns.to_csv('Data/NZ_expected_returns.csv')
+expected_returns.to_csv('Data/expected_returns.csv')
 
 # Forecast volatility
 print('\nForecasting volatility...')
@@ -54,4 +54,4 @@ for ticker in tqdm.tqdm(data.columns):
         / np.power(100, 2)*252
 volatilities = pd.DataFrame.from_dict(volatilities,
                                       orient='index')
-volatilities.to_csv('Data/NZ_variances.csv')
+volatilities.to_csv('Data/variances.csv')
