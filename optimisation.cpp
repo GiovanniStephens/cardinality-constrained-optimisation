@@ -12,8 +12,9 @@
 #include <mutex>
 
 Eigen::MatrixXd readETFData(const std::string& filename, std::vector<std::string>& tickers) {
-    // Prepare to read the file
-    csv::CSVReader reader(filename);
+    csv::CSVFormat format;
+    format.header_row(-1); // Explicitly state there is no header row
+    csv::CSVReader reader(filename, format);
     std::vector<std::vector<double>> data;
     bool firstRow = true;
 
@@ -50,22 +51,25 @@ Eigen::MatrixXd readETFData(const std::string& filename, std::vector<std::string
     throw std::runtime_error("Failed to parse CSV data or data is empty.");
 }
 
-Eigen::MatrixXd filterETFsWithMissingData(const Eigen::MatrixXd& data, double missingThreshold = 0.02) {
+Eigen::MatrixXd filterETFsWithMissingData(const Eigen::MatrixXd& data, std::vector<std::string>& tickers, double missingThreshold = 0.02) {
     std::vector<int> validColumns;
+    std::vector<std::string> filteredTickers;
+
     for (int i = 0; i < data.cols(); ++i) {
         int countNaNs = (data.col(i).array().isNaN()).count();
         double fractionMissing = static_cast<double>(countNaNs) / static_cast<double>(data.rows());
         if (fractionMissing < missingThreshold) {
             validColumns.push_back(i);
+            filteredTickers.push_back(tickers[i]);
         }
     }
 
     if (validColumns.empty()) {
         std::cerr << "No valid columns found. All data may be above the missing threshold." << std::endl;
+        tickers.clear();  // Clear tickers because no valid columns are found
         return Eigen::MatrixXd();  // Return an empty matrix if no valid columns
     }
-
-    // Construct a new matrix with only the valid columns
+    tickers = filteredTickers;
     Eigen::MatrixXd filteredData(data.rows(), validColumns.size());
     for (size_t i = 0; i < validColumns.size(); ++i) {
         filteredData.col(i) = data.col(validColumns[i]);
@@ -269,22 +273,33 @@ double calculateFitness(const Eigen::RowVectorXi& individual, const Eigen::Matri
     Eigen::VectorXd weights = Eigen::VectorXd::Constant(numSelectedETFs, 1.0 / numSelectedETFs); 
     Eigen::MatrixXd covarianceMatrix = calculateCovarianceMatrix(selectedLogReturns);
     double portfolioReturn = calculatePortfolioReturn(selectedExpectedReturns, weights);
+    if (portfolioReturn < 0.12) {
+        return -1e4;
+    }
     double portfolioVariance = calculatePortfolioRisk(covarianceMatrix, weights);
     double sharpeRatio = calculateSharpeRatio(portfolioReturn, portfolioVariance, riskFreeRate);
     return sharpeRatio;
 }
 
 
-void run_island(int id, const Eigen::MatrixXd& logReturns, const Eigen::VectorXd& expectedReturns, int populationSize, int numGenerations, double mutationRate, int maxNumETFs, int numETFs) {
+void run_island(int id, const Eigen::MatrixXd& logReturns, const Eigen::VectorXd& expectedReturns,
+                int populationSize, int numGenerations, double mutationRate, int maxNumETFs,
+                int numETFs, const std::vector<std::string>& tickers) {
     Eigen::MatrixXi population = initializePopulation(populationSize, numETFs, maxNumETFs);
     Eigen::VectorXd fitness = Eigen::VectorXd::Zero(populationSize);
+    Eigen::RowVectorXi bestIndividual(numETFs);
+    double bestFitness = -std::numeric_limits<double>::infinity();
 
     for (int generation = 0; generation < numGenerations; ++generation) {
         // Evaluate fitness
         for (int i = 0; i < population.rows(); ++i) {
-            fitness(i) = calculateFitness(population.row(i), logReturns, expectedReturns, 0.0);
+            double currentFitness = calculateFitness(population.row(i), logReturns, expectedReturns, 0.0);
+            fitness(i) = currentFitness;
+            if (currentFitness > bestFitness) {
+                bestFitness = currentFitness;
+                bestIndividual = population.row(i);
+            }
         }
-
         // Selection, Crossover, and Mutation
         Eigen::MatrixXi parents = selectParents(population, fitness, populationSize / 100);
         Eigen::MatrixXi offspring = crossover(parents, populationSize - parents.rows());
@@ -301,32 +316,37 @@ void run_island(int id, const Eigen::MatrixXd& logReturns, const Eigen::VectorXd
         std::cout << "Island " << id << ": Generation " << generation << ": Best fitness = " << fitness.maxCoeff() << std::endl;
         // Optionally handle migration here if implementing migration between islands
     }
-
-    // Output the best solution found on this island
-    std::cout << "Island " << id << ": Best fitness achieved = " << fitness.maxCoeff() << std::endl;
+    std::cout << "Island " << id << ": Best fitness achieved = " << bestFitness << std::endl;
+    std::cout << "Island " << id << ": Best individual ETFs: ";
+    for (int i = 0; i < bestIndividual.size(); ++i) {
+        if (bestIndividual(i) == 1) {
+            std::cout << tickers[i] << " ";
+        }
+    }
+    std::cout << std::endl;
 }
 
 int main() {
     std::vector<std::string> tickers;
     Eigen::MatrixXd etfData = readETFData("Data/ETF_Prices.csv", tickers);
-    Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData);
+    Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData, tickers);
     forwardFill(filteredData);
     backwardFill(filteredData);
     int numETFs = filteredData.cols();
     Eigen::MatrixXd logReturns = calculateLogReturns(filteredData);
     Eigen::VectorXd expectedReturns = calculateExpectedReturn(logReturns);
 
-    int numIslands = 8;
-    int populationSizePerIsland = 1125;
-    int numGenerations = 200;
-    double mutationRate = 0.0015;
-    int maxNumETFs = 10;
+    int numIslands = std::thread::hardware_concurrency();
+    int populationSizePerIsland = 1000;
+    int numGenerations = 5;
+    double mutationRate = 1.0 / numETFs;
+    int maxNumETFs = 5;
     std::vector<std::thread> islands;
 
     for (int i = 0; i < numIslands; ++i) {
-        islands.emplace_back(run_island, i, std::cref(logReturns),
-                             std::cref(expectedReturns), populationSizePerIsland,
-                             numGenerations, mutationRate, maxNumETFs, numETFs);
+        islands.emplace_back(run_island, i, std::cref(logReturns), std::cref(expectedReturns),
+                             populationSizePerIsland, numGenerations, mutationRate, maxNumETFs, numETFs,
+                             std::cref(tickers));
     }
 
     // Wait for all islands to complete
