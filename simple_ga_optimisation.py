@@ -50,19 +50,21 @@ def initialise_population(size, num_etfs, max_num_etfs):
     return np.random.binomial(1, p, size=(size, num_etfs))
 
 
-def calculate_fitness(individual, expected_returns, cov_matrix_subset):
+def calculate_fitness(individual, expected_returns, log_returns):
     selected_indices = individual == 1
     num_selected_etfs = np.sum(selected_indices)
     if num_selected_etfs < 8 or num_selected_etfs > 20:
         return -1e4
     if not selected_indices.any():
         return 0
+    filtered_log_returns = log_returns.loc[:, selected_indices]
+    cov_matrix_subset = calculate_covariance_matrix(filtered_log_returns)
     filtered_returns = expected_returns[selected_indices]
     weights = np.ones(num_selected_etfs) / num_selected_etfs
     portfolio_return = np.dot(weights, filtered_returns)
     if portfolio_return < 0.10:
         return -1e4
-    portfolio_variance = np.dot(weights, np.dot(cov_matrix_subset, weights))
+    portfolio_variance = np.dot(weights.T, np.dot(cov_matrix_subset, weights))
     return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
 
 
@@ -106,7 +108,6 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
     population = initialise_population(population_size, num_etfs, max_num_etfs=20)
     log_returns = calculate_returns(data)
     expected_returns = calculate_expected_returns(log_returns)
-    cov_matrix = calculate_covariance_matrix(log_returns)
     best_overall_fitness = float('-inf')
     best_overall_individual = None
     for generation in range(num_generations):
@@ -122,12 +123,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                     population[replace_indices] = migrants
         fitness = []
         for ind in population:
-            selected_indices = ind == 1
-            if np.sum(selected_indices) > 0:
-                cov_matrix_subset = cov_matrix.loc[selected_indices, selected_indices]
-            else:
-                cov_matrix_subset = np.array([[]])
-            fitness.append(calculate_fitness(ind, expected_returns, cov_matrix_subset))
+            fitness.append(calculate_fitness(ind, expected_returns, log_returns))
         fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
         current_best_fitness = np.max(fitness)
