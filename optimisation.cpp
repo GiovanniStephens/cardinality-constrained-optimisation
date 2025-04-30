@@ -338,7 +338,7 @@ int main() {
 
     int numIslands = std::thread::hardware_concurrency();
     int populationSizePerIsland = 1000;
-    int numGenerations = 5;
+    int numGenerations = 50;
     double mutationRate = 1.0 / numETFs;
     int maxNumETFs = 5;
     std::vector<std::thread> islands;
