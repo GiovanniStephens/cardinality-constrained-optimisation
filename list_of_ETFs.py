@@ -8,7 +8,7 @@ def main():
     """
     etfs_list = get_available_etfs_list()
     etf_df = pd.DataFrame(etfs_list, columns=['Ticker'])
-    etf_df.to_csv('Data/ETFs_.csv', index=False)
+    etf_df.to_csv('Data/ETFs_Full.csv', index=False)
 
 
 if __name__ == '__main__':
