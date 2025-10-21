@@ -7,6 +7,12 @@ import os
 
 def load_data(filename: str) -> pd.DataFrame:
     prices_df = pd.read_csv(filename, index_col=0)
+    # Convert index to datetime and keep only last 2 years
+    prices_df.index = pd.to_datetime(prices_df.index)
+    prices_df = prices_df.sort_index()
+    two_years_ago = prices_df.index[-1] - pd.Timedelta(days=730)
+    prices_df = prices_df[prices_df.index >= two_years_ago]
+    # Now apply the original filter
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
     prices_df = prices_df.fillna(method='ffill')
     return prices_df
@@ -62,7 +68,7 @@ def calculate_fitness(individual, expected_returns, log_returns):
     filtered_returns = expected_returns[selected_indices]
     weights = np.ones(num_selected_etfs) / num_selected_etfs
     portfolio_return = np.dot(weights, filtered_returns)
-    if portfolio_return < 0.10:
+    if portfolio_return < 0.12:
         return -1e4
     portfolio_variance = np.dot(weights.T, np.dot(cov_matrix_subset, weights))
     return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
@@ -202,13 +208,14 @@ def print_results(tickers, optimal_weights, amount_to_allocate=5000):
 
 
 if __name__ == '__main__':
-    data = load_data('Data/ETF_Prices.csv')
-    etfs = pd.read_csv('Data/ETFs.csv')
-    etfs_in_data_but_not_in_etfs = set(data.columns) - set(etfs['Tickers'])
-    data = data.drop(columns=list(etfs_in_data_but_not_in_etfs))
+    data = load_data('Data/time_series_20251016_113257.csv')
+    # Skip ETFs.csv filtering for NZ managed funds data
+    # etfs = pd.read_csv('Data/ETFs.csv')
+    # etfs_in_data_but_not_in_etfs = set(data.columns) - set(etfs['Tickers'])
+    # data = data.drop(columns=list(etfs_in_data_but_not_in_etfs))
     mutation_rate = 1 / data.shape[1]
     best_solution, best_fitness = run_parallel_ga(data,
-                                                  num_generations=100,
+                                                  num_generations=70,
                                                   total_population_size=8000,
                                                   mutation_rate=mutation_rate,
                                                   num_elites=100,
