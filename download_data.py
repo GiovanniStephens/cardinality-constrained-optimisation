@@ -13,25 +13,52 @@ def load_etfs(filename: str) -> pd.DataFrame:
     return etfs
 
 
-def download_data(etfs: pd.DataFrame) -> pd.DataFrame:
+def download_data(
+    etfs: pd.DataFrame,
+    ticker_col: str = "Tickers",
+    start: str = "2014-04-30",
+    end: str = "2025-04-30",
+    batch_size: int = 500,
+) -> pd.DataFrame:
     """
-    Downloads data from Yahoo Finance for the given list of ETFs.
+    Downloads data from Yahoo Finance for the given list of tickers.
 
-    :etfs: list of ETFs as a pandas DataFrame
-    :returns: daily price data for the given list of ETFs.
+    Processes tickers in batches to avoid timeouts with large ticker lists.
+
+    :etfs: DataFrame containing ticker symbols.
+    :ticker_col: name of the column containing ticker symbols.
+    :start: start date for the download (YYYY-MM-DD).
+    :end: end date for the download (YYYY-MM-DD).
+    :batch_size: number of tickers to download per batch.
+    :returns: daily price data for the given list of tickers.
     """
-    tickers = ' '.join(etfs['Tickers'].to_list())
-    prices = yf.download(tickers,
-                         #  period='3y',
-                         interval='1d',
-                         group_by='ticker',
-                         start="2014-04-30",
-                         end="2025-04-30")
-    adj_closing_prices = []
-    for ticker in etfs['Tickers']:
-        adj_closing_prices.append(prices[ticker]['Close'].to_list())
-    prices_df = pd.DataFrame(np.transpose(adj_closing_prices),
-                             columns=etfs['Tickers'])
+    all_tickers = etfs[ticker_col].tolist()
+    batches = [
+        all_tickers[i : i + batch_size]
+        for i in range(0, len(all_tickers), batch_size)
+    ]
+
+    all_prices = {}
+    for batch_num, batch in enumerate(batches, 1):
+        print(f"Downloading batch {batch_num}/{len(batches)} ({len(batch)} tickers)...")
+        tickers_str = " ".join(batch)
+        prices = yf.download(
+            tickers_str,
+            interval="1d",
+            group_by="ticker",
+            start=start,
+            end=end,
+        )
+        for ticker in batch:
+            try:
+                if len(batch) == 1:
+                    all_prices[ticker] = prices["Close"].tolist()
+                else:
+                    all_prices[ticker] = prices[ticker]["Close"].tolist()
+            except (KeyError, TypeError):
+                pass
+
+    prices_df = pd.DataFrame(all_prices)
     return prices_df
 
 
