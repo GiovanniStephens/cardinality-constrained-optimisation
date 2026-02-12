@@ -101,7 +101,7 @@ class TestOptimisation(unittest.TestCase):
         log_returns = op.calculate_returns(data)
         cov = log_returns.iloc[:, :2].cov()*252
         cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
-        self.assertEqual(cov_matrix.values.all(), cov.values.all())
+        np.testing.assert_array_almost_equal(cov_matrix, cov.values)
 
     def test_optimisation_max_weight(self):
         """
@@ -292,6 +292,58 @@ class TestOptimisation(unittest.TestCase):
         data = op.load_data('Data/ETF_Prices.csv')
         op.prepare_opt_inputs(data, use_forecasts=False)
         self.assertEqual(op.variances, None)
+
+
+    def test_estimate_corr_using_copulas_is_correlation_matrix(self):
+        """
+        Verifies the copula-estimated correlation matrix is valid:
+        symmetric, diagonal of 1s, and positive semi-definite.
+        """
+        data = op.load_data('Data/ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        subset = log_returns.iloc[:, :5]
+        corr = op.estimate_corr_using_copulas(subset)
+        # Check dimensions
+        self.assertEqual(corr.shape, (5, 5))
+        # Check diagonal is 1
+        np.testing.assert_array_almost_equal(np.diag(corr), np.ones(5))
+        # Check symmetry
+        np.testing.assert_array_almost_equal(corr, corr.T)
+        # Check positive semi-definite (all eigenvalues >= 0)
+        eigenvalues = np.linalg.eigvalsh(corr)
+        self.assertTrue(np.all(eigenvalues >= -1e-10))
+
+    def test_get_cov_matrix_with_copulae_no_forecasts(self):
+        """
+        Tests that get_cov_matrix works with use_copulae=True
+        even when forecast variances are None (the bug fix).
+        The result should be a valid PSD covariance matrix.
+        """
+        data = op.load_data('Data/ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        subset = log_returns.iloc[:, :5]
+        cov_matrix = op.get_cov_matrix(subset, use_copulae=True)
+        # Check dimensions
+        self.assertEqual(cov_matrix.shape, (5, 5))
+        # Check symmetry
+        np.testing.assert_array_almost_equal(cov_matrix, cov_matrix.T)
+        # Check positive semi-definite
+        eigenvalues = np.linalg.eigvalsh(cov_matrix)
+        self.assertTrue(np.all(eigenvalues >= -1e-10))
+        # Check diagonal values are positive (variances)
+        self.assertTrue(np.all(np.diag(cov_matrix) > 0))
+
+    def test_get_cov_matrix_with_copulae_returns_numpy(self):
+        """
+        Verifies get_cov_matrix returns a numpy array (not DataFrame).
+        """
+        data = op.load_data('Data/ETF_Prices.csv')
+        log_returns = op.calculate_returns(data)
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        subset = log_returns.iloc[:, :3]
+        cov_matrix = op.get_cov_matrix(subset, use_copulae=True)
+        self.assertIsInstance(cov_matrix, np.ndarray)
 
 
 if __name__ == '__main__':

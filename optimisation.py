@@ -1,11 +1,13 @@
+import logging
 import warnings
 
 import numpy as np
 import pandas as pd
 import pygad
 import scipy.optimize as opt
-from copulae import TCopula
+from copulae import GaussianCopula, TCopula
 from muarch import MUArch
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 warnings.filterwarnings("ignore")
 
@@ -53,11 +55,20 @@ def load_data(filename: str) -> pd.DataFrame:
     return prices_df
 
 
-def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
+def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
     """
-    Calculates the covariance matrix of the data.
-    If there are forecast variances, the covariance
-    matrix gets updated to include them.
+    Calculates the covariance matrix of the data using the CCC model.
+
+    Uses Bollerslev's (1990) Constant Conditional Correlation model:
+    Cov = D × R × D, where D is a diagonal matrix of volatilities
+    and R is the correlation matrix.
+
+    When forecast variances are available, D uses GARCH-forecast volatilities.
+    Otherwise, D uses annualised historical sample standard deviations.
+
+    When use_copulae=True, R is estimated via a Student-t copula fitted
+    to AR(1)-GARCH(1,1) standardized residuals. Otherwise, R is the
+    historical sample correlation matrix.
 
     (see: Bollerslev, T. (1990). Modelling the Coherence in Short-Run
     Nominal Exchange Rates: A Multivariate Generalized Arch Model.
@@ -65,43 +76,82 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> pd.DataFrame:
     72(3), 498–505. https://doi.org/10.2307/2109358)
 
     :data: pandas dataframe of the returns data.
-    :return: pandas dataframe of the covariance matrix.
+    :use_copulae: whether to estimate correlations via copula.
+    :return: numpy array of the covariance matrix.
     """
-    # If we have forecast variances, use the forecast variances
-    # to update the covariance matrix.
-    if variances is not None:
-        D = np.zeros((data.shape[1], data.shape[1]))
-        diag = np.sqrt(variances.loc[data.columns].values)
-        np.fill_diagonal(D, diag)
-        if use_copulae:
-            corr = estimate_corr_using_copulas(data)
-        else:
-            corr = data.corr()
-        cov_matrix = np.matmul(np.matmul(D, corr), D)
+    # Correlation matrix R
+    if use_copulae:
+        corr = estimate_corr_using_copulas(data)
     else:
-        cov_matrix = data.cov()*252  # Historical sample cov
+        corr = data.corr().values
+
+    # Diagonal volatility matrix D
+    D = np.zeros((data.shape[1], data.shape[1]))
+    if variances is not None:
+        diag = np.sqrt(variances.loc[data.columns].values)
+    else:
+        diag = data.std().values * np.sqrt(252)
+    np.fill_diagonal(D, diag)
+
+    # CCC reconstruction: Cov = D × R × D
+    cov_matrix = np.matmul(np.matmul(D, corr), D)
     return cov_matrix
 
 
-def estimate_corr_using_copulas(data: pd.DataFrame) -> pd.DataFrame:
+def estimate_corr_using_copulas(data: pd.DataFrame,
+                                diagnostics: bool = False) -> np.ndarray:
     """
-    Estimates the covariance matrix using the copula method.
+    Estimates the correlation matrix using the copula method.
 
     It first models the returns using an AR(1)-GARCH(1, 1)
-    with skewt innovations. Then it uses the copula to
-    estimate the correlation matrix.
+    with skewt innovations. Then it fits a Student-t copula
+    to the standardized residuals and extracts the correlation
+    matrix (cop.sigma).
 
     :data: pandas dataframe of the log returns data.
-    :return: pandas dataframe of the covariance matrix.
+    :diagnostics: if True, log GARCH residual adequacy tests and
+                  copula model comparison (t-copula vs Gaussian).
+    :return: numpy array of the correlation matrix.
     """
-    # Estimate GARCH model for each time series
+    logger = logging.getLogger(__name__)
+
+    # Estimate GARCH model for each time series.
+    # scale=10 multiplies returns before fitting for numerical stability
+    # (daily returns are ~0.001), then divides back internally.
     models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10)
-    # Estimate GARCH model for each time series
     models.fit(data)
-    # Fit residuals into a copula
     residuals = models.residuals()
+
+    if diagnostics:
+        # Ljung-Box test on squared standardized residuals
+        # to check GARCH adequacy (H0: no remaining autocorrelation)
+        for i, col in enumerate(data.columns):
+            sq_resid = residuals[:, i] ** 2
+            lb_result = acorr_ljungbox(sq_resid, lags=[10], return_df=True)
+            p_value = lb_result['lb_pvalue'].values[0]
+            if p_value < 0.05:
+                logger.warning(
+                    "GARCH residuals for %s show remaining autocorrelation "
+                    "(Ljung-Box p=%.4f < 0.05). Model may be inadequate.",
+                    col, p_value)
+            else:
+                logger.info(
+                    "GARCH residuals for %s pass Ljung-Box test (p=%.4f).",
+                    col, p_value)
+
+    # Fit Student-t copula
     cop = TCopula(dim=data.shape[1])
     cop.fit(residuals)
+
+    if diagnostics:
+        # Compare t-copula vs Gaussian copula via log-likelihood
+        gauss_cop = GaussianCopula(dim=data.shape[1])
+        gauss_cop.fit(residuals)
+        logger.info(
+            "Copula comparison — t-copula log-lik: %.2f, "
+            "Gaussian copula log-lik: %.2f",
+            cop.log_lik(residuals), gauss_cop.log_lik(residuals))
+
     return cop.sigma
 
 
