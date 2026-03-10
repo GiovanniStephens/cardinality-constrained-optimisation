@@ -131,3 +131,8 @@ dmypy.json
 
 # VSCode settings
 .vscode/
+
+# SQLite database
+Data/portfolio.db
+Data/portfolio.db-wal
+Data/portfolio.db-shm
