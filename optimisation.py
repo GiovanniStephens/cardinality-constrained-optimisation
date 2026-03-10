@@ -11,6 +11,8 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 
 warnings.filterwarnings("ignore")
 
+logger = logging.getLogger(__name__)
+
 MAX_NUM_STOCKS = 15
 MIN_NUM_STOCKS = 3
 TARGET_RETURN = 0.15
@@ -23,7 +25,7 @@ variances = None
 expected_returns = None
 
 
-def sharpe_ratio(weights: np.array, returns: list, cov: list) -> float:
+def sharpe_ratio(weights: np.ndarray, returns: np.ndarray, cov: np.ndarray) -> float:
     """
     Calculates the Sharpe ratio of a portfolio.
     The Sharpe ratio is the ratio of the mean return of the portfolio
@@ -34,9 +36,11 @@ def sharpe_ratio(weights: np.array, returns: list, cov: list) -> float:
     :return: float of the negative Sharpe ratio.
     """
     p_returns = np.sum(weights*returns)
-    p_volatility = np.sqrt(np.dot(weights.T,
-                                  np.dot(cov,
-                                         weights)))
+    variance = np.dot(weights.T, np.dot(cov, weights))
+    if variance <= 0:
+        logger.warning("Portfolio variance is non-positive (%.6f), returning 0.", variance)
+        return 0.0
+    p_volatility = np.sqrt(variance)
     return -p_returns/p_volatility
 
 
@@ -48,10 +52,12 @@ def load_data(filename: str) -> pd.DataFrame:
     :return: pandas dataframe of the data.
     """
     prices_df = pd.read_csv(filename, index_col=0)
+    if prices_df.empty:
+        raise ValueError(f"Loaded CSV '{filename}' is empty.")
     # Remove columns with 10% or more null values
     prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/10))
     # Fill the null values with the previous day's close price
-    prices_df = prices_df.fillna(method='ffill')
+    prices_df = prices_df.ffill()
     return prices_df
 
 
@@ -79,6 +85,13 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
     :use_copulae: whether to estimate correlations via copula.
     :return: numpy array of the covariance matrix.
     """
+    # If variances are available, check for missing columns
+    if variances is not None:
+        missing_cols = set(data.columns) - set(variances.index)
+        if missing_cols:
+            logger.warning("Columns missing from variances: %s. Falling back to historical cov.", missing_cols)
+            return data.cov() * 252
+
     # Correlation matrix R
     if use_copulae:
         corr = estimate_corr_using_copulas(data)
@@ -88,7 +101,12 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
     # Diagonal volatility matrix D
     D = np.zeros((data.shape[1], data.shape[1]))
     if variances is not None:
-        diag = np.sqrt(variances.loc[data.columns].values)
+        var_values = variances.loc[data.columns].values.flatten()
+        # Guard against negative variances before taking sqrt
+        if np.any(var_values < 0):
+            logger.warning("Negative forecast variances found; clipping to 0.")
+            var_values = np.clip(var_values, 0, None)
+        diag = np.sqrt(var_values)
     else:
         diag = data.std().values * np.sqrt(252)
     np.fill_diagonal(D, diag)
@@ -113,46 +131,48 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
                   copula model comparison (t-copula vs Gaussian).
     :return: numpy array of the correlation matrix.
     """
-    logger = logging.getLogger(__name__)
+    try:
+        # Estimate GARCH model for each time series.
+        # scale=10 multiplies returns before fitting for numerical stability
+        # (daily returns are ~0.001), then divides back internally.
+        models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10)
+        models.fit(data)
+        residuals = models.residuals()
 
-    # Estimate GARCH model for each time series.
-    # scale=10 multiplies returns before fitting for numerical stability
-    # (daily returns are ~0.001), then divides back internally.
-    models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10)
-    models.fit(data)
-    residuals = models.residuals()
+        if diagnostics:
+            # Ljung-Box test on squared standardized residuals
+            # to check GARCH adequacy (H0: no remaining autocorrelation)
+            for i, col in enumerate(data.columns):
+                sq_resid = residuals[:, i] ** 2
+                lb_result = acorr_ljungbox(sq_resid, lags=[10], return_df=True)
+                p_value = lb_result['lb_pvalue'].values[0]
+                if p_value < 0.05:
+                    logger.warning(
+                        "GARCH residuals for %s show remaining autocorrelation "
+                        "(Ljung-Box p=%.4f < 0.05). Model may be inadequate.",
+                        col, p_value)
+                else:
+                    logger.info(
+                        "GARCH residuals for %s pass Ljung-Box test (p=%.4f).",
+                        col, p_value)
 
-    if diagnostics:
-        # Ljung-Box test on squared standardized residuals
-        # to check GARCH adequacy (H0: no remaining autocorrelation)
-        for i, col in enumerate(data.columns):
-            sq_resid = residuals[:, i] ** 2
-            lb_result = acorr_ljungbox(sq_resid, lags=[10], return_df=True)
-            p_value = lb_result['lb_pvalue'].values[0]
-            if p_value < 0.05:
-                logger.warning(
-                    "GARCH residuals for %s show remaining autocorrelation "
-                    "(Ljung-Box p=%.4f < 0.05). Model may be inadequate.",
-                    col, p_value)
-            else:
-                logger.info(
-                    "GARCH residuals for %s pass Ljung-Box test (p=%.4f).",
-                    col, p_value)
+        # Fit Student-t copula
+        cop = TCopula(dim=data.shape[1])
+        cop.fit(residuals)
 
-    # Fit Student-t copula
-    cop = TCopula(dim=data.shape[1])
-    cop.fit(residuals)
+        if diagnostics:
+            # Compare t-copula vs Gaussian copula via log-likelihood
+            gauss_cop = GaussianCopula(dim=data.shape[1])
+            gauss_cop.fit(residuals)
+            logger.info(
+                "Copula comparison — t-copula log-lik: %.2f, "
+                "Gaussian copula log-lik: %.2f",
+                cop.log_lik(residuals), gauss_cop.log_lik(residuals))
 
-    if diagnostics:
-        # Compare t-copula vs Gaussian copula via log-likelihood
-        gauss_cop = GaussianCopula(dim=data.shape[1])
-        gauss_cop.fit(residuals)
-        logger.info(
-            "Copula comparison — t-copula log-lik: %.2f, "
-            "Gaussian copula log-lik: %.2f",
-            cop.log_lik(residuals), gauss_cop.log_lik(residuals))
-
-    return cop.sigma
+        return cop.sigma
+    except Exception as e:
+        logger.warning("Copula estimation failed (%s); falling back to sample correlation.", e)
+        return data.corr()
 
 
 # risk budgeting optimization
@@ -165,7 +185,10 @@ def calculate_portfolio_var(w, V):
 def calculate_risk_contribution(w, V):
     # function that calculates asset contribution to total risk
     w = np.matrix(w)
-    sigma = np.sqrt(calculate_portfolio_var(w, V))
+    portfolio_var = calculate_portfolio_var(w, V)
+    if portfolio_var <= 0:
+        return np.zeros_like(w.T)
+    sigma = np.sqrt(portfolio_var)
     # Marginal Risk Contribution
     MRC = V*w.T
     # Risk Contribution
@@ -206,7 +229,17 @@ def optimize(data: pd.DataFrame,
     :use_copulae: boolean of whether to use copulae or not.
     :return: pcipy optimization result.
     """
+    if expected_returns is None:
+        raise ValueError("expected_returns is not set. Call prepare_opt_inputs() first.")
+    if len(initial_weights) != data.shape[1]:
+        raise ValueError(
+            f"initial_weights length ({len(initial_weights)}) does not match "
+            f"number of assets ({data.shape[1]})."
+        )
     cov_matrix = get_cov_matrix(data, use_copulae)
+    missing = set(data.columns) - set(expected_returns.index)
+    if missing:
+        raise KeyError(f"Expected returns missing for columns: {missing}")
     rets = expected_returns.loc[data.columns].values
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
@@ -238,6 +271,8 @@ def optimize(data: pd.DataFrame,
                            method='SLSQP',
                            bounds=bounds,
                            constraints=cons)
+    if not sol.success:
+        logger.warning("Optimization did not converge: %s", sol.message)
     return sol
 
 
@@ -355,10 +390,19 @@ def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
     :use_forecasts: bool of whether to use forecasts.
     """
     global variances, expected_returns, data
+    if prices is None or prices.empty:
+        raise ValueError("prices DataFrame is None or empty.")
     if use_forecasts:
         data = calculate_returns(prices).transpose()
-        variances = load_data('Data/variances.csv')
-        expected_returns = load_data('Data/expected_returns.csv')['0']
+        try:
+            variances = load_data('Data/variances.csv')
+            expected_returns = load_data('Data/expected_returns.csv')['0']
+        except (FileNotFoundError, KeyError) as e:
+            logger.warning(
+                "Could not load forecast files (%s); falling back to historical estimates.", e
+            )
+            variances = None
+            expected_returns = data.T.mean() * 252
     else:
         data = calculate_returns(prices).transpose()
         variances = None

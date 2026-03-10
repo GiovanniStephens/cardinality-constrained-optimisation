@@ -6,7 +6,7 @@ import pulp
 def load_data(filename: str) -> pd.DataFrame:
     prices_df = pd.read_csv(filename, index_col=0)
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
-    prices_df = prices_df.fillna(method='ffill')
+    prices_df = prices_df.ffill()
     return prices_df
 
 
@@ -75,6 +75,9 @@ if __name__ == '__main__':
     portfolio_problem, selection = setup_portfolio_selection_problem(log_returns.columns, expected_returns,
                                                                      volatilities, risk_aversion)
     portfolio_problem.solve()
+
+    if portfolio_problem.status != pulp.constants.LpStatusOptimal:
+        print(f"Warning: Solver did not find optimal solution. Status: {pulp.LpStatus[portfolio_problem.status]}")
 
     # Output the selected ETFs
     print("Selected ETFs in the Portfolio:")

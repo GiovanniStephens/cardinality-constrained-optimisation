@@ -6,7 +6,7 @@ import os
 def load_data(filename: str) -> pd.DataFrame:
     prices_df = pd.read_csv(filename, index_col=0)
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
-    prices_df = prices_df.fillna(method='ffill')
+    prices_df = prices_df.ffill()
     return prices_df
 
 def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
@@ -65,11 +65,9 @@ def monte_carlo_search(data, trials, max_num_etfs):
     return best_portfolio, best_fitness
 
 def parallel_monte_carlo(data, num_trials, num_processes, max_num_etfs):
-    pool = Pool(num_processes)
     trials_per_process = num_trials // num_processes
-    results = pool.starmap(monte_carlo_search, [(data, trials_per_process, max_num_etfs) for _ in range(num_processes)])
-    pool.close()
-    pool.join()
+    with Pool(num_processes) as pool:
+        results = pool.starmap(monte_carlo_search, [(data, trials_per_process, max_num_etfs) for _ in range(num_processes)])
 
     # Find the best result across all processes
     best_solution, best_fitness = max(results, key=lambda x: x[1])

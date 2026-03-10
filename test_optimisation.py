@@ -293,6 +293,67 @@ class TestOptimisation(unittest.TestCase):
         op.prepare_opt_inputs(data, use_forecasts=False)
         self.assertEqual(op.variances, None)
 
+    def test_sharpe_ratio_zero_volatility(self):
+        """
+        When all weights are zero or covariance is zero,
+        the sharpe ratio should return 0 instead of raising.
+        """
+        weights = np.array([0.0, 0.0])
+        returns = np.array([0.2, 0.3])
+        cov_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
+        result = op.sharpe_ratio(weights, returns, cov_matrix)
+        self.assertEqual(result, 0.0)
+
+    def test_load_data_empty_csv(self):
+        """
+        Loading an empty CSV should raise ValueError.
+        """
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
+                                          delete=False) as f:
+            f.write('')
+            temp_path = f.name
+        try:
+            with self.assertRaises((ValueError, pd.errors.EmptyDataError)):
+                op.load_data(temp_path)
+        finally:
+            os.unlink(temp_path)
+
+    def test_prepare_opt_inputs_none_prices(self):
+        """
+        Passing None prices should raise ValueError.
+        """
+        with self.assertRaises(ValueError):
+            op.prepare_opt_inputs(None, use_forecasts=False)
+
+    def test_prepare_opt_inputs_empty_prices(self):
+        """
+        Passing empty DataFrame should raise ValueError.
+        """
+        with self.assertRaises(ValueError):
+            op.prepare_opt_inputs(pd.DataFrame(), use_forecasts=False)
+
+    def test_optimize_mismatched_weights(self):
+        """
+        When initial_weights length doesn't match data columns,
+        should raise ValueError.
+        """
+        data = op.load_data('Data/ETF_Prices.csv')
+        op.prepare_opt_inputs(data, use_forecasts=False)
+        log_returns = op.calculate_returns(data)
+        with self.assertRaises(ValueError):
+            op.optimize(log_returns.iloc[:, :5],
+                        [0.5, 0.5])  # 2 weights for 5 assets
+
+    def test_calculate_returns_handles_zeros(self):
+        """
+        Log of zero prices should produce 0 not -inf.
+        """
+        data = pd.DataFrame({'A': [100, 0, 50]})
+        log_returns = op.calculate_returns(data)
+        self.assertFalse(np.any(np.isinf(log_returns.values)))
+
 
     def test_estimate_corr_using_copulas_is_correlation_matrix(self):
         """
