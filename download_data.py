@@ -7,40 +7,45 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 
-def load_etfs(filename: str) -> pd.DataFrame:
+def load_tickers(filename: str, ticker_column: str = 'Tickers') -> pd.DataFrame:
     """
-    Loads the list of ETFs from my local file.
+    Loads the list of tickers from a local CSV file.
 
-    :returns: list of ETFs as a pandas DataFrame.
+    :param filename: path to CSV file containing tickers.
+    :param ticker_column: name of the column containing ticker symbols.
+    :returns: list of tickers as a pandas DataFrame.
     """
-    etfs = pd.read_csv(filename)
-    if etfs.empty:
-        raise ValueError(f"ETF list file '{filename}' is empty.")
-    if 'Tickers' not in etfs.columns:
-        raise KeyError("ETF file must contain a 'Tickers' column.")
-    return etfs
+    tickers = pd.read_csv(filename)
+    if tickers.empty:
+        raise ValueError(f"Ticker list file '{filename}' is empty.")
+    if ticker_column not in tickers.columns:
+        raise ValueError(
+            f"Column '{ticker_column}' not found in {filename}. "
+            f"Available columns: {list(tickers.columns)}"
+        )
+    return tickers
 
 
 def download_data(
-    etfs: pd.DataFrame,
-    ticker_col: str = "Tickers",
+    tickers_df: pd.DataFrame,
+    ticker_column: str = "Tickers",
     start: str = "2014-04-30",
     end: str = "2025-04-30",
     batch_size: int = 500,
 ) -> pd.DataFrame:
     """
-    Downloads data from Yahoo Finance for the given list of tickers.
+    Downloads closing price data from Yahoo Finance for the given tickers.
 
     Processes tickers in batches to avoid timeouts with large ticker lists.
 
-    :etfs: DataFrame containing ticker symbols.
-    :ticker_col: name of the column containing ticker symbols.
-    :start: start date for the download (YYYY-MM-DD).
-    :end: end date for the download (YYYY-MM-DD).
-    :batch_size: number of tickers to download per batch.
-    :returns: daily price data for the given list of tickers.
+    :param tickers_df: DataFrame containing ticker symbols.
+    :param ticker_column: name of the column containing ticker symbols.
+    :param start: start date for price data.
+    :param end: end date for price data.
+    :param batch_size: number of tickers to download per batch.
+    :returns: daily closing price data as a DataFrame.
     """
-    all_tickers = etfs[ticker_col].tolist()
+    all_tickers = tickers_df[ticker_column].tolist()
     batches = [
         all_tickers[i : i + batch_size]
         for i in range(0, len(all_tickers), batch_size)
@@ -79,11 +84,15 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
     """
     Saves the given DataFrame to a CSV file.
 
-    :prices: daily price data for the given list of ETFs.
-    :filename: name of the file to save the data to.
+    :param prices: daily price data.
+    :param filename: name of the file to save the data to.
     """
     prices.to_csv(filename)
     logger.info("Saved %d rows x %d columns to %s", len(prices), len(prices.columns), filename)
+
+
+# Keep backward compatibility
+load_etfs = load_tickers
 
 
 def main():
@@ -91,10 +100,10 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    etfs = load_etfs('Data/ETFs_Full.csv')
-    logger.info("Loaded %d ETFs from list", len(etfs))
+    tickers = load_tickers('Data/ETFs_Full.csv', ticker_column='Tickers')
+    logger.info("Loaded %d tickers from list", len(tickers))
     try:
-        prices = download_data(etfs)
+        prices = download_data(tickers, ticker_column='Tickers')
     except Exception:
         logger.exception("Failed to download price data from Yahoo Finance")
         return
