@@ -5,7 +5,9 @@ muarch
 numpy
 pandas
 pmdarima
+pulp
 pygad
+scikit-posthocs
 scipy
 seaborn
 tqdm
