@@ -1,6 +1,10 @@
-import pandas as pd
+import logging
+
 import numpy as np
+import pandas as pd
 import pulp
+
+logger = logging.getLogger(__name__)
 
 
 def load_data(filename: str) -> pd.DataFrame:
@@ -61,9 +65,14 @@ def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     # Load data
     prices_df = load_data('Data/ETF_Prices.csv')
     prices_df = prices_df.iloc[:-213]
+    logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     log_returns = calculate_returns(prices_df)
     expected_returns = calculate_expected_returns(log_returns)
     volatilities = np.sqrt(calculate_variances(log_returns))
@@ -75,14 +84,13 @@ if __name__ == '__main__':
     portfolio_problem, selection = setup_portfolio_selection_problem(log_returns.columns, expected_returns,
                                                                      volatilities, risk_aversion)
     portfolio_problem.solve()
+    logger.info("MILP solver status: %s", pulp.LpStatus[portfolio_problem.status])
 
     if portfolio_problem.status != pulp.constants.LpStatusOptimal:
         print(f"Warning: Solver did not find optimal solution. Status: {pulp.LpStatus[portfolio_problem.status]}")
 
     # Output the selected ETFs
-    print("Selected ETFs in the Portfolio:")
-    for etf in log_returns.columns:
-        if pulp.value(selection[etf]) == 1:
-            print(etf)
-    sharpe_ratio = portfolio_sharpe_ratio(selection, expected_returns, log_returns)
-    print(f"Portfolio Sharpe Ratio: {sharpe_ratio}")
+    selected = [etf for etf in log_returns.columns if pulp.value(selection[etf]) == 1]
+    logger.info("Selected ETFs in the Portfolio: %s", selected)
+    sharpe = portfolio_sharpe_ratio(selection, expected_returns, log_returns)
+    logger.info("Portfolio Sharpe Ratio: %.4f", sharpe)

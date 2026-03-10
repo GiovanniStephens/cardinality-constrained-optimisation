@@ -1,10 +1,13 @@
+import logging
+import os
 import time
 
 import numpy as np
 import pandas as pd
 import scipy.optimize as opt
 from multiprocessing import Pool, Manager
-import os
+
+logger = logging.getLogger(__name__)
 
 
 def load_data(filename: str) -> pd.DataFrame:
@@ -140,7 +143,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
         fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
         current_best_fitness = np.max(fitness)
-        print(f"Island {island_id}, Generation {generation}, Best Fitness: {current_best_fitness}")
+        logger.debug("Island %d, Generation %d, Best Fitness: %.6f", island_id, generation, current_best_fitness)
         if convergence_log is not None:
             convergence_log.append((time.time() - start_time, generation,
                                     current_best_fitness, float(np.mean(fitness)), island_id))
@@ -173,12 +176,18 @@ def run_parallel_ga(data, num_generations, total_population_size,
     def init_random_state():
         np.random.seed(None)
 
+    logger.info(
+        "Starting island GA: %d islands, %d generations, population=%d",
+        num_islands, num_generations, total_population_size,
+    )
+    start = time.time()
     with Pool(num_islands, initializer=init_random_state) as pool:
         island_pop_size = total_population_size // num_islands
         args = [(i, num_islands, data, num_generations, island_pop_size,
                  mutation_rate, num_elites, migration_interval,
                  migration_rate, return_dict) for i in range(num_islands)]
         results = pool.starmap(genetic_algorithm, args)
+    elapsed = time.time() - start
     best_fitness = float('-inf')
     best_solution = None
     for result in results:
@@ -187,6 +196,7 @@ def run_parallel_ga(data, num_generations, total_population_size,
             if fitness > best_fitness:
                 best_fitness = fitness
                 best_solution = solution
+    logger.info("Island GA completed in %.1fs, best fitness=%.6f", elapsed, best_fitness)
     return best_solution, best_fitness
 
 
@@ -215,14 +225,19 @@ def optimise_weights(best_solution, data, min_return=0.12):
 
 
 def print_results(tickers, optimal_weights, amount_to_allocate=5000):
-    print("\nOptimised Portfolio Allocation:")
+    logger.info("Optimised Portfolio Allocation:")
     for ticker, weight in zip(tickers, optimal_weights):
         if weight > 1e-4:
-            print(f"{ticker}: {weight*100:.1f}% (${weight*amount_to_allocate:.2f})")
+            logger.info("  %s: %.1f%% ($%.2f)", ticker, weight*100, weight*amount_to_allocate)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     data = load_data('Data/time_series_20251016_113257.csv')
+    logger.info("Loaded price data: %d rows x %d columns", *data.shape)
     # Skip ETFs.csv filtering for NZ managed funds data
     # etfs = pd.read_csv('Data/ETFs.csv')
     # etfs_in_data_but_not_in_etfs = set(data.columns) - set(etfs['Tickers'])
@@ -245,16 +260,15 @@ if __name__ == '__main__':
     ga_elapsed = time.time() - ga_start
 
     if best_solution is not None:
-        print("Best Solution (ETF Selection Vector):", best_solution.astype(int))
-        print("Best Fitness (Sharpe Ratio from GA):", best_fitness)
+        logger.info("Best Solution (ETF Selection Vector): %s", best_solution.astype(int))
+        logger.info("Best Fitness (Sharpe Ratio from GA): %.6f", best_fitness)
         selected_etfs = data.columns[best_solution == 1]
-        print(f"\nSelected {len(selected_etfs)} ETFs:")
-        print(list(selected_etfs))
+        logger.info("Selected %d ETFs: %s", len(selected_etfs), list(selected_etfs))
         optimised_result = optimise_weights(best_solution, data)
         if optimised_result.success:
             print_results(selected_etfs, optimised_result.x, amount_to_allocate=20000)
             final_sharpe = -optimised_result.fun
-            print(f"\nFinal Optimised Sharpe Ratio: {final_sharpe:.4f}")
+            logger.info("Final Optimised Sharpe Ratio: %.4f", final_sharpe)
 
             # Save to database
             log_returns = calculate_returns(data[selected_etfs])
@@ -288,9 +302,9 @@ if __name__ == '__main__':
                     'elapsed_seconds': ga_elapsed,
                 },
                 holdings=list(zip(selected_etfs, optimised_result.x)))
-            print(f"Run saved to database (id={run_id})")
+            logger.info("Run saved to database (id=%d)", run_id)
             conn.close()
         else:
-            print("\nWeight optimisation failed:", optimised_result.message)
+            logger.warning("Weight optimisation failed: %s", optimised_result.message)
     else:
-        print("Genetic algorithm did not find a valid solution.")
+        logger.error("Genetic algorithm did not find a valid solution.")

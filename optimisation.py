@@ -9,7 +9,12 @@ from copulae import GaussianCopula, TCopula
 from muarch import MUArch
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
-warnings.filterwarnings("ignore")
+# Suppress known noisy warnings from dependencies, not all warnings globally.
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*divide by zero.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*invalid value.*")
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -376,10 +381,14 @@ def on_generation(ga_instance: pygad.GA) -> None:
     :ga_instance: the GA instance.
     """
     global last_fitness
-    print(f"Generation = {ga_instance.generations_completed}")
-    print(f"Fitness    = {ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]}")
-    print(f"Change     = {ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1] - last_fitness}")
-    last_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
+    current_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
+    logger.debug(
+        "Generation %d: fitness=%.6f, change=%.6f",
+        ga_instance.generations_completed,
+        current_fitness,
+        current_fitness - last_fitness,
+    )
+    last_fitness = current_fitness
 
 
 def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
@@ -439,12 +448,18 @@ def cardinality_constrained_optimisation(num_children: int = 1000,
                            fitness_func=fitness_2,
                            on_generation=on_gen,
                            stop_criteria='saturate_5')
+    start = time.time()
     ga_instance.run()
+    elapsed = time.time() - start
     solution, solution_fitness, solution_idx = ga_instance.best_solution(ga_instance.last_generation_fitness)
+    logger.info(
+        "GA completed in %.1fs — %d generations, best fitness=%.6f",
+        elapsed,
+        ga_instance.generations_completed,
+        solution_fitness,
+    )
     if verbose:
-        print(f"Parameters of the best solution : {solution}")
-        print(f"Fitness value of the best solution = {solution_fitness}")
-        print(f"Index of the best solution : {solution_idx}")
+        logger.debug("Best solution params: %s (index %d)", solution, solution_idx)
     return solution
 
 
@@ -468,6 +483,7 @@ def main():
 
     # Load the data
     prices_df = load_data('Data/NZ_ETF_Prices.csv')
+    logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     # Prepare the inputs for the optimisation
     use_forecasts = True
     prepare_opt_inputs(prices_df, use_forecasts=use_forecasts)
@@ -490,24 +506,19 @@ def main():
                    target_risk=TARGET_RISK,
                    max_weight=MAX_WEIGHT,
                    min_weight=MIN_WEIGHT)
-    # Print the optimal weights
-    print(sol.x)
+    if not sol.success:
+        logger.warning("Weight optimisation did not converge: %s", sol.message)
     best_weights = sol['x']
-    # Print the portfolio return
-    portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
-    print(portfolio_ret)
     cov = best_portfolio_returns.cov()*252
     risk = float(np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights))))
-    # Print the portfolio standard deviation
-    print(risk)
-    # Print the Sharpe Ratio
+    portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
     best_sharpe = float(fitness(best_individual, log_returns.T))
-    print(best_sharpe)
-    # Print the portfolio constituents with their optimal allocations
     selected_tickers = list(prices_df.iloc[:, indeces].columns)
     stock_allocations = {ticker: weight for ticker, weight in
                          zip(selected_tickers, sol.x)}
-    print(stock_allocations)
+    logger.info("Optimal weights: %s", sol.x)
+    logger.info("Portfolio return=%.4f, risk=%.4f, Sharpe=%.4f", portfolio_ret, risk, best_sharpe)
+    logger.info("Allocations: %s", stock_allocations)
 
     # Save to database
     import db
@@ -537,8 +548,13 @@ def main():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     prices_df = load_data('Data/NZ_ETF_Prices.csv')
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
+    logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)
     # portfolio = create_portfolio(num_children=100)
@@ -546,7 +562,7 @@ if __name__ == '__main__':
     portfolio = ['USF.NZ', 'NZC.NZ', 'USV.NZ', 'USA.NZ', 'ASF.NZ']
     # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
 
-    print(portfolio)
+    logger.info("Portfolio: %s", portfolio)
     data = log_returns.loc[:, portfolio]
     random_weights = np.random.random(len(portfolio))
     random_weights /= np.sum(random_weights)
@@ -556,4 +572,4 @@ if __name__ == '__main__':
                    max_weight=0.4,
                    target_return=0.15,
                    use_copulae=True)
-    print(res)
+    logger.info("Optimisation result: %s", res)
