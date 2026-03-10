@@ -78,6 +78,12 @@ def main():
     filtered_prices = prices.dropna(axis=1, thresh=90)
     save_to_csv(filtered_prices, 'Data/ETF_Prices.csv')
 
+    import db
+    conn = db.get_connection()
+    ds_id = db.save_prices(conn, filtered_prices, exchange='US', asset_type='etf')
+    print(f"Prices saved to database (data_source id={ds_id})")
+    conn.close()
+
 
 if __name__ == '__main__':
     main()
