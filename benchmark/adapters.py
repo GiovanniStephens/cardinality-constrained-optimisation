@@ -276,8 +276,9 @@ class MonteCarloAdapter(OptimiserAdapter):
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        from simple_ga_optimisation import (
-            calculate_returns, calculate_expected_returns,
+        from portfolio_utils import (
+            calculate_log_returns as calculate_returns,
+            calculate_expected_returns,
             calculate_covariance_matrix,
         )
 
@@ -368,10 +369,12 @@ class MIPAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pulp
-        from mip_optimisation import (
-            calculate_returns, calculate_expected_returns,
-            calculate_variances, portfolio_sharpe_ratio,
+        from portfolio_utils import (
+            calculate_log_returns as calculate_returns,
+            calculate_expected_returns,
+            calculate_variances,
         )
+        from mip_optimisation import portfolio_sharpe_ratio
 
         start_time = time.time()
 
