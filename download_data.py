@@ -87,10 +87,24 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     etfs = load_etfs('Data/ETFs_Full.csv')
-    prices = download_data(etfs)
+    logger.info("Loaded %d ETFs from list", len(etfs))
+    try:
+        prices = download_data(etfs)
+    except Exception:
+        logger.exception("Failed to download price data from Yahoo Finance")
+        return
+    logger.info("Downloaded price data: %d rows x %d columns", *prices.shape)
     filtered_prices = prices.dropna(axis=1, thresh=90)
+    dropped = prices.shape[1] - filtered_prices.shape[1]
+    if dropped:
+        logger.info("Dropped %d columns with insufficient data", dropped)
     save_to_csv(filtered_prices, 'Data/ETF_Prices.csv')
+    logger.info("Saved filtered prices to Data/ETF_Prices.csv")
 
     import db
     conn = db.get_connection()

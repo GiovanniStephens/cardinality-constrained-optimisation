@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+import time
 from multiprocessing import cpu_count
 
 import numpy as np
@@ -245,15 +246,33 @@ def main():
     bt_start = _time.time()
 
     # Create a pool of workers
+    logger.info(
+        "Creating %d portfolios (no forecast) across %d workers",
+        NUM_PORTFOLIOS, NUM_JOBS,
+    )
+    start = time.time()
     params = [NUM_CHILDREN]*NUM_PORTFOLIOS
     with mp.Pool(processes=NUM_JOBS) as pool:
         portfolios = pool.map(create_portfolio, params)
+    logger.info(
+        "Portfolio creation (no forecast) completed in %.1fs, got %d portfolios",
+        time.time() - start, len(portfolios),
+    )
 
     global USE_FORECAST
     USE_FORECAST = True
+    logger.info(
+        "Creating %d portfolios (with forecast) across %d workers",
+        NUM_PORTFOLIOS, NUM_JOBS,
+    )
+    start = time.time()
     with mp.Pool(processes=NUM_JOBS) as pool:
         forecast_portfolios = pool.map(create_portfolio,
                                        [NUM_CHILDREN]*NUM_PORTFOLIOS)
+    logger.info(
+        "Portfolio creation (with forecast) completed in %.1fs, got %d portfolios",
+        time.time() - start, len(forecast_portfolios),
+    )
 
     # Create a set of randomly selected portfolios
     op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
@@ -325,31 +344,31 @@ def main():
                                         in zip(random_portfolios,
                                                random_portfolios_random_weights)]
 
-    print('PORTFOLIO SHARPE RATIO STATISTICS:\n')
-    print(f'Cardinality-constrained, optimised portfolio mean: \
-          {np.array([stat[2] for stat in portfolios_fitness]).mean()}')
-    print(f'Cardinality-constrained, optimised portfolio std: \
-          {np.array([stat[2] for stat in portfolios_fitness]).std()}')
-    print(f'Cardinality-constrained, optimised portfolio using copulae mean: \
-          {np.array([stat[2] for stat in portfolios_fitness_w_copulae]).mean()}')
-    print(f'Cardinality-constrained, optimised portfolio using copulae std: \
-          {np.array([stat[2] for stat in portfolios_fitness_w_copulae]).std()}')
-    print(f'Cardinality-constrained, optimised portfolio w/ forecasts mean: \
-          {np.array([stat[2] for stat in forecast_portfolios_fitness]).mean()}')
-    print(f'Cardinality-constrained, optimised portfolio w/ forecasts std: \
-          {np.array([stat[2] for stat in forecast_portfolios_fitness]).std()}')
-    print(f'Cardinality-constrained, random weightings portfolio mean: \
-          {np.array([stat[2] for stat in portfolios_random_fitness]).mean()}')
-    print(f'Cardinality-constrained, random weightings portfolio std: \
-          {np.array([stat[2] for stat in portfolios_random_fitness]).std()}')
-    print(f'\nRandom selections, optimised portfolio mean: \
-          {np.array([stat[2] for stat in random_portfolios_fitness]).mean()}')
-    print(f'Random selections, optimised portfolio std: \
-          {np.array([stat[2] for stat in random_portfolios_fitness]).std()}')
-    print(f'Random selections, random weightings portfolio mean: \
-          {np.array([stat[2] for stat in random_portfolios_random_fitness]).mean()}')
-    print(f'Random selections, random weightings portfolio std: \
-          {np.array([stat[2] for stat in random_portfolios_random_fitness]).std()}')
+    logger.info('PORTFOLIO SHARPE RATIO STATISTICS:')
+    logger.info('Cardinality-constrained, optimised portfolio mean: %.4f',
+                np.array([stat[2] for stat in portfolios_fitness]).mean())
+    logger.info('Cardinality-constrained, optimised portfolio std: %.4f',
+                np.array([stat[2] for stat in portfolios_fitness]).std())
+    logger.info('Cardinality-constrained, optimised portfolio using copulae mean: %.4f',
+                np.array([stat[2] for stat in portfolios_fitness_w_copulae]).mean())
+    logger.info('Cardinality-constrained, optimised portfolio using copulae std: %.4f',
+                np.array([stat[2] for stat in portfolios_fitness_w_copulae]).std())
+    logger.info('Cardinality-constrained, optimised portfolio w/ forecasts mean: %.4f',
+                np.array([stat[2] for stat in forecast_portfolios_fitness]).mean())
+    logger.info('Cardinality-constrained, optimised portfolio w/ forecasts std: %.4f',
+                np.array([stat[2] for stat in forecast_portfolios_fitness]).std())
+    logger.info('Cardinality-constrained, random weightings portfolio mean: %.4f',
+                np.array([stat[2] for stat in portfolios_random_fitness]).mean())
+    logger.info('Cardinality-constrained, random weightings portfolio std: %.4f',
+                np.array([stat[2] for stat in portfolios_random_fitness]).std())
+    logger.info('Random selections, optimised portfolio mean: %.4f',
+                np.array([stat[2] for stat in random_portfolios_fitness]).mean())
+    logger.info('Random selections, optimised portfolio std: %.4f',
+                np.array([stat[2] for stat in random_portfolios_fitness]).std())
+    logger.info('Random selections, random weightings portfolio mean: %.4f',
+                np.array([stat[2] for stat in random_portfolios_random_fitness]).mean())
+    logger.info('Random selections, random weightings portfolio std: %.4f',
+                np.array([stat[2] for stat in random_portfolios_random_fitness]).std())
 
     # Save to database
     bt_elapsed = _time.time() - bt_start
@@ -429,6 +448,10 @@ def main():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     main()
     portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD']
     op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],
@@ -437,4 +460,4 @@ if __name__ == '__main__':
     log_returns = op.calculate_returns(data)
     weights = optimal_weights(portfolio, use_copulae=True)
     # portfolio_returns = run_portfolio(portfolio, weights, log_returns)
-    print(get_statistics(portfolio, weights, log_returns))
+    logger.info("Portfolio statistics: %s", get_statistics(portfolio, weights, log_returns))

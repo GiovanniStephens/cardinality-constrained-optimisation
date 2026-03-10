@@ -1,7 +1,12 @@
+import logging
+import os
+import time
+
 import numpy as np
 import pandas as pd
 from multiprocessing import Pool, Manager
-import os
+
+logger = logging.getLogger(__name__)
 
 def load_data(filename: str) -> pd.DataFrame:
     prices_df = pd.read_csv(filename, index_col=0)
@@ -65,21 +70,32 @@ def monte_carlo_search(data, trials, max_num_etfs):
     return best_portfolio, best_fitness
 
 def parallel_monte_carlo(data, num_trials, num_processes, max_num_etfs):
+    logger.info(
+        "Starting Monte Carlo: %d trials across %d processes",
+        num_trials, num_processes,
+    )
+    start = time.time()
     trials_per_process = num_trials // num_processes
     with Pool(num_processes) as pool:
         results = pool.starmap(monte_carlo_search, [(data, trials_per_process, max_num_etfs) for _ in range(num_processes)])
 
     # Find the best result across all processes
     best_solution, best_fitness = max(results, key=lambda x: x[1])
+    logger.info("Monte Carlo completed in %.1fs, best fitness=%.6f", time.time() - start, best_fitness)
     return best_solution, best_fitness
 
 # Load data and run the Monte Carlo simulation
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 data = load_data('Data/ETF_Prices.csv')
+logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 num_trials = 10000000
 num_processes = os.cpu_count()
 max_num_etfs = 10
 best_solution, best_fitness = parallel_monte_carlo(data, num_trials, num_processes, max_num_etfs)
 
-print("Best Solution:", best_solution)
-print("Best Sharpe Ratio:", best_fitness)
-print("Selected ETFs:", data.columns[best_solution == 1])
+logger.info("Best Solution: %s", best_solution)
+logger.info("Best Sharpe Ratio: %.6f", best_fitness)
+logger.info("Selected ETFs: %s", list(data.columns[best_solution == 1]))

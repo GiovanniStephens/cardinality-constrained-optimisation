@@ -14,10 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     start_time = time.time()
 
     data = op.load_data('Data/ETF_Prices.csv')
     data = data.dropna(axis=1, thresh=0.95*len(data))
+    logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
     training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 
     if len(training_data) < 30:
@@ -29,7 +34,8 @@ def main():
 
     # Forecast returns
     n_periods = 252
-    print('Forecasting returns...')
+    logger.info('Forecasting returns for %d tickers...', len(data.columns))
+    forecast_start = time.time()
     expected_returns = {}
     failed_return_tickers = []
     for ticker in tqdm.tqdm(data.columns):
@@ -64,9 +70,11 @@ def main():
     expected_returns = pd.DataFrame.from_dict(expected_returns,
                                               orient='index')
     expected_returns.to_csv('Data/expected_returns.csv')
+    logger.info("Return forecasting completed in %.1fs", time.time() - forecast_start)
 
     # Forecast volatility
-    print('\nForecasting volatility...')
+    logger.info('Forecasting volatility for %d tickers...', len(data.columns))
+    vol_start = time.time()
     volatilities = {}
     failed_vol_tickers = []
     for ticker in tqdm.tqdm(data.columns):
@@ -99,6 +107,7 @@ def main():
     volatilities = pd.DataFrame.from_dict(volatilities,
                                           orient='index')
     volatilities.to_csv('Data/variances.csv')
+    logger.info("Volatility forecasting completed in %.1fs", time.time() - vol_start)
 
     elapsed = time.time() - start_time
 
@@ -108,7 +117,7 @@ def main():
     run_id = db.save_forecast_results(conn, expected_returns[0], volatilities[0],
                                       n_periods=n_periods,
                                       elapsed_seconds=elapsed)
-    print(f"\nForecasts saved to database (forecast_run id={run_id})")
+    logger.info("Forecasts saved to database (forecast_run id=%d)", run_id)
     conn.close()
 
 
