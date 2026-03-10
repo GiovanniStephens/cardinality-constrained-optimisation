@@ -1,3 +1,4 @@
+import logging
 import multiprocessing as mp
 from multiprocessing import cpu_count
 
@@ -6,6 +7,8 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 import optimisation as op
+
+logger = logging.getLogger(__name__)
 
 # This is the backtest sample size.
 # Ideally, it would be >= 30 to get a robust statistic.
@@ -39,6 +42,8 @@ def get_random_weights(portfolio):
     :portfolio: Input portfolio to get the length.
     :return: A set of random weights equal in length to the portfolio.
     """
+    if not portfolio:
+        raise ValueError("Cannot generate weights for an empty portfolio.")
     random_weights = np.random.random(len(portfolio))
     random_weights /= np.sum(random_weights)
     return random_weights
@@ -53,11 +58,19 @@ def optimal_weights(portfolio, use_copulae=False):
     :use_copulae: Whether to use copulae or not.
     :return: A list of weights for the input portfolio.
     """
+    if len(portfolio) < 2:
+        raise ValueError("Portfolio must contain at least 2 assets.")
+    missing = set(portfolio) - set(op.data.index)
+    if missing:
+        raise KeyError(f"Tickers not found in data: {missing}")
     random_weights = get_random_weights(portfolio)
-    return op.optimize(op.data.loc[portfolio, :].transpose(),
-                       random_weights,
-                       max_weight=max(1/(len(portfolio)-1), 0.3),
-                       use_copulae=use_copulae)['x']
+    result = op.optimize(op.data.loc[portfolio, :].transpose(),
+                         random_weights,
+                         max_weight=max(1/(len(portfolio)-1), 0.3),
+                         use_copulae=use_copulae)
+    if not result.success:
+        logger.warning("Weight optimization did not converge: %s", result.message)
+    return result['x']
 
 
 def run_portfolio(portfolio, weights, log_returns):
@@ -123,6 +136,8 @@ def downside_deviation(portfolio_returns, mar = 0):
     :mar: threshold below which one would calculate the deviation.
     :return: downside deviation.
     """
+    if not portfolio_returns:
+        return 0.0
     squared_dev = 0
     for i in portfolio_returns:
         if i < mar:
@@ -140,6 +155,8 @@ def sortino_ratio(r, downside_deviation, MAR = 0):
     :MAR: The threshold under which the deviation is calculated.
     :return: float for the Sortino Ratio.
     """
+    if downside_deviation == 0:
+        return 0.0
     return (r- MAR) / downside_deviation
 
 
@@ -151,6 +168,8 @@ def calmar_ratio(r, downside_drawdown):
     :downside_deviation: The maximum drawdown over a period in % terms.
     :return: a float for the Calmar ratio
     """
+    if downside_drawdown == 0:
+        return 0.0
     return r / -downside_drawdown
 
 
@@ -180,8 +199,10 @@ def fitness(portfolio_returns):
     :portfolio_returns: The input portfolio returns. List of floats.
     :return: The fitness of the portfolio.
     """
-    return (np.mean(portfolio_returns) * 252) / \
-           (np.std(portfolio_returns) * np.sqrt(252))
+    portfolio_std = np.std(portfolio_returns) * np.sqrt(252)
+    if portfolio_std == 0:
+        return 0.0
+    return (np.mean(portfolio_returns) * 252) / portfolio_std
 
 
 def create_portfolio(num_children):
@@ -224,23 +245,15 @@ def main():
     bt_start = _time.time()
 
     # Create a pool of workers
-    pool = mp.Pool(processes=NUM_JOBS)
-    # Create a list of cardinality-constrained portfolios
     params = [NUM_CHILDREN]*NUM_PORTFOLIOS
-    portfolios = pool.map(create_portfolio,
-                          params)
-    # Close the pool and wait for the work to finish
-    pool.close()
-    pool.join()
+    with mp.Pool(processes=NUM_JOBS) as pool:
+        portfolios = pool.map(create_portfolio, params)
+
     global USE_FORECAST
     USE_FORECAST = True
-    pool = mp.Pool(processes=NUM_JOBS)
-    # Create a list of cardinality-constrained portfolios
-    forecast_portfolios = pool.map(create_portfolio,
-                                   [NUM_CHILDREN]*NUM_PORTFOLIOS)
-    # Close the pool and wait for the work to finish
-    pool.close()
-    pool.join()
+    with mp.Pool(processes=NUM_JOBS) as pool:
+        forecast_portfolios = pool.map(create_portfolio,
+                                       [NUM_CHILDREN]*NUM_PORTFOLIOS)
 
     # Create a set of randomly selected portfolios
     op.prepare_opt_inputs(data.iloc[252:-NUM_DAYS_OUT_OF_SAMPLE, :],

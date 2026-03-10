@@ -16,7 +16,7 @@ def load_data(filename: str) -> pd.DataFrame:
     prices_df = prices_df[prices_df.index >= two_years_ago]
     # Now apply the original filter
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
-    prices_df = prices_df.fillna(method='ffill')
+    prices_df = prices_df.ffill()
     return prices_df
 
 

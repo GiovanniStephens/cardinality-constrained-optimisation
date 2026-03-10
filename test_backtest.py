@@ -141,5 +141,60 @@ class TestBacktest(unittest.TestCase):
         self.assertLess(t, 0)
 
 
+    def test_get_random_weights_empty_portfolio(self):
+        """
+        An empty portfolio should raise ValueError.
+        """
+        with self.assertRaises(ValueError):
+            backtest.get_random_weights([])
+
+    def test_downside_deviation_empty_returns(self):
+        """
+        Empty returns list should return 0.
+        """
+        result = backtest.downside_deviation([])
+        self.assertEqual(result, 0.0)
+
+    def test_sortino_ratio_zero_deviation(self):
+        """
+        Zero downside deviation should return 0, not raise.
+        """
+        result = backtest.sortino_ratio(0.1, 0)
+        self.assertEqual(result, 0.0)
+
+    def test_calmar_ratio_zero_drawdown(self):
+        """
+        Zero max drawdown should return 0, not raise.
+        """
+        result = backtest.calmar_ratio(0.1, 0)
+        self.assertEqual(result, 0.0)
+
+    def test_fitness_zero_std(self):
+        """
+        Constant returns (zero std) should return 0, not raise.
+        """
+        constant_returns = [0.01] * 100
+        result = backtest.fitness(constant_returns)
+        self.assertEqual(result, 0.0)
+
+    def test_maximum_drawdown_single_return(self):
+        """
+        A single return should produce a valid max drawdown.
+        """
+        result = backtest.maximum_drawdown([0.01])
+        self.assertEqual(result, 0)
+
+    def test_optimal_weights_missing_ticker(self):
+        """
+        If tickers are not in the data, should raise KeyError.
+        """
+        backtest.op.prepare_opt_inputs(
+            backtest.data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :],
+            backtest.USE_FORECAST
+        )
+        with self.assertRaises(KeyError):
+            backtest.optimal_weights(['NONEXISTENT_TICKER_XYZ'])
+
+
 if __name__ == '__main__':
     unittest.main()

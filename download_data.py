@@ -1,6 +1,10 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 
 def load_etfs(filename: str) -> pd.DataFrame:
@@ -10,6 +14,10 @@ def load_etfs(filename: str) -> pd.DataFrame:
     :returns: list of ETFs as a pandas DataFrame.
     """
     etfs = pd.read_csv(filename)
+    if etfs.empty:
+        raise ValueError(f"ETF list file '{filename}' is empty.")
+    if 'Tickers' not in etfs.columns:
+        raise KeyError("ETF file must contain a 'Tickers' column.")
     return etfs
 
 
@@ -40,15 +48,18 @@ def download_data(
 
     all_prices = {}
     for batch_num, batch in enumerate(batches, 1):
-        print(f"Downloading batch {batch_num}/{len(batches)} ({len(batch)} tickers)...")
+        logger.info("Downloading batch %d/%d (%d tickers)...", batch_num, len(batches), len(batch))
         tickers_str = " ".join(batch)
-        prices = yf.download(
-            tickers_str,
-            interval="1d",
-            group_by="ticker",
-            start=start,
-            end=end,
-        )
+        try:
+            prices = yf.download(
+                tickers_str,
+                interval="1d",
+                group_by="ticker",
+                start=start,
+                end=end,
+            )
+        except Exception as e:
+            raise ConnectionError(f"Failed to download data from Yahoo Finance: {e}") from e
         for ticker in batch:
             try:
                 if len(batch) == 1:
@@ -56,8 +67,10 @@ def download_data(
                 else:
                     all_prices[ticker] = prices[ticker]["Close"].tolist()
             except (KeyError, TypeError):
-                pass
+                logger.warning("No data returned for ticker '%s'; skipping.", ticker)
 
+    if not all_prices:
+        raise ValueError("No valid price data could be extracted for any ticker.")
     prices_df = pd.DataFrame(all_prices)
     return prices_df
 
@@ -70,6 +83,7 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
     :filename: name of the file to save the data to.
     """
     prices.to_csv(filename)
+    logger.info("Saved %d rows x %d columns to %s", len(prices), len(prices.columns), filename)
 
 
 def main():
