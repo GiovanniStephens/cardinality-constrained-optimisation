@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pandas as pd
 import scipy.optimize as opt
@@ -56,10 +58,11 @@ def initialise_population(size, num_etfs, max_num_etfs):
     return np.random.binomial(1, p, size=(size, num_etfs))
 
 
-def calculate_fitness(individual, expected_returns, log_returns):
+def calculate_fitness(individual, expected_returns, log_returns, min_etfs=8, max_etfs=20,
+                      min_return=0.12):
     selected_indices = individual == 1
     num_selected_etfs = np.sum(selected_indices)
-    if num_selected_etfs < 8 or num_selected_etfs > 20:
+    if num_selected_etfs < min_etfs or num_selected_etfs > max_etfs:
         return -1e4
     if not selected_indices.any():
         return 0
@@ -68,7 +71,7 @@ def calculate_fitness(individual, expected_returns, log_returns):
     filtered_returns = expected_returns[selected_indices]
     weights = np.ones(num_selected_etfs) / num_selected_etfs
     portfolio_return = np.dot(weights, filtered_returns)
-    if portfolio_return < 0.12:
+    if min_return is not None and portfolio_return < min_return:
         return -1e4
     portfolio_variance = np.dot(weights.T, np.dot(cov_matrix_subset, weights))
     return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
@@ -109,7 +112,9 @@ def elitism(population, fitness, num_elites):
 
 def genetic_algorithm(island_id, num_islands, data, num_generations,
                       population_size, mutation_rate, num_elites,
-                      migration_interval, migration_rate, return_dict):
+                      migration_interval, migration_rate, return_dict,
+                      convergence_log=None, start_time=None, time_budget=None,
+                      min_etfs=8, max_etfs=20, min_return=0.12):
     num_etfs = data.shape[1]
     population = initialise_population(population_size, num_etfs, max_num_etfs=20)
     log_returns = calculate_returns(data)
@@ -129,11 +134,19 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                     population[replace_indices] = migrants
         fitness = []
         for ind in population:
-            fitness.append(calculate_fitness(ind, expected_returns, log_returns))
+            fitness.append(calculate_fitness(ind, expected_returns, log_returns,
+                                            min_etfs=min_etfs, max_etfs=max_etfs,
+                                            min_return=min_return))
         fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
         current_best_fitness = np.max(fitness)
         print(f"Island {island_id}, Generation {generation}, Best Fitness: {current_best_fitness}")
+        if convergence_log is not None:
+            convergence_log.append((time.time() - start_time, generation,
+                                    current_best_fitness, float(np.mean(fitness)), island_id))
+        if time_budget is not None and start_time is not None:
+            if (time.time() - start_time) > time_budget:
+                break
         parents = select_parents(population, fitness, num_elites)
         offspring = crossover(parents, (population_size - num_elites, num_etfs))
         offspring = mutate(offspring, mutation_rate)
@@ -177,7 +190,7 @@ def run_parallel_ga(data, num_generations, total_population_size,
     return best_solution, best_fitness
 
 
-def optimise_weights(best_solution, data):
+def optimise_weights(best_solution, data, min_return=0.12):
     selected_etfs = data.columns[best_solution == 1]
     data = data[selected_etfs]
     log_returns = calculate_returns(data)
@@ -186,7 +199,8 @@ def optimise_weights(best_solution, data):
     num_etfs = len(selected_etfs)
     bounds = [(0, 1) for _ in range(num_etfs)]
     constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
-    constraints.append({'type': 'ineq', 'fun': lambda x: np.dot(expected_returns, x) - 0.12})
+    if min_return is not None:
+        constraints.append({'type': 'ineq', 'fun': lambda x: np.dot(expected_returns, x) - min_return})
 
     def objective(x):
         portfolio_return = np.dot(expected_returns, x)
@@ -213,14 +227,23 @@ if __name__ == '__main__':
     # etfs = pd.read_csv('Data/ETFs.csv')
     # etfs_in_data_but_not_in_etfs = set(data.columns) - set(etfs['Tickers'])
     # data = data.drop(columns=list(etfs_in_data_but_not_in_etfs))
+    num_generations = 70
+    total_population_size = 8000
     mutation_rate = 1 / data.shape[1]
+    num_elites = 100
+    migration_interval = 10
+    migration_rate_val = 0.1
+
+    ga_start = time.time()
     best_solution, best_fitness = run_parallel_ga(data,
-                                                  num_generations=70,
-                                                  total_population_size=8000,
+                                                  num_generations=num_generations,
+                                                  total_population_size=total_population_size,
                                                   mutation_rate=mutation_rate,
-                                                  num_elites=100,
-                                                  migration_interval=10,
-                                                  migration_rate=0.1)
+                                                  num_elites=num_elites,
+                                                  migration_interval=migration_interval,
+                                                  migration_rate=migration_rate_val)
+    ga_elapsed = time.time() - ga_start
+
     if best_solution is not None:
         print("Best Solution (ETF Selection Vector):", best_solution.astype(int))
         print("Best Fitness (Sharpe Ratio from GA):", best_fitness)
@@ -229,9 +252,44 @@ if __name__ == '__main__':
         print(list(selected_etfs))
         optimised_result = optimise_weights(best_solution, data)
         if optimised_result.success:
-            print_results(selected_etfs, optimised_result.x)
+            print_results(selected_etfs, optimised_result.x, amount_to_allocate=20000)
             final_sharpe = -optimised_result.fun
             print(f"\nFinal Optimised Sharpe Ratio: {final_sharpe:.4f}")
+
+            # Save to database
+            log_returns = calculate_returns(data[selected_etfs])
+            expected_rets = calculate_expected_returns(log_returns)
+            portfolio_return = float(np.dot(optimised_result.x, expected_rets))
+            cov_matrix = calculate_covariance_matrix(log_returns)
+            portfolio_vol = float(np.sqrt(np.dot(optimised_result.x.T,
+                                                 np.dot(cov_matrix, optimised_result.x))))
+
+            import db
+            conn = db.get_connection()
+            run_id = db.save_optimisation_run(conn,
+                params={
+                    'script': 'simple_ga_optimisation',
+                    'data_source': 'investnow',
+                    'num_generations': num_generations,
+                    'total_population_size': total_population_size,
+                    'mutation_rate': mutation_rate,
+                    'num_elites': num_elites,
+                    'migration_interval': migration_interval,
+                    'migration_rate': migration_rate_val,
+                    'num_islands': os.cpu_count(),
+                    'min_etfs': 8,
+                    'max_etfs': 20,
+                },
+                results={
+                    'best_sharpe': final_sharpe,
+                    'portfolio_return': portfolio_return,
+                    'portfolio_volatility': portfolio_vol,
+                    'num_selected': len(selected_etfs),
+                    'elapsed_seconds': ga_elapsed,
+                },
+                holdings=list(zip(selected_etfs, optimised_result.x)))
+            print(f"Run saved to database (id={run_id})")
+            conn.close()
         else:
             print("\nWeight optimisation failed:", optimised_result.message)
     else:

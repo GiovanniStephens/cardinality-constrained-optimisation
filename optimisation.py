@@ -420,15 +420,21 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
 
 
 def main():
+    import time as _time
+
     # Load the data
     prices_df = load_data('Data/NZ_ETF_Prices.csv')
     # Prepare the inputs for the optimisation
-    prepare_opt_inputs(prices_df, use_forecasts=True)
+    use_forecasts = True
+    prepare_opt_inputs(prices_df, use_forecasts=use_forecasts)
 
     log_returns = calculate_returns(prices_df)
     # Run the cardinality constrained optimisation
+    opt_start = _time.time()
     best_individual = cardinality_constrained_optimisation(num_children=500,
                                                            verbose=True)
+    opt_elapsed = _time.time() - opt_start
+
     indeces = np.array(best_individual).astype(bool)
     # Print the portfolio metrics for the best portfolio we could find.
     best_portfolio_returns = log_returns.iloc[:, indeces]
@@ -444,18 +450,46 @@ def main():
     print(sol.x)
     best_weights = sol['x']
     # Print the portfolio return
-    print(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    print(portfolio_ret)
     cov = best_portfolio_returns.cov()*252
-    risk = np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights)))
+    risk = float(np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights))))
     # Print the portfolio standard deviation
     print(risk)
     # Print the Sharpe Ratio
-    print(fitness(best_individual, log_returns.T))
+    best_sharpe = float(fitness(best_individual, log_returns.T))
+    print(best_sharpe)
     # Print the portfolio constituents with their optimal allocations
+    selected_tickers = list(prices_df.iloc[:, indeces].columns)
     stock_allocations = {ticker: weight for ticker, weight in
-                         zip(prices_df.iloc[:, indeces].columns,
-                             sol.x)}
+                         zip(selected_tickers, sol.x)}
     print(stock_allocations)
+
+    # Save to database
+    import db
+    conn = db.get_connection()
+    run_id = db.save_optimisation_run(conn,
+        params={
+            'script': 'optimisation',
+            'data_source': 'yahoo_finance',
+            'min_etfs': MIN_NUM_STOCKS,
+            'max_etfs': MAX_NUM_STOCKS,
+            'min_weight': MIN_WEIGHT,
+            'max_weight': MAX_WEIGHT,
+            'target_return': TARGET_RETURN,
+            'target_risk': TARGET_RISK,
+            'use_forecasts': use_forecasts,
+        },
+        results={
+            'best_sharpe': best_sharpe,
+            'portfolio_return': portfolio_ret,
+            'portfolio_volatility': risk,
+            'num_selected': int(np.count_nonzero(best_individual)),
+            'elapsed_seconds': opt_elapsed,
+        },
+        holdings=list(zip(selected_tickers, sol.x)))
+    print(f"Run saved to database (id={run_id})")
+    conn.close()
 
 
 if __name__ == '__main__':
