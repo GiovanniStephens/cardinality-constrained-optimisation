@@ -215,7 +215,14 @@ def difference_of_means_hypothesis_test(sample_1, sample_2):
                 np.var(sample_2) / len(sample_2))
 
 
+METRIC_NAMES = ['annualised_return', 'annualised_volatility', 'sharpe_ratio',
+                 'downside_deviation', 'max_drawdown', 'calmar_ratio', 'sortino_ratio']
+
+
 def main():
+    import time as _time
+    bt_start = _time.time()
+
     # Create a pool of workers
     pool = mp.Pool(processes=NUM_JOBS)
     # Create a list of cardinality-constrained portfolios
@@ -330,6 +337,34 @@ def main():
           {np.array([stat[2] for stat in random_portfolios_random_fitness]).mean()}')
     print(f'Random selections, random weightings portfolio std: \
           {np.array([stat[2] for stat in random_portfolios_random_fitness]).std()}')
+
+    # Save to database
+    bt_elapsed = _time.time() - bt_start
+    import db
+    conn = db.get_connection()
+    session_id = db.save_backtest_session(conn, {
+        'data_source': 'yahoo_finance',
+        'num_portfolios': NUM_PORTFOLIOS,
+        'num_children': NUM_CHILDREN,
+        'num_days_oos': NUM_DAYS_OUT_OF_SAMPLE,
+        'use_forecast': USE_FORECAST,
+        'elapsed_seconds': bt_elapsed,
+    })
+    categories = [
+        ('cc_optimised',       portfolios_fitness,               portfolios,          portfolios_weights),
+        ('cc_copulae',         portfolios_fitness_w_copulae,     portfolios,          portfolios_weights_w_copulae),
+        ('cc_forecast',        forecast_portfolios_fitness,      forecast_portfolios, forecast_portfolios_weights),
+        ('cc_random_weights',  portfolios_random_fitness,        portfolios,          portfolios_random_weights),
+        ('random_optimised',   random_portfolios_fitness,        random_portfolios,   random_portfolios_weights),
+        ('random_random',      random_portfolios_random_fitness, random_portfolios,   random_portfolios_random_weights),
+    ]
+    for cat_name, fitness_list, pfolios, wts in categories:
+        for i, (stats, port, w) in enumerate(zip(fitness_list, pfolios, wts)):
+            db.save_backtest_result(conn, session_id, cat_name, i,
+                metrics=dict(zip(METRIC_NAMES, stats)),
+                holdings=list(zip(port, w)))
+    print(f"Backtest saved to database (session id={session_id})")
+    conn.close()
 
     """
     # Perform a hypothesis test to see if the difference in means is significant
