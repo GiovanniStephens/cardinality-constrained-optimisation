@@ -13,3 +13,4 @@ seaborn
 tqdm
 yfinance
 beautifulsoup4
+financedatabase
