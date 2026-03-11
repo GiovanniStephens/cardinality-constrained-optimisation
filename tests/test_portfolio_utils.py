@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from portfolio_utils import (
+from src.portfolio_utils import (
     load_prices_csv,
     calculate_log_returns,
     calculate_covariance_matrix,

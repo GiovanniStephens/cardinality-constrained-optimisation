@@ -7,7 +7,7 @@ import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-import optimisation as op
+from src import optimisation as op
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +372,7 @@ def main():
 
     # Save to database
     bt_elapsed = _time.time() - bt_start
-    import db
+    from src import db
     conn = db.get_connection()
     session_id = db.save_backtest_session(conn, {
         'data_source': 'yahoo_finance',

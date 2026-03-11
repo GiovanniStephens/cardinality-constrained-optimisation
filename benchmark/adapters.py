@@ -47,7 +47,7 @@ class SimpleGAAdapter(OptimiserAdapter):
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        from simple_ga_optimisation import (
+        from src.simple_ga_optimisation import (
             genetic_algorithm, optimise_weights,
         )
         np.random.seed(seed)
@@ -145,7 +145,7 @@ class PygadGAAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pygad
-        import optimisation as opt_mod
+        from src import optimisation as opt_mod
 
         np.random.seed(seed)
         start_time = time.time()
@@ -276,7 +276,7 @@ class MonteCarloAdapter(OptimiserAdapter):
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        from portfolio_utils import (
+        from src.portfolio_utils import (
             calculate_log_returns as calculate_returns,
             calculate_expected_returns,
             calculate_covariance_matrix,
@@ -369,12 +369,12 @@ class MIPAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pulp
-        from portfolio_utils import (
+        from src.portfolio_utils import (
             calculate_log_returns as calculate_returns,
             calculate_expected_returns,
             calculate_variances,
         )
-        from mip_optimisation import portfolio_sharpe_ratio
+        from src.mip_optimisation import portfolio_sharpe_ratio
 
         start_time = time.time()
 
@@ -427,7 +427,7 @@ class CppGAAdapter(OptimiserAdapter):
 
     name = "Island GA (C++)"
 
-    def __init__(self, binary_path='./optimisation'):
+    def __init__(self, binary_path='./cpp/optimisation'):
         self.binary_path = binary_path
 
     def run(self, data: pd.DataFrame, time_budget: float,

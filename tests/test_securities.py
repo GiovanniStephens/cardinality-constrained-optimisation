@@ -4,7 +4,7 @@ import tempfile
 
 import pandas as pd
 
-import download_data as dd
+from src import download_data as dd
 
 
 class TestSecurityUniverse(unittest.TestCase):

@@ -1,5 +1,5 @@
 import unittest
-import backtest
+from src import backtest
 import numpy as np
 
 

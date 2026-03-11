@@ -7,31 +7,52 @@ Solves the cardinality-constrained portfolio selection problem: find an optimal 
 ## Tech Stack
 
 - **Python 3.7+** — primary language
-- **C++** — high-performance parallel GA (`optimisation.cpp`, compiled to `optimisation` binary)
+- **C++** — high-performance parallel GA (`cpp/optimisation.cpp`, compiled to `cpp/optimisation` binary)
 - **Key Python libs**: numpy, pandas, scipy, pygad, arch, copulae, pmdarima, yfinance, matplotlib, pulp
 - **C++ deps** (header-only submodules): Eigen (linear algebra), csv-parser
 
 ## Project Structure
 
 ```
-optimisation.py          # Core: GA selection + SLSQP weights + copula correlation + risk parity
-simple_ga_optimisation.py # Simpler parallel island-based GA using InvestNow data
-backtest.py              # Forward-walk backtesting with Sharpe/Sortino/Calmar/drawdown stats
-forecast.py              # ARIMA returns + GARCH variance forecasting
-db.py                    # SQLite database module (schema, save/load functions, CSV migration)
-monte_carlo_optimisation.py  # Monte Carlo brute-force baseline
-mip_optimisation.py      # Mixed Integer Linear Programming alternative
-download_data.py         # Yahoo Finance data downloader
-list_of_ETFs.py          # ETF universe definitions
-prices_EDA.py            # Exploratory data analysis / visualisation
-test_optimisation.py     # Unit tests for optimisation module
-test_backtest.py         # Unit tests for backtest module
-test_db.py               # Unit tests for database module
-Data/                    # CSV price data, ETF lists, forecast outputs (~112 MB)
-Data/portfolio.db        # SQLite database (gitignored, created by db.py)
-optimisation.cpp         # C++ parallel island GA implementation
-csv-parser/              # C++ CSV parsing submodule
-eigen/                   # C++ Eigen linear algebra submodule
+src/                         # Python source package
+├── __init__.py
+├── optimisation.py          # Core: GA selection + SLSQP weights + copula correlation + risk parity
+├── simple_ga_optimisation.py # Simpler parallel island-based GA using InvestNow data
+├── backtest.py              # Forward-walk backtesting with Sharpe/Sortino/Calmar/drawdown stats
+├── forecast.py              # ARIMA returns + GARCH variance forecasting
+├── db.py                    # SQLite database module (schema, save/load functions, CSV migration)
+├── monte_carlo_optimisation.py  # Monte Carlo brute-force baseline
+├── mip_optimisation.py      # Mixed Integer Linear Programming alternative
+├── portfolio_utils.py       # Shared utility functions
+├── download_data.py         # Yahoo Finance data downloader
+├── list_of_stocks.py        # ETF/stock universe definitions
+└── prices_EDA.py            # Exploratory data analysis / visualisation
+tests/                       # Unit tests
+├── __init__.py
+├── test_optimisation.py     # Tests for optimisation module
+├── test_backtest.py         # Tests for backtest module
+├── test_db.py               # Tests for database module
+├── test_portfolio_utils.py  # Tests for portfolio utilities
+└── test_securities.py       # Tests for security universe/download
+cpp/                         # C++ parallel island GA implementation
+├── optimisation.cpp         # Source code
+└── optimisation             # Compiled binary
+benchmark/                   # Benchmarking framework package
+├── __init__.py
+├── adapters.py              # Adapter wrappers for all optimisation methods
+├── runner.py                # Orchestrates parallel benchmark runs
+├── analysis.py              # Result analysis and reporting
+└── results.py               # Data structures for benchmark results
+Data/                        # CSV price data, ETF lists, forecast outputs (~112 MB)
+├── portfolio.db             # SQLite database (gitignored, created by db.py)
+├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs
+└── ...                      # Other CSV data files
+Images/                      # Visualisation outputs
+benchmark_results/           # Benchmark run outputs (JSON/PKL)
+run_benchmark.py             # CLI entry point for benchmarking
+requirements.txt
+CLAUDE.md
+README.md
 ```
 
 ## Common Commands
@@ -41,28 +62,29 @@ eigen/                   # C++ Eigen linear algebra submodule
 pip install -r requirements.txt
 
 # Run the main GA optimisation (InvestNow data)
-python simple_ga_optimisation.py
+python -m src.simple_ga_optimisation
 
 # Run the full optimisation with copulas/forecasts
-python optimisation.py
+python -m src.optimisation
 
 # Run backtests
-python backtest.py
+python -m src.backtest
 
 # Generate ARIMA/GARCH forecasts
-python forecast.py
+python -m src.forecast
 
 # Download fresh ETF price data
-python download_data.py
+python -m src.download_data
 
 # Database
-python db.py                # Create empty database with schema
-python db.py migrate        # Import existing CSVs into database
+python -m src.db                # Create empty database with schema
+python -m src.db migrate        # Import existing CSVs into database
+
+# Run benchmarks
+python run_benchmark.py
 
 # Run tests
-python -m unittest test_optimisation.py
-python -m unittest test_backtest.py
-python -m unittest test_db              # Run database tests
+python -m unittest discover tests
 ```
 
 ## Key Concepts
@@ -70,7 +92,7 @@ python -m unittest test_db              # Run database tests
 - **Sharpe ratio** = E(R) / Std(R) is the primary objective function
 - **Cardinality constraint**: typically 3-20 ETFs from a universe of 1700+
 - **Genetic algorithm** selects which ETFs; **SLSQP** optimises portfolio weights
-- **Island-based parallel GA** with migration for better convergence (`simple_ga_optimisation.py`, `optimisation.cpp`)
+- **Island-based parallel GA** with migration for better convergence (`src/simple_ga_optimisation.py`, `cpp/optimisation.cpp`)
 - **CCC model** (Bollerslev 1990): forecast variances via GARCH, historical correlations for covariance
 - **Copula-GARCH**: AR(1)-GARCH residuals fitted with skew-t copulas for better correlation estimation
 - **Backtesting**: forward-walk out-of-sample evaluation; hypothesis testing confirms optimised portfolios significantly outperform random selection
@@ -89,7 +111,7 @@ python -m unittest test_db              # Run database tests
 - Missing price data is forward-filled then backward-filled
 - Portfolio weights sum to 1.0 (fully invested, no leverage)
 - No short selling by default (weights >= 0)
-- Tests use `unittest`; run both test files to verify changes
+- Tests use `unittest` in `tests/`; run `python -m unittest discover tests` to verify changes
 - When modifying optimisation parameters (population size, generations, mutation rate, migration), document the rationale — small changes significantly affect convergence
 
 ## Database
@@ -124,7 +146,7 @@ All optimisation results, backtest metrics, and data provenance are stored in `D
 ### Python usage
 
 ```python
-import db
+from src import db
 
 conn = db.get_connection()                    # Opens DB, creates tables if needed
 db.save_prices(conn, df, exchange='US')       # Save wide-format price DataFrame
