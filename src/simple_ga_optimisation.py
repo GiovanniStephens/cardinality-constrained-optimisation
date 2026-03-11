@@ -278,7 +278,7 @@ if __name__ == '__main__':
             portfolio_vol = float(np.sqrt(np.dot(optimised_result.x.T,
                                                  np.dot(cov_matrix, optimised_result.x))))
 
-            import db
+            from src import db
             conn = db.get_connection()
             run_id = db.save_optimisation_run(conn,
                 params={

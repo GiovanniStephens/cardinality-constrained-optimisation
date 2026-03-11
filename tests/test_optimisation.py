@@ -1,5 +1,5 @@
 import unittest
-import optimisation as op
+from src import optimisation as op
 import pandas as pd
 import numpy as np
 

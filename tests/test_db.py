@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-import db
+from src import db
 
 
 class TestDBConnection(unittest.TestCase):

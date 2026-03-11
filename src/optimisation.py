@@ -521,7 +521,7 @@ def main():
     logger.info("Allocations: %s", stock_allocations)
 
     # Save to database
-    import db
+    from src import db
     conn = db.get_connection()
     run_id = db.save_optimisation_run(conn,
         params={

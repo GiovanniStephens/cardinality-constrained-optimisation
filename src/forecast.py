@@ -7,8 +7,8 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
-import backtest
-import optimisation as op
+from src import backtest
+from src import optimisation as op
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ def main():
     elapsed = time.time() - start_time
 
     # Save to database
-    import db
+    from src import db
     conn = db.get_connection()
     run_id = db.save_forecast_results(conn, expected_returns[0], volatilities[0],
                                       n_periods=n_periods,
