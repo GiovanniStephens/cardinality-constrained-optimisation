@@ -481,8 +481,14 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
 def main():
     import time as _time
 
-    # Load the data
-    prices_df = load_data('Data/NZ_ETF_Prices.csv')
+    # Load from database (falls back to CSV if DB is empty)
+    from src import db as _db
+    _conn = _db.get_connection()
+    prices_df = _db.load_prices(_conn, exchange='US')
+    _conn.close()
+    if prices_df.empty:
+        logger.info("No data in DB, falling back to CSV")
+        prices_df = load_data('Data/NZ_ETF_Prices.csv')
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     # Prepare the inputs for the optimisation
     use_forecasts = True
@@ -552,7 +558,12 @@ if __name__ == '__main__':
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    prices_df = load_data('Data/NZ_ETF_Prices.csv')
+    from src import db as _db
+    _conn = _db.get_connection()
+    prices_df = _db.load_prices(_conn, exchange='US')
+    _conn.close()
+    if prices_df.empty:
+        prices_df = load_data('Data/NZ_ETF_Prices.csv')
     prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     prepare_opt_inputs(prices_df, use_forecasts=False)

@@ -20,7 +20,13 @@ def main():
     )
     start_time = time.time()
 
-    data = op.load_data('Data/ETF_Prices.csv')
+    from src import db
+    conn = db.get_connection()
+    data = db.load_prices(conn, exchange='US')
+    conn.close()
+    if data.empty:
+        logger.info("No data in DB, falling back to CSV")
+        data = op.load_data('Data/ETF_Prices.csv')
     data = data.dropna(axis=1, thresh=0.95*len(data))
     logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
     training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]

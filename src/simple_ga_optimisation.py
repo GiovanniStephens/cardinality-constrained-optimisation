@@ -236,12 +236,23 @@ if __name__ == '__main__':
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    data = load_data('Data/time_series_20251016_113257.csv')
+    # Load from database (falls back to CSV if DB is empty)
+    from src import db
+    conn = db.get_connection()
+    data = db.load_prices(conn, exchange='US')
+    conn.close()
+    if data.empty:
+        logger.info("No data in DB, falling back to CSV")
+        data = load_data('Data/time_series_20251016_113257.csv')
+    else:
+        # Apply same filters as load_data: last 2 years, 95% coverage, ffill
+        data.index = pd.to_datetime(data.index)
+        data = data.sort_index()
+        two_years_ago = data.index[-1] - pd.Timedelta(days=730)
+        data = data[data.index >= two_years_ago]
+        data = data.dropna(axis=1, thresh=int(0.95 * len(data)))
+        data = data.ffill()
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
-    # Skip ETFs.csv filtering for NZ managed funds data
-    # etfs = pd.read_csv('Data/ETFs.csv')
-    # etfs_in_data_but_not_in_etfs = set(data.columns) - set(etfs['Tickers'])
-    # data = data.drop(columns=list(etfs_in_data_but_not_in_etfs))
     num_generations = 70
     total_population_size = 8000
     mutation_rate = 1 / data.shape[1]
