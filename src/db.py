@@ -28,8 +28,10 @@ CREATE TABLE IF NOT EXISTS tickers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol      TEXT NOT NULL,
     name        TEXT,
+    country     TEXT,
     exchange_id INTEGER NOT NULL REFERENCES exchanges(id),
-    asset_type  TEXT,
+    asset_type  TEXT NOT NULL DEFAULT 'etf'
+        CHECK(asset_type IN ('etf', 'stock', 'fund', 'managed_fund')),
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE(symbol, exchange_id)
@@ -38,7 +40,8 @@ CREATE TABLE IF NOT EXISTS tickers (
 -- Daily close prices (normalised: one row per ticker per date)
 CREATE TABLE IF NOT EXISTS prices (
     ticker_id  INTEGER NOT NULL REFERENCES tickers(id),
-    date       TEXT NOT NULL,
+    date       TEXT NOT NULL
+        CHECK(date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     close      REAL NOT NULL,
     PRIMARY KEY (ticker_id, date)
 );
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS prices (
 -- Tracks each ARIMA/GARCH forecast generation
 CREATE TABLE IF NOT EXISTS forecast_runs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    exchange_id     INTEGER REFERENCES exchanges(id),
     created_at      TEXT NOT NULL,
     num_tickers     INTEGER,
     n_periods       INTEGER,
@@ -88,22 +92,25 @@ CREATE TABLE IF NOT EXISTS optimisation_runs (
     created_at            TEXT NOT NULL,
     script                TEXT NOT NULL,
     data_source           TEXT,
-    num_generations       INTEGER,
-    total_population_size INTEGER,
-    mutation_rate         REAL,
-    num_elites            INTEGER,
-    migration_interval    INTEGER,
-    migration_rate        REAL,
-    num_islands           INTEGER,
-    min_etfs              INTEGER,
-    max_etfs              INTEGER,
+    data_source_id        INTEGER REFERENCES data_sources(id),
+
+    -- Shared constraint parameters
+    min_securities        INTEGER,
+    max_securities        INTEGER,
     min_weight            REAL,
     max_weight            REAL,
     target_return         REAL,
     target_risk           REAL,
+
+    -- Feature flags
     use_forecasts         INTEGER DEFAULT 0,
     use_copulae           INTEGER DEFAULT 0,
     risk_parity           INTEGER DEFAULT 0,
+
+    -- Algorithm-specific parameters (JSON)
+    params_json           TEXT,
+
+    -- Results
     best_sharpe           REAL,
     portfolio_return      REAL,
     portfolio_volatility  REAL,
@@ -112,13 +119,13 @@ CREATE TABLE IF NOT EXISTS optimisation_runs (
     notes                 TEXT
 );
 
--- ETF selections + weights for each optimisation run
+-- Security selections + weights for each optimisation run
 CREATE TABLE IF NOT EXISTS portfolio_holdings (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id  INTEGER NOT NULL REFERENCES optimisation_runs(id) ON DELETE CASCADE,
-    ticker  TEXT NOT NULL,
-    weight  REAL NOT NULL,
-    UNIQUE(run_id, ticker)
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id    INTEGER NOT NULL REFERENCES optimisation_runs(id) ON DELETE CASCADE,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id),
+    weight    REAL NOT NULL,
+    UNIQUE(run_id, ticker_id)
 );
 
 -- One row per backtest session
@@ -126,10 +133,11 @@ CREATE TABLE IF NOT EXISTS backtest_sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at      TEXT NOT NULL,
     data_source     TEXT,
+    data_source_id  INTEGER REFERENCES data_sources(id),
     num_portfolios  INTEGER NOT NULL,
-    num_children    INTEGER NOT NULL,
     num_days_oos    INTEGER NOT NULL,
     use_forecast    INTEGER DEFAULT 0,
+    optimiser_params_json TEXT,
     elapsed_seconds REAL,
     notes           TEXT
 );
@@ -147,15 +155,27 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     max_drawdown          REAL,
     calmar_ratio          REAL,
     sortino_ratio         REAL,
-    holdings_json         TEXT
+    holdings_json         TEXT,
+    UNIQUE(session_id, category, portfolio_index)
 );
 
+-- Normalised backtest holdings (source of truth alongside holdings_json cache)
+CREATE TABLE IF NOT EXISTS backtest_holdings (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id INTEGER NOT NULL REFERENCES backtest_results(id) ON DELETE CASCADE,
+    ticker_id INTEGER NOT NULL REFERENCES tickers(id),
+    weight    REAL NOT NULL,
+    UNIQUE(result_id, ticker_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tickers_exchange ON tickers(exchange_id);
 CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker_id);
 CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);
 CREATE INDEX IF NOT EXISTS idx_expected_returns_forecast ON expected_returns(forecast_run_id);
 CREATE INDEX IF NOT EXISTS idx_variances_forecast ON variances(forecast_run_id);
 CREATE INDEX IF NOT EXISTS idx_optimisation_runs_created ON optimisation_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_session ON backtest_results(session_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_holdings_result ON backtest_holdings(result_id);
 """
 
 DEFAULT_EXCHANGES = [
@@ -178,11 +198,6 @@ def get_connection(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
-    # Migrate: add 'name' column to tickers if missing (existing databases)
-    cols = [row[1] for row in conn.execute("PRAGMA table_info(tickers)").fetchall()]
-    if 'name' not in cols:
-        conn.execute("ALTER TABLE tickers ADD COLUMN name TEXT")
-        conn.commit()
     # Seed exchanges if empty
     count = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     if count == 0:
@@ -206,10 +221,13 @@ def _get_exchange_id(conn, code):
     return row[0]
 
 
-def _ensure_tickers(conn, symbols, exchange_id, asset_type=None, names=None):
+def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
+                    countries=None):
     """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
 
+    asset_type: one of 'etf', 'stock', 'fund', 'managed_fund'.
     names: optional dict {symbol: name_string} to populate the name column.
+    countries: optional dict {symbol: country_string} to populate the country column.
     """
     now = _now()
     # Fetch existing
@@ -224,9 +242,12 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type=None, names=None):
     missing = [s for s in symbols if s not in existing]
     if missing:
         conn.executemany(
-            "INSERT OR IGNORE INTO tickers (symbol, name, exchange_id, asset_type, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [(s, names.get(s) if names else None, exchange_id, asset_type, now, now)
+            "INSERT OR IGNORE INTO tickers "
+            "(symbol, name, country, exchange_id, asset_type, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(s, names.get(s) if names else None,
+              countries.get(s) if countries else None,
+              exchange_id, asset_type, now, now)
              for s in missing],
         )
         # Re-fetch to get IDs for newly inserted
@@ -243,18 +264,28 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type=None, names=None):
             [(names[s], now, existing[s]) for s in existing if s in names and names[s]],
         )
 
+    # Backfill countries for existing tickers that don't have one yet
+    if countries:
+        conn.executemany(
+            "UPDATE tickers SET country = ?, updated_at = ? WHERE id = ? AND country IS NULL",
+            [(countries[s], now, existing[s])
+             for s in existing if s in countries and countries[s]],
+        )
+
     return existing
 
 
 # ─── Data storage ─────────────────────────────────────────────────────────────
 
-def save_prices(conn, prices_df, exchange, asset_type='etf', source=None, names=None):
+def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
+                names=None, countries=None):
     """
     Save a wide-format DataFrame of prices to the database.
 
     prices_df: index = dates (or integer index), columns = ticker symbols, values = close prices.
     exchange: 'US', 'NZX', 'ASX'
     names: optional dict {symbol: name_string} to populate ticker names.
+    countries: optional dict {symbol: country_string} to populate ticker countries.
     Returns data_source id.
     """
     exchange_id = _get_exchange_id(conn, exchange)
@@ -262,7 +293,8 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None, names=
     dupes = [s for s in set(symbols) if symbols.count(s) > 1]
     if dupes:
         raise ValueError(f"DataFrame has duplicate column names: {dupes}")
-    ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type, names=names)
+    ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type,
+                                 names=names, countries=countries)
 
     # Normalise index to date strings
     df = prices_df.copy()
@@ -281,33 +313,34 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None, names=
             if pd.notna(val):
                 rows.append((ticker_map[symbol], date_str, float(val)))
 
-    conn.executemany(
-        "INSERT OR REPLACE INTO prices (ticker_id, date, close) VALUES (?, ?, ?)",
-        rows,
-    )
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close) VALUES (?, ?, ?)",
+            rows,
+        )
 
-    # Record data source
-    dates = [d for d in df.index]
-    ds_id = save_data_source(
-        conn,
-        source=source or ('yahoo_finance' if exchange == 'US' else 'investnow'),
-        exchange_id=exchange_id,
-        date_range_start=min(dates) if dates else None,
-        date_range_end=max(dates) if dates else None,
-        num_tickers=len(symbols),
-        num_rows=len(rows),
-    )
-    conn.commit()
+        # Record data source
+        dates = [d for d in df.index]
+        ds_id = _save_data_source_no_commit(
+            conn,
+            source=source or ('yahoo_finance' if exchange == 'US' else 'investnow'),
+            exchange_id=exchange_id,
+            date_range_start=min(dates) if dates else None,
+            date_range_end=max(dates) if dates else None,
+            num_tickers=len(symbols),
+            num_rows=len(rows),
+        )
     return ds_id
 
 
 def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
-                tickers=None, min_coverage=0.95):
+                tickers=None, exclude_countries=None, min_coverage=0.95):
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
 
     asset_type: optional filter, e.g. 'etf', 'stock', 'fund'.
+    exclude_countries: optional list of country strings to exclude.
     """
     query = """
         SELECT t.symbol, p.date, p.close
@@ -334,6 +367,10 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
         placeholders = ','.join('?' for _ in tickers)
         conditions.append(f"t.symbol IN ({placeholders})")
         params.extend(tickers)
+    if exclude_countries is not None:
+        placeholders = ','.join('?' for _ in exclude_countries)
+        conditions.append(f"(t.country IS NULL OR t.country NOT IN ({placeholders}))")
+        params.extend(exclude_countries)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -407,36 +444,36 @@ def save_forecast_results(conn, expected_returns_s, variances_s,
     all_symbols = list(set(expected_returns_s.index) | set(variances_s.index))
     ticker_map = _ensure_tickers(conn, all_symbols, exchange_id)
 
-    cur = conn.execute(
-        "INSERT INTO forecast_runs (created_at, num_tickers, n_periods, elapsed_seconds, notes) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (now, len(all_symbols), n_periods, elapsed_seconds, notes),
-    )
-    run_id = cur.lastrowid
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO forecast_runs (exchange_id, created_at, num_tickers, n_periods, "
+            "elapsed_seconds, notes) VALUES (?, ?, ?, ?, ?, ?)",
+            (exchange_id, now, len(all_symbols), n_periods, elapsed_seconds, notes),
+        )
+        run_id = cur.lastrowid
 
-    # Insert expected returns
-    er_rows = []
-    for symbol, value in expected_returns_s.items():
-        if symbol in ticker_map and pd.notna(value):
-            er_rows.append((ticker_map[symbol], run_id, float(value)))
-    conn.executemany(
-        "INSERT OR REPLACE INTO expected_returns (ticker_id, forecast_run_id, value) "
-        "VALUES (?, ?, ?)",
-        er_rows,
-    )
+        # Insert expected returns
+        er_rows = []
+        for symbol, value in expected_returns_s.items():
+            if symbol in ticker_map and pd.notna(value):
+                er_rows.append((ticker_map[symbol], run_id, float(value)))
+        conn.executemany(
+            "INSERT OR REPLACE INTO expected_returns (ticker_id, forecast_run_id, value) "
+            "VALUES (?, ?, ?)",
+            er_rows,
+        )
 
-    # Insert variances
-    var_rows = []
-    for symbol, value in variances_s.items():
-        if symbol in ticker_map and pd.notna(value):
-            var_rows.append((ticker_map[symbol], run_id, float(value)))
-    conn.executemany(
-        "INSERT OR REPLACE INTO variances (ticker_id, forecast_run_id, value) "
-        "VALUES (?, ?, ?)",
-        var_rows,
-    )
+        # Insert variances
+        var_rows = []
+        for symbol, value in variances_s.items():
+            if symbol in ticker_map and pd.notna(value):
+                var_rows.append((ticker_map[symbol], run_id, float(value)))
+        conn.executemany(
+            "INSERT OR REPLACE INTO variances (ticker_id, forecast_run_id, value) "
+            "VALUES (?, ?, ?)",
+            var_rows,
+        )
 
-    conn.commit()
     return run_id
 
 
@@ -484,65 +521,83 @@ def load_variances(conn, forecast_run_id=None):
 
 # ─── Run history ──────────────────────────────────────────────────────────────
 
-def save_optimisation_run(conn, params, results, holdings):
+def save_optimisation_run(conn, params, results, holdings, exchange='US'):
     """
     Save an optimisation run and its portfolio holdings.
 
-    params: dict with keys like 'script', 'data_source', 'num_generations', etc.
+    params: dict with keys like 'script', 'data_source', 'min_securities', etc.
+        Algorithm-specific keys (e.g. 'num_generations', 'mutation_rate' for GA;
+        'risk_aversion' for MIP; 'num_trials' for Monte Carlo) are stored in
+        params_json automatically.
     results: dict with keys like 'best_sharpe', 'portfolio_return', etc.
-    holdings: list of (ticker, weight) tuples
+    holdings: list of (ticker_symbol, weight) tuples — symbols are resolved to
+        ticker_ids via the tickers table.
+    exchange: exchange code for resolving ticker symbols (default 'US').
     Returns run_id.
     """
     now = _now()
     all_fields = {**params, **results}
-    cur = conn.execute(
-        """INSERT INTO optimisation_runs (
-            created_at, script, data_source,
-            num_generations, total_population_size, mutation_rate,
-            num_elites, migration_interval, migration_rate, num_islands,
-            min_etfs, max_etfs, min_weight, max_weight,
-            target_return, target_risk,
-            use_forecasts, use_copulae, risk_parity,
-            best_sharpe, portfolio_return, portfolio_volatility,
-            num_selected, elapsed_seconds, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            now,
-            all_fields.get('script'),
-            all_fields.get('data_source'),
-            all_fields.get('num_generations'),
-            all_fields.get('total_population_size'),
-            all_fields.get('mutation_rate'),
-            all_fields.get('num_elites'),
-            all_fields.get('migration_interval'),
-            all_fields.get('migration_rate'),
-            all_fields.get('num_islands'),
-            all_fields.get('min_etfs'),
-            all_fields.get('max_etfs'),
-            all_fields.get('min_weight'),
-            all_fields.get('max_weight'),
-            all_fields.get('target_return'),
-            all_fields.get('target_risk'),
-            int(all_fields.get('use_forecasts', 0)),
-            int(all_fields.get('use_copulae', 0)),
-            int(all_fields.get('risk_parity', 0)),
-            all_fields.get('best_sharpe'),
-            all_fields.get('portfolio_return'),
-            all_fields.get('portfolio_volatility'),
-            all_fields.get('num_selected'),
-            all_fields.get('elapsed_seconds'),
-            all_fields.get('notes'),
-        ),
-    )
-    run_id = cur.lastrowid
 
-    if holdings:
-        conn.executemany(
-            "INSERT INTO portfolio_holdings (run_id, ticker, weight) VALUES (?, ?, ?)",
-            [(run_id, ticker, float(weight)) for ticker, weight in holdings],
+    # Shared columns that have dedicated DB columns
+    _shared_keys = {
+        'script', 'data_source', 'data_source_id',
+        'min_securities', 'max_securities', 'min_weight', 'max_weight',
+        'target_return', 'target_risk',
+        'use_forecasts', 'use_copulae', 'risk_parity',
+        'best_sharpe', 'portfolio_return', 'portfolio_volatility',
+        'num_selected', 'elapsed_seconds', 'notes',
+    }
+    # Everything else goes into params_json
+    algo_params = {k: v for k, v in all_fields.items() if k not in _shared_keys}
+    params_json = json.dumps(algo_params) if algo_params else None
+
+    exchange_id = _get_exchange_id(conn, exchange)
+
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO optimisation_runs (
+                created_at, script, data_source, data_source_id,
+                min_securities, max_securities, min_weight, max_weight,
+                target_return, target_risk,
+                use_forecasts, use_copulae, risk_parity,
+                params_json,
+                best_sharpe, portfolio_return, portfolio_volatility,
+                num_selected, elapsed_seconds, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now,
+                all_fields.get('script'),
+                all_fields.get('data_source'),
+                all_fields.get('data_source_id'),
+                all_fields.get('min_securities'),
+                all_fields.get('max_securities'),
+                all_fields.get('min_weight'),
+                all_fields.get('max_weight'),
+                all_fields.get('target_return'),
+                all_fields.get('target_risk'),
+                int(all_fields.get('use_forecasts', 0)),
+                int(all_fields.get('use_copulae', 0)),
+                int(all_fields.get('risk_parity', 0)),
+                params_json,
+                all_fields.get('best_sharpe'),
+                all_fields.get('portfolio_return'),
+                all_fields.get('portfolio_volatility'),
+                all_fields.get('num_selected'),
+                all_fields.get('elapsed_seconds'),
+                all_fields.get('notes'),
+            ),
         )
+        run_id = cur.lastrowid
 
-    conn.commit()
+        if holdings:
+            symbols = [ticker for ticker, _ in holdings]
+            ticker_map = _ensure_tickers(conn, symbols, exchange_id)
+            conn.executemany(
+                "INSERT INTO portfolio_holdings (run_id, ticker_id, weight) VALUES (?, ?, ?)",
+                [(run_id, ticker_map[ticker], float(weight))
+                 for ticker, weight in holdings],
+            )
+
     return run_id
 
 
@@ -559,9 +614,12 @@ def get_recent_runs(conn, n=10, script=None):
 
 
 def get_run_holdings(conn, run_id):
-    """Get portfolio holdings for a given run."""
+    """Get portfolio holdings for a given run. Returns rows with ticker (symbol) and weight."""
     return conn.execute(
-        "SELECT ticker, weight FROM portfolio_holdings WHERE run_id = ? ORDER BY weight DESC",
+        "SELECT t.symbol AS ticker, ph.weight "
+        "FROM portfolio_holdings ph "
+        "JOIN tickers t ON ph.ticker_id = t.id "
+        "WHERE ph.run_id = ? ORDER BY ph.weight DESC",
         (run_id,),
     ).fetchall()
 
@@ -572,65 +630,84 @@ def save_backtest_session(conn, params):
     """
     Save a backtest session.
 
-    params: dict with keys 'data_source', 'num_portfolios', 'num_children',
-            'num_days_oos', 'use_forecast', 'elapsed_seconds', 'notes'
+    params: dict with keys 'data_source', 'data_source_id', 'num_portfolios',
+            'num_days_oos', 'use_forecast', 'optimiser_params' (dict),
+            'elapsed_seconds', 'notes'
     Returns session_id.
     """
     now = _now()
-    cur = conn.execute(
-        """INSERT INTO backtest_sessions (
-            created_at, data_source, num_portfolios, num_children,
-            num_days_oos, use_forecast, elapsed_seconds, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            now,
-            params.get('data_source'),
-            params['num_portfolios'],
-            params['num_children'],
-            params['num_days_oos'],
-            int(params.get('use_forecast', 0)),
-            params.get('elapsed_seconds'),
-            params.get('notes'),
-        ),
-    )
-    conn.commit()
+    opt_params = params.get('optimiser_params')
+    opt_params_json = json.dumps(opt_params) if opt_params else None
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO backtest_sessions (
+                created_at, data_source, data_source_id, num_portfolios,
+                num_days_oos, use_forecast, optimiser_params_json,
+                elapsed_seconds, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now,
+                params.get('data_source'),
+                params.get('data_source_id'),
+                params['num_portfolios'],
+                params['num_days_oos'],
+                int(params.get('use_forecast', 0)),
+                opt_params_json,
+                params.get('elapsed_seconds'),
+                params.get('notes'),
+            ),
+        )
     return cur.lastrowid
 
 
-def save_backtest_result(conn, session_id, category, index, metrics, holdings=None):
+def save_backtest_result(conn, session_id, category, index, metrics,
+                         holdings=None, exchange='US'):
     """
     Save a single portfolio result within a backtest session.
 
     metrics: dict with keys 'annualised_return', 'annualised_volatility',
              'sharpe_ratio', 'downside_deviation', 'max_drawdown',
              'calmar_ratio', 'sortino_ratio'
-    holdings: optional list of (ticker, weight) tuples
+    holdings: optional list of (ticker_symbol, weight) tuples
+    exchange: exchange code for resolving ticker symbols (default 'US').
     """
     holdings_json = None
     if holdings:
         holdings_json = json.dumps(
             [{'ticker': t, 'weight': float(w)} for t, w in holdings]
         )
-    conn.execute(
-        """INSERT INTO backtest_results (
-            session_id, category, portfolio_index,
-            annualised_return, annualised_volatility, sharpe_ratio,
-            downside_deviation, max_drawdown, calmar_ratio, sortino_ratio,
-            holdings_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            session_id, category, index,
-            metrics.get('annualised_return'),
-            metrics.get('annualised_volatility'),
-            metrics.get('sharpe_ratio'),
-            metrics.get('downside_deviation'),
-            metrics.get('max_drawdown'),
-            metrics.get('calmar_ratio'),
-            metrics.get('sortino_ratio'),
-            holdings_json,
-        ),
-    )
-    conn.commit()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO backtest_results (
+                session_id, category, portfolio_index,
+                annualised_return, annualised_volatility, sharpe_ratio,
+                downside_deviation, max_drawdown, calmar_ratio, sortino_ratio,
+                holdings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id, category, index,
+                metrics.get('annualised_return'),
+                metrics.get('annualised_volatility'),
+                metrics.get('sharpe_ratio'),
+                metrics.get('downside_deviation'),
+                metrics.get('max_drawdown'),
+                metrics.get('calmar_ratio'),
+                metrics.get('sortino_ratio'),
+                holdings_json,
+            ),
+        )
+        result_id = cur.lastrowid
+
+        # Save normalised holdings
+        if holdings:
+            exchange_id = _get_exchange_id(conn, exchange)
+            symbols = [t for t, _ in holdings]
+            ticker_map = _ensure_tickers(conn, symbols, exchange_id)
+            conn.executemany(
+                "INSERT INTO backtest_holdings (result_id, ticker_id, weight) "
+                "VALUES (?, ?, ?)",
+                [(result_id, ticker_map[t], float(w)) for t, w in holdings],
+            )
 
 
 def get_recent_backtests(conn, n=5):
@@ -650,10 +727,10 @@ def get_backtest_results(conn, session_id):
 
 # ─── Metadata ─────────────────────────────────────────────────────────────────
 
-def save_data_source(conn, source, exchange_id=None, date_range_start=None,
-                     date_range_end=None, num_tickers=None, num_rows=None,
-                     notes=None):
-    """Record a data download event. Returns data_source id."""
+def _save_data_source_no_commit(conn, source, exchange_id=None,
+                                date_range_start=None, date_range_end=None,
+                                num_tickers=None, num_rows=None, notes=None):
+    """Insert a data_source row without committing (for use inside transactions)."""
     now = _now()
     cur = conn.execute(
         """INSERT INTO data_sources (
@@ -664,8 +741,18 @@ def save_data_source(conn, source, exchange_id=None, date_range_start=None,
         (exchange_id, source, now, date_range_start, date_range_end,
          num_tickers, num_rows, notes),
     )
-    conn.commit()
     return cur.lastrowid
+
+
+def save_data_source(conn, source, exchange_id=None, date_range_start=None,
+                     date_range_end=None, num_tickers=None, num_rows=None,
+                     notes=None):
+    """Record a data download event. Returns data_source id."""
+    with conn:
+        return _save_data_source_no_commit(
+            conn, source, exchange_id, date_range_start, date_range_end,
+            num_tickers, num_rows, notes,
+        )
 
 
 def get_latest_data_source(conn, source=None):
@@ -703,7 +790,7 @@ def migrate_csvs(conn, data_dir=None):
 
     # 2. Import forecast CSVs
     _migrate_forecasts(conn, data_dir, 'expected_returns.csv', 'variances.csv', 'US')
-    _migrate_forecasts(conn, data_dir, 'NZ_expected_returns.csv', 'NZ_variances.csv', 'US')
+    _migrate_forecasts(conn, data_dir, 'NZ_expected_returns.csv', 'NZ_variances.csv', 'NZX')
 
     # 3. Import ticker lists for completeness
     _migrate_ticker_list(conn, data_dir, 'ETFs_Full.csv', 'US', 'etf')
@@ -733,13 +820,17 @@ def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
     # Handle the InvestNow time series with datetime+timezone index
     if 'time_series' in filename:
         df.index = pd.to_datetime(df.index, utc=True).strftime('%Y-%m-%d')
-    elif df.index.dtype == object:
-        # Try parsing as dates
+    else:
+        # Try parsing index as dates (strings like '2024-01-01')
         try:
-            parsed = pd.to_datetime(df.index)
+            parsed = pd.to_datetime(df.index, format='%Y-%m-%d')
             df.index = parsed.strftime('%Y-%m-%d')
         except (ValueError, TypeError):
-            pass  # Keep as-is (integer indices)
+            # Integer indices (0, 1, 2, ...) — cannot store without dates.
+            # Skip this file; data should be re-downloaded with proper dates.
+            print(f"  Skipping {filename}: index is not date-formatted. "
+                  f"Re-download with download_and_save() to get proper dates.")
+            return
 
     save_prices(conn, df, exchange=exchange, asset_type=asset_type,
                 source='csv_migration')

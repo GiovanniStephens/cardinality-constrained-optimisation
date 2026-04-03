@@ -533,8 +533,9 @@ def main():
         params={
             'script': 'optimisation',
             'data_source': 'yahoo_finance',
-            'min_etfs': MIN_NUM_STOCKS,
-            'max_etfs': MAX_NUM_STOCKS,
+            'num_children': 500,
+            'min_securities': MIN_NUM_STOCKS,
+            'max_securities': MAX_NUM_STOCKS,
             'min_weight': MIN_WEIGHT,
             'max_weight': MAX_WEIGHT,
             'target_return': TARGET_RETURN,
@@ -548,7 +549,8 @@ def main():
             'num_selected': int(np.count_nonzero(best_individual)),
             'elapsed_seconds': opt_elapsed,
         },
-        holdings=list(zip(selected_tickers, sol.x)))
+        holdings=list(zip(selected_tickers, sol.x)),
+        exchange='US')
     print(f"Run saved to database (id={run_id})")
     conn.close()
 

@@ -19,8 +19,8 @@ class TestDBConnection(unittest.TestCase):
         ).fetchall()
         table_names = [t['name'] for t in tables]
         expected = [
-            'backtest_results', 'backtest_sessions', 'data_sources',
-            'exchanges', 'expected_returns', 'forecast_runs',
+            'backtest_holdings', 'backtest_results', 'backtest_sessions',
+            'data_sources', 'exchanges', 'expected_returns', 'forecast_runs',
             'optimisation_runs', 'portfolio_holdings', 'prices',
             'tickers', 'variances',
         ]
@@ -43,9 +43,7 @@ class TestDBConnection(unittest.TestCase):
 
     def test_exchanges_not_duplicated_on_reconnect(self):
         conn = db.get_connection(':memory:')
-        # Simulate a second "connection" by re-seeding
         count_before = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
-        # Re-run seed logic — should detect existing rows
         count_after = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
         self.assertEqual(count_before, count_after)
         conn.close()
@@ -65,7 +63,6 @@ class TestPrices(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.get_connection(':memory:')
-        # Create a simple wide-format DataFrame
         dates = pd.date_range('2024-01-01', periods=5, freq='D')
         self.prices_df = pd.DataFrame({
             'SPY': [100.0, 101.0, 102.0, 103.0, 104.0],
@@ -85,7 +82,6 @@ class TestPrices(unittest.TestCase):
         self.assertEqual(set(loaded.columns), {'SPY', 'QQQ', 'VTI'})
         self.assertEqual(len(loaded), 5)
 
-        # Check actual values
         self.assertAlmostEqual(loaded.loc['2024-01-01', 'SPY'], 100.0)
         self.assertAlmostEqual(loaded.loc['2024-01-05', 'QQQ'], 204.0)
 
@@ -102,11 +98,7 @@ class TestPrices(unittest.TestCase):
 
     def test_load_min_coverage_filter(self):
         db.save_prices(self.conn, self.prices_df, exchange='US')
-        # VTI has 1 NaN out of 5 rows = 80% coverage (4 non-null values)
-        # min_coverage=0.95 → threshold = int(0.95 * 5) = 4, VTI has exactly 4 → passes
-        # Use a threshold that requires all 5 to exclude VTI
         loaded = db.load_prices(self.conn, exchange='US', min_coverage=1.0)
-        # VTI should be dropped (only 4/5 values present)
         self.assertNotIn('VTI', loaded.columns)
         self.assertIn('SPY', loaded.columns)
 
@@ -124,12 +116,72 @@ class TestPrices(unittest.TestCase):
 
     def test_upsert_prices(self):
         db.save_prices(self.conn, self.prices_df, exchange='US')
-        # Update one price
         updated = self.prices_df.copy()
         updated.loc[updated.index[0], 'SPY'] = 999.0
         db.save_prices(self.conn, updated, exchange='US')
         loaded = db.load_prices(self.conn, exchange='US')
         self.assertAlmostEqual(loaded.loc['2024-01-01', 'SPY'], 999.0)
+
+
+class TestPricesDateConstraint(unittest.TestCase):
+    """Test that prices.date rejects non-date strings."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_invalid_date_rejected(self):
+        self.conn.execute(
+            "INSERT INTO tickers (symbol, exchange_id, asset_type, created_at, updated_at) "
+            "VALUES ('TEST', 1, 'etf', '2025-01-01', '2025-01-01')"
+        )
+        ticker_id = self.conn.execute("SELECT id FROM tickers WHERE symbol='TEST'").fetchone()[0]
+        with self.assertRaises(Exception):
+            self.conn.execute(
+                "INSERT INTO prices (ticker_id, date, close) VALUES (?, ?, ?)",
+                (ticker_id, 'not-a-date', 100.0),
+            )
+
+    def test_integer_date_rejected(self):
+        self.conn.execute(
+            "INSERT INTO tickers (symbol, exchange_id, asset_type, created_at, updated_at) "
+            "VALUES ('TEST', 1, 'etf', '2025-01-01', '2025-01-01')"
+        )
+        ticker_id = self.conn.execute("SELECT id FROM tickers WHERE symbol='TEST'").fetchone()[0]
+        with self.assertRaises(Exception):
+            self.conn.execute(
+                "INSERT INTO prices (ticker_id, date, close) VALUES (?, ?, ?)",
+                (ticker_id, '42', 100.0),
+            )
+
+
+class TestAssetTypeConstraint(unittest.TestCase):
+    """Test tickers.asset_type NOT NULL and CHECK constraint."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_invalid_asset_type_rejected(self):
+        with self.assertRaises(Exception):
+            self.conn.execute(
+                "INSERT INTO tickers (symbol, exchange_id, asset_type, created_at, updated_at) "
+                "VALUES ('TEST', 1, 'invalid_type', '2025-01-01', '2025-01-01')"
+            )
+
+    def test_valid_asset_types_accepted(self):
+        for i, at in enumerate(('etf', 'stock', 'fund', 'managed_fund')):
+            self.conn.execute(
+                "INSERT INTO tickers (symbol, exchange_id, asset_type, created_at, updated_at) "
+                "VALUES (?, 1, ?, '2025-01-01', '2025-01-01')",
+                (f'TEST{i}', at),
+            )
+        count = self.conn.execute("SELECT COUNT(*) FROM tickers").fetchone()[0]
+        self.assertEqual(count, 4)
 
 
 class TestForecasts(unittest.TestCase):
@@ -162,7 +214,6 @@ class TestForecasts(unittest.TestCase):
         var2 = pd.Series({'SPY': 0.03, 'QQQ': 0.05})
         db.save_forecast_results(self.conn, er2, var2, n_periods=126)
 
-        # Loading without ID should get the latest
         loaded = db.load_expected_returns(self.conn)
         self.assertEqual(len(loaded), 2)
         self.assertAlmostEqual(loaded['SPY'], 0.10)
@@ -174,6 +225,13 @@ class TestForecasts(unittest.TestCase):
         self.assertEqual(latest['n_periods'], 252)
         self.assertEqual(latest['num_tickers'], 3)
 
+    def test_forecast_stores_exchange_id(self):
+        db.save_forecast_results(self.conn, self.er, self.var,
+                                 n_periods=252, exchange='US')
+        latest = db.get_latest_forecast(self.conn)
+        us_id = db._get_exchange_id(self.conn, 'US')
+        self.assertEqual(latest['exchange_id'], us_id)
+
     def test_empty_forecast(self):
         loaded = db.load_expected_returns(self.conn)
         self.assertEqual(len(loaded), 0)
@@ -184,6 +242,14 @@ class TestOptimisationRuns(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.get_connection(':memory:')
+        # Pre-create tickers so holdings can resolve
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        prices = pd.DataFrame({
+            'SPY': [100.0, 101.0, 102.0],
+            'QQQ': [200.0, 201.0, 202.0],
+            'VTI': [300.0, 301.0, 302.0],
+        }, index=dates)
+        db.save_prices(self.conn, prices, exchange='US', asset_type='etf')
 
     def tearDown(self):
         self.conn.close()
@@ -198,8 +264,8 @@ class TestOptimisationRuns(unittest.TestCase):
                 'total_population_size': 8000,
                 'mutation_rate': 0.01,
                 'num_elites': 100,
-                'min_etfs': 8,
-                'max_etfs': 20,
+                'min_securities': 8,
+                'max_securities': 20,
             },
             results={
                 'best_sharpe': 1.5,
@@ -209,15 +275,36 @@ class TestOptimisationRuns(unittest.TestCase):
                 'elapsed_seconds': 45.3,
             },
             holdings=[('SPY', 0.3), ('QQQ', 0.4), ('VTI', 0.3)],
+            exchange='US',
         )
         self.assertIsInstance(run_id, int)
         self.assertGreater(run_id, 0)
 
-        # Check holdings
+        # Check holdings (returned with ticker symbol via JOIN)
         holdings = db.get_run_holdings(self.conn, run_id)
         self.assertEqual(len(holdings), 3)
         tickers = [h['ticker'] for h in holdings]
         self.assertIn('SPY', tickers)
+
+    def test_params_json_stored(self):
+        run_id = db.save_optimisation_run(
+            self.conn,
+            params={
+                'script': 'simple_ga_optimisation',
+                'num_generations': 70,
+                'total_population_size': 8000,
+                'mutation_rate': 0.01,
+            },
+            results={'best_sharpe': 1.5},
+            holdings=[],
+            exchange='US',
+        )
+        row = self.conn.execute(
+            "SELECT params_json FROM optimisation_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        params = json.loads(row['params_json'])
+        self.assertEqual(params['num_generations'], 70)
+        self.assertAlmostEqual(params['mutation_rate'], 0.01)
 
     def test_get_recent_runs(self):
         for i in range(3):
@@ -226,18 +313,35 @@ class TestOptimisationRuns(unittest.TestCase):
                 params={'script': 'test', 'best_sharpe': float(i)},
                 results={},
                 holdings=[],
+                exchange='US',
             )
         runs = db.get_recent_runs(self.conn, n=2)
         self.assertEqual(len(runs), 2)
-        # Most recent first
         self.assertEqual(runs[0]['id'], 3)
 
     def test_get_recent_runs_by_script(self):
-        db.save_optimisation_run(self.conn, params={'script': 'a'}, results={}, holdings=[])
-        db.save_optimisation_run(self.conn, params={'script': 'b'}, results={}, holdings=[])
+        db.save_optimisation_run(self.conn, params={'script': 'a'}, results={},
+                                 holdings=[], exchange='US')
+        db.save_optimisation_run(self.conn, params={'script': 'b'}, results={},
+                                 holdings=[], exchange='US')
         runs = db.get_recent_runs(self.conn, script='a')
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]['script'], 'a')
+
+    def test_holdings_fk_enforced(self):
+        """Holdings must reference valid tickers via ticker_id."""
+        run_id = db.save_optimisation_run(
+            self.conn,
+            params={'script': 'test'},
+            results={},
+            holdings=[],
+            exchange='US',
+        )
+        with self.assertRaises(Exception):
+            self.conn.execute(
+                "INSERT INTO portfolio_holdings (run_id, ticker_id, weight) VALUES (?, ?, ?)",
+                (run_id, 99999, 0.5),
+            )
 
 
 class TestBacktest(unittest.TestCase):
@@ -245,6 +349,13 @@ class TestBacktest(unittest.TestCase):
 
     def setUp(self):
         self.conn = db.get_connection(':memory:')
+        # Pre-create tickers for holdings resolution
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        prices = pd.DataFrame({
+            'SPY': [100.0, 101.0, 102.0],
+            'QQQ': [200.0, 201.0, 202.0],
+        }, index=dates)
+        db.save_prices(self.conn, prices, exchange='US', asset_type='etf')
 
     def tearDown(self):
         self.conn.close()
@@ -253,9 +364,9 @@ class TestBacktest(unittest.TestCase):
         session_id = db.save_backtest_session(self.conn, {
             'data_source': 'yahoo_finance',
             'num_portfolios': 20,
-            'num_children': 100,
             'num_days_oos': 252,
             'use_forecast': True,
+            'optimiser_params': {'num_children': 100},
         })
         self.assertIsInstance(session_id, int)
 
@@ -269,23 +380,74 @@ class TestBacktest(unittest.TestCase):
                                     'calmar_ratio': 0.8,
                                     'sortino_ratio': 2.4,
                                 },
-                                holdings=[('SPY', 0.5), ('QQQ', 0.5)])
+                                holdings=[('SPY', 0.5), ('QQQ', 0.5)],
+                                exchange='US')
 
         results = db.get_backtest_results(self.conn, session_id)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['category'], 'cc_optimised')
         self.assertAlmostEqual(results[0]['sharpe_ratio'], 1.5)
 
-        # Check holdings JSON
+        # Check holdings JSON (convenience cache)
         holdings = json.loads(results[0]['holdings_json'])
         self.assertEqual(len(holdings), 2)
         self.assertEqual(holdings[0]['ticker'], 'SPY')
+
+    def test_backtest_holdings_normalised(self):
+        """Normalised backtest_holdings table is populated alongside holdings_json."""
+        session_id = db.save_backtest_session(self.conn, {
+            'num_portfolios': 1,
+            'num_days_oos': 252,
+        })
+        db.save_backtest_result(self.conn, session_id, 'cc_optimised', 0,
+                                metrics={'sharpe_ratio': 1.0},
+                                holdings=[('SPY', 0.6), ('QQQ', 0.4)],
+                                exchange='US')
+
+        result_id = self.conn.execute(
+            "SELECT id FROM backtest_results WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+        rows = self.conn.execute(
+            "SELECT t.symbol, bh.weight "
+            "FROM backtest_holdings bh JOIN tickers t ON bh.ticker_id = t.id "
+            "WHERE bh.result_id = ? ORDER BY bh.weight DESC",
+            (result_id,),
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+        symbols = {r['symbol'] for r in rows}
+        self.assertEqual(symbols, {'SPY', 'QQQ'})
+
+    def test_backtest_unique_constraint(self):
+        """Cannot save duplicate (session_id, category, portfolio_index)."""
+        session_id = db.save_backtest_session(self.conn, {
+            'num_portfolios': 1,
+            'num_days_oos': 252,
+        })
+        db.save_backtest_result(self.conn, session_id, 'cc_optimised', 0,
+                                metrics={'sharpe_ratio': 1.0},
+                                exchange='US')
+        with self.assertRaises(Exception):
+            db.save_backtest_result(self.conn, session_id, 'cc_optimised', 0,
+                                    metrics={'sharpe_ratio': 2.0},
+                                    exchange='US')
+
+    def test_optimiser_params_json_stored(self):
+        session_id = db.save_backtest_session(self.conn, {
+            'num_portfolios': 20,
+            'num_days_oos': 252,
+            'optimiser_params': {'num_children': 100, 'method': 'ga'},
+        })
+        row = self.conn.execute(
+            "SELECT optimiser_params_json FROM backtest_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        params = json.loads(row['optimiser_params_json'])
+        self.assertEqual(params['num_children'], 100)
 
     def test_get_recent_backtests(self):
         for i in range(3):
             db.save_backtest_session(self.conn, {
                 'num_portfolios': 10 + i,
-                'num_children': 100,
                 'num_days_oos': 252,
             })
         recent = db.get_recent_backtests(self.conn, n=2)
@@ -349,14 +511,12 @@ class TestTickerNames(unittest.TestCase):
         self.assertIsNone(row['name'])
 
     def test_name_backfill_on_existing_ticker(self):
-        # First save without names
         db.save_prices(self.conn, self.prices_df, exchange='US')
         row = self.conn.execute(
             "SELECT name FROM tickers WHERE symbol = 'SPY'"
         ).fetchone()
         self.assertIsNone(row['name'])
 
-        # Save again with names — should backfill
         names = {'SPY': 'SPDR S&P 500 ETF'}
         db.save_prices(self.conn, self.prices_df, exchange='US', names=names)
         row = self.conn.execute(
@@ -379,11 +539,6 @@ class TestSavePricesEdgeCases(unittest.TestCase):
         self.conn.close()
 
     def test_save_prices_duplicate_column_names(self):
-        """
-        A DataFrame with duplicate column names causes save_prices to crash
-        when pandas attempts df.at[date, symbol] on a duplicate key.
-        Documents the bug so a future guard causes a deliberate test update.
-        """
         df = pd.DataFrame(
             [[100.0, 101.0], [102.0, 103.0], [104.0, 105.0]],
             index=self.dates,
@@ -391,17 +546,6 @@ class TestSavePricesEdgeCases(unittest.TestCase):
         )
         with self.assertRaises(Exception):
             db.save_prices(self.conn, df, exchange='US')
-
-    def test_load_prices_invalid_date_string(self):
-        """
-        An invalid date string for 'start' is passed as-is to SQLite as a
-        string comparison. No exception is raised; SQLite returns rows whose
-        date string sorts after the invalid string. Pins current silent behavior.
-        """
-        df = pd.DataFrame({'SPY': [100.0, 101.0, 102.0]}, index=self.dates)
-        db.save_prices(self.conn, df, exchange='US')
-        result = db.load_prices(self.conn, exchange='US', start='not-a-date')
-        self.assertIsInstance(result, pd.DataFrame)
 
 
 class TestLoadPricesAssetTypeFilter(unittest.TestCase):
@@ -438,7 +582,7 @@ class TestLoadPricesAssetTypeFilter(unittest.TestCase):
                          ['AAPL', 'MSFT', 'QQQ', 'SPY'])
 
     def test_filter_nonexistent_type_returns_empty(self):
-        result = db.load_prices(self.conn, exchange='US', asset_type='fund')
+        result = db.load_prices(self.conn, exchange='US', asset_type='managed_fund')
         self.assertTrue(result.empty)
 
 
@@ -474,6 +618,72 @@ class TestGetLatestPricesDate(unittest.TestCase):
         result = db.get_latest_prices_date(empty_conn)
         self.assertIsNone(result)
         empty_conn.close()
+
+
+class TestCountryColumn(unittest.TestCase):
+    """Test country metadata storage and filtering."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        self.us_prices = pd.DataFrame(
+            {'AAPL': [150.0, 151, 152], 'MSFT': [300.0, 301, 302]},
+            index=dates,
+        )
+        self.jp_prices = pd.DataFrame(
+            {'TM': [180.0, 181, 182]},
+            index=dates,
+        )
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_country_stored_when_provided(self):
+        countries = {'AAPL': 'United States', 'MSFT': 'United States'}
+        db.save_prices(self.conn, self.us_prices, exchange='US',
+                       asset_type='stock', countries=countries)
+        row = self.conn.execute(
+            "SELECT country FROM tickers WHERE symbol = 'AAPL'"
+        ).fetchone()
+        self.assertEqual(row['country'], 'United States')
+
+    def test_country_null_when_not_provided(self):
+        db.save_prices(self.conn, self.us_prices, exchange='US', asset_type='stock')
+        row = self.conn.execute(
+            "SELECT country FROM tickers WHERE symbol = 'AAPL'"
+        ).fetchone()
+        self.assertIsNone(row['country'])
+
+    def test_country_backfill(self):
+        db.save_prices(self.conn, self.us_prices, exchange='US', asset_type='stock')
+        countries = {'AAPL': 'United States'}
+        db.save_prices(self.conn, self.us_prices, exchange='US',
+                       asset_type='stock', countries=countries)
+        row = self.conn.execute(
+            "SELECT country FROM tickers WHERE symbol = 'AAPL'"
+        ).fetchone()
+        self.assertEqual(row['country'], 'United States')
+
+    def test_exclude_countries_filter(self):
+        countries_us = {'AAPL': 'United States', 'MSFT': 'United States'}
+        countries_jp = {'TM': 'Japan'}
+        db.save_prices(self.conn, self.us_prices, exchange='US',
+                       asset_type='stock', countries=countries_us)
+        db.save_prices(self.conn, self.jp_prices, exchange='US',
+                       asset_type='stock', countries=countries_jp)
+        result = db.load_prices(self.conn, exchange='US',
+                                exclude_countries=['Japan'])
+        self.assertEqual(sorted(result.columns.tolist()), ['AAPL', 'MSFT'])
+
+    def test_exclude_countries_keeps_null_country(self):
+        db.save_prices(self.conn, self.us_prices, exchange='US', asset_type='etf')
+        countries_jp = {'TM': 'Japan'}
+        db.save_prices(self.conn, self.jp_prices, exchange='US',
+                       asset_type='stock', countries=countries_jp)
+        result = db.load_prices(self.conn, exchange='US',
+                                exclude_countries=['Japan'])
+        self.assertIn('AAPL', result.columns)
+        self.assertNotIn('TM', result.columns)
 
 
 if __name__ == '__main__':

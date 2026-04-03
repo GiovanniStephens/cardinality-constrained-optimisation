@@ -386,9 +386,9 @@ def main():
     session_id = db.save_backtest_session(conn, {
         'data_source': 'yahoo_finance',
         'num_portfolios': NUM_PORTFOLIOS,
-        'num_children': NUM_CHILDREN,
         'num_days_oos': NUM_DAYS_OUT_OF_SAMPLE,
         'use_forecast': USE_FORECAST,
+        'optimiser_params': {'num_children': NUM_CHILDREN},
         'elapsed_seconds': bt_elapsed,
     })
     categories = [
