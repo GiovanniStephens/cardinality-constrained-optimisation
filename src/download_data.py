@@ -118,7 +118,7 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
     :param exchanges: exchange filter (applies to all asset types).
     :param etf_categories: category filter (applies to ETFs).
     :param etf_category_groups: category group filter (applies to ETFs).
-    :returns: DataFrame with columns ['Tickers', 'Name', 'AssetType'].
+    :returns: DataFrame with columns ['Tickers', 'Name', 'Country', 'AssetType'].
     """
     if asset_types is None:
         asset_types = ['equities', 'etfs', 'funds']
@@ -132,6 +132,7 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
             eq_df = pd.DataFrame({
                 'Tickers': equities.index,
                 'Name': equities['name'] if 'name' in equities.columns else '',
+                'Country': equities['country'] if 'country' in equities.columns else '',
                 'AssetType': 'equity'
             })
             all_securities.append(eq_df)
@@ -143,6 +144,7 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
             etf_df = pd.DataFrame({
                 'Tickers': etfs.index,
                 'Name': etfs['name'] if 'name' in etfs.columns else '',
+                'Country': '',
                 'AssetType': 'etf'
             })
             all_securities.append(etf_df)
@@ -153,12 +155,13 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
             fund_df = pd.DataFrame({
                 'Tickers': funds.index,
                 'Name': funds['name'] if 'name' in funds.columns else '',
+                'Country': '',
                 'AssetType': 'fund'
             })
             all_securities.append(fund_df)
 
     if not all_securities:
-        return pd.DataFrame(columns=['Tickers', 'Name', 'AssetType'])
+        return pd.DataFrame(columns=['Tickers', 'Name', 'Country', 'AssetType'])
 
     combined = pd.concat(all_securities, ignore_index=True)
     combined = combined.drop_duplicates(subset='Tickers')
@@ -259,7 +262,7 @@ def download_and_save(
     tickers, conn, exchange, asset_type='etf',
     start='2014-04-30', end='2025-04-30',
     batch_size=500, null_threshold=0.9,
-    names=None, max_retries=3,
+    names=None, countries=None, max_retries=3,
 ):
     """
     Download prices in batches and persist each batch to the database immediately.
@@ -276,6 +279,7 @@ def download_and_save(
     :param batch_size: number of tickers per yfinance request.
     :param null_threshold: fraction of non-null rows required to keep a ticker.
     :param names: optional dict {symbol: name_string}.
+    :param countries: optional dict {symbol: country_string}.
     :param max_retries: retries per batch on download failure.
     :returns: dict with keys total_tickers, saved_tickers, failed_batches.
     """
@@ -313,13 +317,16 @@ def download_and_save(
         if batch_df.empty:
             continue
 
-        # Build per-batch names dict
+        # Build per-batch metadata dicts
         batch_names = None
         if names:
             batch_names = {t: names[t] for t in batch_df.columns if t in names}
+        batch_countries = None
+        if countries:
+            batch_countries = {t: countries[t] for t in batch_df.columns if t in countries}
 
         db.save_prices(conn, batch_df, exchange=exchange, asset_type=asset_type,
-                       names=batch_names)
+                       names=batch_names, countries=batch_countries)
         total_saved += batch_df.shape[1]
         logger.info("Batch %d: saved %d tickers (total: %d)",
                      batch_num, batch_df.shape[1], total_saved)
@@ -437,11 +444,14 @@ def main():
             names = None
             if 'Name' in group.columns:
                 names = dict(zip(group[args.ticker_column], group['Name']))
+            countries = None
+            if 'Country' in group.columns:
+                countries = dict(zip(group[args.ticker_column], group['Country']))
             logger.info("Downloading %d %s tickers...", len(ticker_list), db_type)
             result = download_and_save(
                 ticker_list, conn, exchange=args.exchange, asset_type=db_type,
                 start=start, end=args.end, null_threshold=args.null_threshold,
-                names=names,
+                names=names, countries=countries,
             )
             all_results.append((db_type, result))
 

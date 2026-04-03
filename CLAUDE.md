@@ -90,8 +90,8 @@ python -m unittest discover tests
 ## Key Concepts
 
 - **Sharpe ratio** = E(R) / Std(R) is the primary objective function
-- **Cardinality constraint**: typically 3-20 ETFs from a universe of 1700+
-- **Genetic algorithm** selects which ETFs; **SLSQP** optimises portfolio weights
+- **Cardinality constraint**: typically 10-20 instruments from a universe of thousands
+- **Genetic algorithm** selects which instruments; **SLSQP** optimises portfolio weights
 - **Island-based parallel GA** with migration for better convergence (`src/simple_ga_optimisation.py`, `cpp/optimisation.cpp`)
 - **CCC model** (Bollerslev 1990): forecast variances via GARCH, historical correlations for covariance
 - **Copula-GARCH**: AR(1)-GARCH residuals fitted with skew-t copulas for better correlation estimation
@@ -158,6 +158,43 @@ conn.close()
 
 ### Exchange codes
 
-- **US** — United States (ETFs, stocks from Yahoo Finance)
+- **US** — United States (ETFs, stocks, ADRs — all FinanceDatabase instruments are US-listed)
 - **NZX** — New Zealand Exchange (ETFs, InvestNow managed funds)
 - **ASX** — Australian Securities Exchange
+
+Note: Geographic exposure is tracked via the `country` column on `tickers`, not via exchange codes. FinanceDatabase instruments are all US-listed; the `country` field reflects the company's domicile.
+
+## Investment Universe
+
+### Investor Profile
+
+- **Broker**: Interactive Brokers (US + international markets)
+- **Tax jurisdiction**: New Zealand — FIF rules apply (5% FDR on offshore holdings over $50k cost)
+- **Existing exposure**: Significant NZ/AU via KiwiSaver — IB portfolio should diversify away from this
+- **Portfolio size**: $50k–$200k NZD
+
+### Universe Scope
+
+All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/universe_config.py`.
+
+- **Equities**: ~22k across 27 countries (US, Canada, UK, Japan, Australia, Germany, France, Switzerland, Netherlands, Sweden, Norway, Denmark, Finland, Ireland, Belgium, Austria, Singapore, Hong Kong, Israel, New Zealand, Brazil, Mexico, India, South Korea, Taiwan, South Africa, Thailand). Foreign companies are available as US-listed ADRs.
+- **ETFs**: ~2,900 covering equities, bonds/treasuries, commodities, REITs, crypto, managed futures/CTA
+- **Excluded**: China, Russia (geopolitical risk)
+- **History filter**: 5+ years of daily price data required (~1,260 trading days)
+
+### Asset Classes of Interest
+
+| Class | Examples | Diversification role |
+|-------|---------|---------------------|
+| Bonds/Treasuries | TLT, IEF, AGG, TIPS | Negative equity correlation |
+| Commodities | GLD, SLV, DBC, DBA | Low equity correlation |
+| REITs | VNQ, VNQI | Different return drivers |
+| Managed futures/CTA | DBMF, KMLM | Designed for low/negative correlation |
+| Crypto ETFs | BITO, IBIT, ETHE | Low traditional-asset correlation |
+| International equities | ADRs + country ETFs | Geographic diversification |
+
+### Portfolio Constraints
+
+- **Positions**: 10–20 (cardinality constraint)
+- **Rebalancing**: Quarterly
+- **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
