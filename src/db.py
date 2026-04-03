@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS exchanges (
 CREATE TABLE IF NOT EXISTS tickers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol      TEXT NOT NULL,
+    name        TEXT,
     exchange_id INTEGER NOT NULL REFERENCES exchanges(id),
     asset_type  TEXT,
     created_at  TEXT NOT NULL,
@@ -177,6 +178,11 @@ def get_connection(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
+    # Migrate: add 'name' column to tickers if missing (existing databases)
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(tickers)").fetchall()]
+    if 'name' not in cols:
+        conn.execute("ALTER TABLE tickers ADD COLUMN name TEXT")
+        conn.commit()
     # Seed exchanges if empty
     count = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     if count == 0:
@@ -200,8 +206,11 @@ def _get_exchange_id(conn, code):
     return row[0]
 
 
-def _ensure_tickers(conn, symbols, exchange_id, asset_type=None):
-    """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}."""
+def _ensure_tickers(conn, symbols, exchange_id, asset_type=None, names=None):
+    """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
+
+    names: optional dict {symbol: name_string} to populate the name column.
+    """
     now = _now()
     # Fetch existing
     placeholders = ','.join('?' for _ in symbols)
@@ -215,9 +224,10 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type=None):
     missing = [s for s in symbols if s not in existing]
     if missing:
         conn.executemany(
-            "INSERT OR IGNORE INTO tickers (symbol, exchange_id, asset_type, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [(s, exchange_id, asset_type, now, now) for s in missing],
+            "INSERT OR IGNORE INTO tickers (symbol, name, exchange_id, asset_type, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(s, names.get(s) if names else None, exchange_id, asset_type, now, now)
+             for s in missing],
         )
         # Re-fetch to get IDs for newly inserted
         rows = conn.execute(
@@ -226,22 +236,33 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type=None):
         ).fetchall()
         existing = {r['symbol']: r['id'] for r in rows}
 
+    # Backfill names for existing tickers that don't have one yet
+    if names:
+        conn.executemany(
+            "UPDATE tickers SET name = ?, updated_at = ? WHERE id = ? AND name IS NULL",
+            [(names[s], now, existing[s]) for s in existing if s in names and names[s]],
+        )
+
     return existing
 
 
 # ─── Data storage ─────────────────────────────────────────────────────────────
 
-def save_prices(conn, prices_df, exchange, asset_type='etf', source=None):
+def save_prices(conn, prices_df, exchange, asset_type='etf', source=None, names=None):
     """
     Save a wide-format DataFrame of prices to the database.
 
     prices_df: index = dates (or integer index), columns = ticker symbols, values = close prices.
     exchange: 'US', 'NZX', 'ASX'
+    names: optional dict {symbol: name_string} to populate ticker names.
     Returns data_source id.
     """
     exchange_id = _get_exchange_id(conn, exchange)
     symbols = list(prices_df.columns)
-    ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type)
+    dupes = [s for s in set(symbols) if symbols.count(s) > 1]
+    if dupes:
+        raise ValueError(f"DataFrame has duplicate column names: {dupes}")
+    ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type, names=names)
 
     # Normalise index to date strings
     df = prices_df.copy()

@@ -83,6 +83,10 @@ def sharpe_ratio(weights, expected_returns, cov_matrix):
     :param cov_matrix: covariance matrix (array or DataFrame).
     :return: Sharpe ratio as a float.
     """
+    if len(weights) != len(expected_returns) or len(weights) != cov_matrix.shape[0]:
+        raise ValueError(
+            "weights, expected_returns, and cov_matrix dimensions must match"
+        )
     p_return = np.sum(weights * expected_returns)
     p_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
     if p_volatility == 0:

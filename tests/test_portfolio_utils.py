@@ -1,5 +1,7 @@
 """Tests for portfolio_utils shared functions."""
 
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -33,6 +35,23 @@ class TestLoadPricesCsv(unittest.TestCase):
         recent = load_prices_csv('Data/time_series_20251016_113257.csv', last_n_days=365)
         self.assertLess(recent.shape[0], full.shape[0])
 
+    def test_headers_only_returns_empty_dataframe(self):
+        """
+        A CSV with column headers but no data rows returns an empty DataFrame
+        without raising.
+        """
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.csv', delete=False
+        ) as f:
+            f.write('Date,SPY,QQQ\n')
+            path = f.name
+        try:
+            result = load_prices_csv(path)
+            self.assertIsInstance(result, pd.DataFrame)
+            self.assertEqual(len(result), 0)
+        finally:
+            os.unlink(path)
+
 
 class TestCalculateLogReturns(unittest.TestCase):
     def test_shape_preserved(self):
@@ -55,6 +74,19 @@ class TestCalculateLogReturns(unittest.TestCase):
         prices = pd.DataFrame({'A': [100.0, 200.0]})
         returns = calculate_log_returns(prices)
         self.assertAlmostEqual(returns.iloc[1, 0], np.log(2), places=10)
+
+    def test_all_nan_column_becomes_zero(self):
+        """
+        A column that is entirely NaN is silently converted to all-zero returns
+        by the fillna(0) guard. No exception should be raised.
+        """
+        prices = pd.DataFrame({
+            'A': [100.0, 110.0, 121.0],
+            'B': [float('nan'), float('nan'), float('nan')],
+        })
+        returns = calculate_log_returns(prices)
+        self.assertFalse(returns.isna().any().any())
+        self.assertTrue((returns['B'] == 0.0).all())
 
 
 class TestCovarianceMatrix(unittest.TestCase):
@@ -120,6 +152,17 @@ class TestSharpeRatio(unittest.TestCase):
         cov = np.array([[0.0]])
         sr = sharpe_ratio(weights, er, cov)
         self.assertEqual(sr, 0.0)
+
+    def test_mismatched_dimensions_raises(self):
+        """
+        weights (2,) vs expected_returns (3,) causes a numpy broadcast error.
+        No guard exists in sharpe_ratio(), so this crashes.
+        """
+        weights = np.array([0.5, 0.5])
+        er = np.array([0.10, 0.12, 0.08])
+        cov = np.array([[0.04, 0.01], [0.01, 0.04]])
+        with self.assertRaises((ValueError, IndexError)):
+            sharpe_ratio(weights, er, cov)
 
 
 if __name__ == '__main__':

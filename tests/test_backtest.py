@@ -195,6 +195,31 @@ class TestBacktest(unittest.TestCase):
         with self.assertRaises(KeyError):
             backtest.optimal_weights(['NONEXISTENT_TICKER_XYZ'])
 
+    def test_maximum_drawdown_empty_returns(self):
+        """
+        maximum_drawdown([]) crashes with IndexError because it accesses
+        portfolio_returns[0] unconditionally before any length check.
+        """
+        with self.assertRaises((IndexError, ValueError)):
+            backtest.maximum_drawdown([])
+
+    def test_calmar_ratio_positive_drawdown_sign_convention(self):
+        """
+        calmar_ratio uses abs(downside_drawdown), so it returns a positive
+        ratio for a positive return regardless of the sign of the drawdown
+        argument. Callers do not need to track the sign convention.
+        """
+        result = backtest.calmar_ratio(0.10, 0.20)
+        self.assertGreater(result, 0)
+
+    def test_difference_of_means_hypothesis_test_identical_samples(self):
+        """
+        When both samples are identical (zero variance), the denominator is 0.
+        The function raises ValueError rather than silently returning nan.
+        """
+        with self.assertRaises(ValueError):
+            backtest.difference_of_means_hypothesis_test([5, 5, 5], [5, 5, 5])
+
 
 if __name__ == '__main__':
     unittest.main()

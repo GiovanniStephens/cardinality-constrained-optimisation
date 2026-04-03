@@ -319,6 +319,17 @@ def main():
                 prices.shape[1] - filtered_prices.shape[1],
                 args.output)
 
+    # Step 3: Save to database
+    from src import db
+    names = None
+    if 'Name' in tickers_df.columns:
+        names = dict(zip(tickers_df['Tickers'], tickers_df['Name']))
+    conn = db.get_connection()
+    db.save_prices(conn, filtered_prices, exchange='US', asset_type='etf',
+                   names=names)
+    conn.close()
+    logger.info("Saved prices and ticker names to database")
+
 
 if __name__ == '__main__':
     main()

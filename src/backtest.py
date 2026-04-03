@@ -110,10 +110,12 @@ def maximum_drawdown(portfolio_returns):
              from the highest peak to the lowest low.
     """
     # I need to calculate the cummulative maximum.
+    if not portfolio_returns:
+        raise ValueError("portfolio_returns cannot be empty")
     cummax = []
     # Then the cummulative return.
     cum_return = []
-    # Then the drawdown is the percentage diff between the cummulative 
+    # Then the drawdown is the percentage diff between the cummulative
     # max and the cummulative return.
     drawdowns = []
 
@@ -171,7 +173,7 @@ def calmar_ratio(r, downside_drawdown):
     """
     if downside_drawdown == 0:
         return 0.0
-    return r / -downside_drawdown
+    return r / abs(downside_drawdown)
 
 
 def get_statistics(portfolio, weights, log_returns):
@@ -232,9 +234,16 @@ def difference_of_means_hypothesis_test(sample_1, sample_2):
     :sample_2: The second sample. List of floats.
     :return: The t statistic.
     """
-    return (np.mean(sample_2) - np.mean(sample_1)) / \
-        np.sqrt(np.var(sample_1) / len(sample_1) +
-                np.var(sample_2) / len(sample_2))
+    if not sample_1 or not sample_2:
+        raise ValueError("Both samples must be non-empty")
+    denominator = np.sqrt(
+        np.var(sample_1) / len(sample_1) + np.var(sample_2) / len(sample_2)
+    )
+    if denominator == 0:
+        raise ValueError(
+            "t-statistic is undefined: both samples have zero variance"
+        )
+    return (np.mean(sample_2) - np.mean(sample_1)) / denominator
 
 
 METRIC_NAMES = ['annualised_return', 'annualised_volatility', 'sharpe_ratio',

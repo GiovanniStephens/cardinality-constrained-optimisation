@@ -319,5 +319,90 @@ class TestMetadata(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestTickerNames(unittest.TestCase):
+    """Test ticker name storage, backward compat, and backfill."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        self.prices_df = pd.DataFrame({
+            'SPY': [100.0, 101.0, 102.0],
+            'QQQ': [200.0, 201.0, 202.0],
+        }, index=dates)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_name_stored_when_provided(self):
+        names = {'SPY': 'SPDR S&P 500 ETF', 'QQQ': 'Invesco QQQ Trust'}
+        db.save_prices(self.conn, self.prices_df, exchange='US', names=names)
+        row = self.conn.execute(
+            "SELECT name FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertEqual(row['name'], 'SPDR S&P 500 ETF')
+
+    def test_name_null_when_not_provided(self):
+        db.save_prices(self.conn, self.prices_df, exchange='US')
+        row = self.conn.execute(
+            "SELECT name FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertIsNone(row['name'])
+
+    def test_name_backfill_on_existing_ticker(self):
+        # First save without names
+        db.save_prices(self.conn, self.prices_df, exchange='US')
+        row = self.conn.execute(
+            "SELECT name FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertIsNone(row['name'])
+
+        # Save again with names — should backfill
+        names = {'SPY': 'SPDR S&P 500 ETF'}
+        db.save_prices(self.conn, self.prices_df, exchange='US', names=names)
+        row = self.conn.execute(
+            "SELECT name FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertEqual(row['name'], 'SPDR S&P 500 ETF')
+
+    def test_name_column_exists_in_schema(self):
+        cols = [row[1] for row in
+                self.conn.execute("PRAGMA table_info(tickers)").fetchall()]
+        self.assertIn('name', cols)
+
+
+class TestSavePricesEdgeCases(unittest.TestCase):
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        self.dates = pd.date_range('2024-01-01', periods=3, freq='D')
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_save_prices_duplicate_column_names(self):
+        """
+        A DataFrame with duplicate column names causes save_prices to crash
+        when pandas attempts df.at[date, symbol] on a duplicate key.
+        Documents the bug so a future guard causes a deliberate test update.
+        """
+        df = pd.DataFrame(
+            [[100.0, 101.0], [102.0, 103.0], [104.0, 105.0]],
+            index=self.dates,
+            columns=['SPY', 'SPY'],
+        )
+        with self.assertRaises(Exception):
+            db.save_prices(self.conn, df, exchange='US')
+
+    def test_load_prices_invalid_date_string(self):
+        """
+        An invalid date string for 'start' is passed as-is to SQLite as a
+        string comparison. No exception is raised; SQLite returns rows whose
+        date string sorts after the invalid string. Pins current silent behavior.
+        """
+        df = pd.DataFrame({'SPY': [100.0, 101.0, 102.0]}, index=self.dates)
+        db.save_prices(self.conn, df, exchange='US')
+        result = db.load_prices(self.conn, exchange='US', start='not-a-date')
+        self.assertIsInstance(result, pd.DataFrame)
+
+
 if __name__ == '__main__':
     unittest.main()
