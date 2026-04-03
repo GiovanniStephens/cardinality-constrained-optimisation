@@ -301,11 +301,13 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None, names=
     return ds_id
 
 
-def load_prices(conn, exchange=None, start=None, end=None,
+def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
                 tickers=None, min_coverage=0.95):
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
+
+    asset_type: optional filter, e.g. 'etf', 'stock', 'fund'.
     """
     query = """
         SELECT t.symbol, p.date, p.close
@@ -319,6 +321,9 @@ def load_prices(conn, exchange=None, start=None, end=None,
         exchange_id = _get_exchange_id(conn, exchange)
         conditions.append("t.exchange_id = ?")
         params.append(exchange_id)
+    if asset_type is not None:
+        conditions.append("t.asset_type = ?")
+        params.append(asset_type)
     if start is not None:
         conditions.append("p.date >= ?")
         params.append(start)
@@ -354,6 +359,35 @@ def load_prices(conn, exchange=None, start=None, end=None,
     df = df.ffill()
 
     return df
+
+
+def get_latest_prices_date(conn, exchange=None, asset_type=None):
+    """Return the most recent date string in the prices table, or None.
+
+    Useful for incremental downloads: start from the day after this date.
+    """
+    query = "SELECT MAX(p.date) FROM prices p"
+    joins = []
+    conditions = []
+    params = []
+
+    if exchange is not None or asset_type is not None:
+        joins.append("JOIN tickers t ON p.ticker_id = t.id")
+    if exchange is not None:
+        exchange_id = _get_exchange_id(conn, exchange)
+        conditions.append("t.exchange_id = ?")
+        params.append(exchange_id)
+    if asset_type is not None:
+        conditions.append("t.asset_type = ?")
+        params.append(asset_type)
+
+    if joins:
+        query += " " + " ".join(joins)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    row = conn.execute(query, params).fetchone()
+    return row[0] if row else None
 
 
 def save_forecast_results(conn, expected_returns_s, variances_s,

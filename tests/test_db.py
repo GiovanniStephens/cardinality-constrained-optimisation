@@ -404,5 +404,77 @@ class TestSavePricesEdgeCases(unittest.TestCase):
         self.assertIsInstance(result, pd.DataFrame)
 
 
+class TestLoadPricesAssetTypeFilter(unittest.TestCase):
+    """Test that load_prices can filter by asset_type."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        self.etf_prices = pd.DataFrame(
+            {'SPY': [100.0, 101.0, 102.0], 'QQQ': [200.0, 201.0, 202.0]},
+            index=dates,
+        )
+        self.stock_prices = pd.DataFrame(
+            {'AAPL': [150.0, 151.0, 152.0], 'MSFT': [300.0, 301.0, 302.0]},
+            index=dates,
+        )
+        db.save_prices(self.conn, self.etf_prices, exchange='US', asset_type='etf')
+        db.save_prices(self.conn, self.stock_prices, exchange='US', asset_type='stock')
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_filter_by_stock(self):
+        result = db.load_prices(self.conn, exchange='US', asset_type='stock')
+        self.assertEqual(sorted(result.columns.tolist()), ['AAPL', 'MSFT'])
+
+    def test_filter_by_etf(self):
+        result = db.load_prices(self.conn, exchange='US', asset_type='etf')
+        self.assertEqual(sorted(result.columns.tolist()), ['QQQ', 'SPY'])
+
+    def test_no_filter_returns_all(self):
+        result = db.load_prices(self.conn, exchange='US')
+        self.assertEqual(sorted(result.columns.tolist()),
+                         ['AAPL', 'MSFT', 'QQQ', 'SPY'])
+
+    def test_filter_nonexistent_type_returns_empty(self):
+        result = db.load_prices(self.conn, exchange='US', asset_type='fund')
+        self.assertTrue(result.empty)
+
+
+class TestGetLatestPricesDate(unittest.TestCase):
+    """Test get_latest_prices_date helper."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=5, freq='D')
+        etf_prices = pd.DataFrame({'SPY': [100.0, 101, 102, 103, 104]}, index=dates)
+        stock_dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        stock_prices = pd.DataFrame({'AAPL': [150.0, 151, 152]}, index=stock_dates)
+        db.save_prices(self.conn, etf_prices, exchange='US', asset_type='etf')
+        db.save_prices(self.conn, stock_prices, exchange='US', asset_type='stock')
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_latest_date_no_filter(self):
+        result = db.get_latest_prices_date(self.conn, exchange='US')
+        self.assertEqual(result, '2024-01-05')
+
+    def test_latest_date_filter_stock(self):
+        result = db.get_latest_prices_date(self.conn, exchange='US', asset_type='stock')
+        self.assertEqual(result, '2024-01-03')
+
+    def test_latest_date_filter_etf(self):
+        result = db.get_latest_prices_date(self.conn, exchange='US', asset_type='etf')
+        self.assertEqual(result, '2024-01-05')
+
+    def test_latest_date_empty_db(self):
+        empty_conn = db.get_connection(':memory:')
+        result = db.get_latest_prices_date(empty_conn)
+        self.assertIsNone(result)
+        empty_conn.close()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -15,10 +15,27 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+# Maps FinanceDatabase asset type labels to DB-canonical names.
+# DB migration uses 'stock' for equities (see db._migrate_ticker_list).
+ASSET_TYPE_MAP = {'equity': 'stock', 'etf': 'etf', 'fund': 'fund'}
+
 
 # ---------------------------------------------------------------------------
 # Universe building (from FinanceDatabase)
 # ---------------------------------------------------------------------------
+
+def _filter_by_exchange(df, exchanges):
+    """Post-filter a FinanceDatabase result by exchange column.
+
+    The library's select() does not accept 'exchange' as a keyword, so we
+    filter the returned DataFrame manually.
+    """
+    if exchanges and 'exchange' in df.columns:
+        if isinstance(exchanges, str):
+            exchanges = [exchanges]
+        df = df[df['exchange'].isin(exchanges)]
+    return df
+
 
 def get_equities(countries=None, sectors=None, industries=None,
                  exchanges=None) -> pd.DataFrame:
@@ -28,7 +45,7 @@ def get_equities(countries=None, sectors=None, industries=None,
     :param countries: country or list of countries to filter by.
     :param sectors: sector or list of sectors to filter by.
     :param industries: industry or list of industries to filter by.
-    :param exchanges: exchange or list of exchanges to filter by.
+    :param exchanges: exchange or list of exchanges to filter by (post-filter).
     :returns: DataFrame with ticker symbols and metadata.
     """
     equities = fd.Equities()
@@ -39,9 +56,7 @@ def get_equities(countries=None, sectors=None, industries=None,
         kwargs['sector'] = sectors
     if industries:
         kwargs['industry'] = industries
-    if exchanges:
-        kwargs['exchange'] = exchanges
-    return equities.select(**kwargs)
+    return _filter_by_exchange(equities.select(**kwargs), exchanges)
 
 
 def get_etfs(category_groups=None, categories=None, families=None,
@@ -63,9 +78,7 @@ def get_etfs(category_groups=None, categories=None, families=None,
         kwargs['category'] = categories
     if families:
         kwargs['family'] = families
-    if exchanges:
-        kwargs['exchange'] = exchanges
-    return etfs.select(**kwargs)
+    return _filter_by_exchange(etfs.select(**kwargs), exchanges)
 
 
 def get_funds(category_groups=None, categories=None, families=None,
@@ -87,9 +100,7 @@ def get_funds(category_groups=None, categories=None, families=None,
         kwargs['category'] = categories
     if families:
         kwargs['family'] = families
-    if exchanges:
-        kwargs['exchange'] = exchanges
-    return funds.select(**kwargs)
+    return _filter_by_exchange(funds.select(**kwargs), exchanges)
 
 
 def build_security_universe(asset_types=None, countries=None, sectors=None,
@@ -181,6 +192,26 @@ def load_tickers(filename: str, ticker_column: str = 'Tickers') -> pd.DataFrame:
 # Price downloading
 # ---------------------------------------------------------------------------
 
+def _download_batch(tickers, start, end):
+    """Download a single batch from yfinance. Returns wide DataFrame or None."""
+    tickers_str = " ".join(tickers)
+    prices = yf.download(
+        tickers_str, interval="1d", group_by="ticker", start=start, end=end,
+    )
+    batch_prices = {}
+    for ticker in tickers:
+        try:
+            if len(tickers) == 1:
+                batch_prices[ticker] = prices["Close"].tolist()
+            else:
+                batch_prices[ticker] = prices[ticker]["Close"].tolist()
+        except (KeyError, TypeError):
+            logger.warning("No data returned for ticker '%s'; skipping.", ticker)
+    if not batch_prices:
+        return None
+    return pd.DataFrame(batch_prices)
+
+
 def download_data(
     tickers_df: pd.DataFrame,
     ticker_column: str = "Tickers",
@@ -208,31 +239,96 @@ def download_data(
 
     all_prices = {}
     for batch_num, batch in enumerate(batches, 1):
-        logger.info("Downloading batch %d/%d (%d tickers)...", batch_num, len(batches), len(batch))
-        tickers_str = " ".join(batch)
+        logger.info("Downloading batch %d/%d (%d tickers)...",
+                     batch_num, len(batches), len(batch))
         try:
-            prices = yf.download(
-                tickers_str,
-                interval="1d",
-                group_by="ticker",
-                start=start,
-                end=end,
-            )
+            batch_df = _download_batch(batch, start, end)
         except Exception as e:
-            raise ConnectionError(f"Failed to download data from Yahoo Finance: {e}") from e
-        for ticker in batch:
-            try:
-                if len(batch) == 1:
-                    all_prices[ticker] = prices["Close"].tolist()
-                else:
-                    all_prices[ticker] = prices[ticker]["Close"].tolist()
-            except (KeyError, TypeError):
-                logger.warning("No data returned for ticker '%s'; skipping.", ticker)
+            raise ConnectionError(
+                f"Failed to download data from Yahoo Finance: {e}") from e
+        if batch_df is not None:
+            for col in batch_df.columns:
+                all_prices[col] = batch_df[col].tolist()
 
     if not all_prices:
         raise ValueError("No valid price data could be extracted for any ticker.")
-    prices_df = pd.DataFrame(all_prices)
-    return prices_df
+    return pd.DataFrame(all_prices)
+
+
+def download_and_save(
+    tickers, conn, exchange, asset_type='etf',
+    start='2014-04-30', end='2025-04-30',
+    batch_size=500, null_threshold=0.9,
+    names=None, max_retries=3,
+):
+    """
+    Download prices in batches and persist each batch to the database immediately.
+
+    This is the preferred path for large universes (1000+ tickers). Each batch is
+    saved via upsert so the run can be safely interrupted and resumed.
+
+    :param tickers: list of ticker symbol strings.
+    :param conn: open sqlite3 connection (from db.get_connection()).
+    :param exchange: DB exchange code ('US', 'NZX', 'ASX').
+    :param asset_type: DB asset type ('etf', 'stock', 'fund').
+    :param start: start date for price data.
+    :param end: end date for price data.
+    :param batch_size: number of tickers per yfinance request.
+    :param null_threshold: fraction of non-null rows required to keep a ticker.
+    :param names: optional dict {symbol: name_string}.
+    :param max_retries: retries per batch on download failure.
+    :returns: dict with keys total_tickers, saved_tickers, failed_batches.
+    """
+    from src import db
+
+    batches = [
+        tickers[i : i + batch_size]
+        for i in range(0, len(tickers), batch_size)
+    ]
+    total_saved = 0
+    failed_batches = []
+
+    for batch_num, batch in enumerate(batches, 1):
+        logger.info("Batch %d/%d (%d tickers)...", batch_num, len(batches), len(batch))
+        batch_df = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                batch_df = _download_batch(batch, start, end)
+                break
+            except Exception as e:
+                logger.warning("Batch %d attempt %d/%d failed: %s",
+                               batch_num, attempt, max_retries, e)
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)
+
+        if batch_df is None or batch_df.empty:
+            logger.warning("Batch %d: no data returned, skipping.", batch_num)
+            failed_batches.append(batch_num)
+            continue
+
+        # Filter out tickers with too many nulls
+        threshold = int(len(batch_df) * null_threshold)
+        batch_df = batch_df.dropna(axis=1, thresh=threshold)
+        if batch_df.empty:
+            continue
+
+        # Build per-batch names dict
+        batch_names = None
+        if names:
+            batch_names = {t: names[t] for t in batch_df.columns if t in names}
+
+        db.save_prices(conn, batch_df, exchange=exchange, asset_type=asset_type,
+                       names=batch_names)
+        total_saved += batch_df.shape[1]
+        logger.info("Batch %d: saved %d tickers (total: %d)",
+                     batch_num, batch_df.shape[1], total_saved)
+
+    return {
+        'total_tickers': len(tickers),
+        'saved_tickers': total_saved,
+        'failed_batches': failed_batches,
+    }
 
 
 def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
@@ -272,18 +368,28 @@ def main():
                              'FinanceDatabase (e.g. Data/ETFs.csv).')
     parser.add_argument('--ticker-column', default='Tickers',
                         help='Column name for tickers in the CSV.')
+    parser.add_argument('--asset-type', default='etf',
+                        help='Asset type label when loading from CSV '
+                             '(ignored when using FinanceDatabase).')
+    parser.add_argument('--exchange', default='US',
+                        help='Database exchange code (US, NZX, ASX).')
     parser.add_argument('--start', default='2014-04-30',
                         help='Start date for price data.')
     parser.add_argument('--end', default='2025-04-30',
                         help='End date for price data.')
-    parser.add_argument('--output', default='Data/ETF_Prices.csv',
+    parser.add_argument('--output', default='Data/Prices.csv',
                         help='Output CSV file path for prices.')
     parser.add_argument('--universe-output', default='Data/Securities.csv',
                         help='Output CSV for the security universe list.')
     parser.add_argument('--null-threshold', type=float, default=0.9,
                         help='Fraction of non-null values required to keep '
                              'a ticker (0-1).')
+    parser.add_argument('--incremental', action='store_true',
+                        help='Only download data after the latest date already '
+                             'in the database.')
     args = parser.parse_args()
+
+    from src import db
 
     # Step 1: Get tickers
     if args.from_csv:
@@ -303,32 +409,69 @@ def main():
             count = (tickers_df['AssetType'] == asset_type).sum()
             logger.info("  %s: %d", asset_type, count)
 
-    # Step 2: Download prices
-    logger.info("Downloading prices for %d tickers...", len(tickers_df))
-    try:
-        prices = download_data(tickers_df, ticker_column=args.ticker_column,
-                               start=args.start, end=args.end)
-    except Exception:
-        logger.exception("Failed to download price data from Yahoo Finance")
-        return
-    threshold = int(len(prices) * args.null_threshold)
-    filtered_prices = prices.dropna(axis=1, thresh=threshold)
-    save_to_csv(filtered_prices, args.output)
-    logger.info("Saved %d tickers (%d dropped) to %s",
-                filtered_prices.shape[1],
-                prices.shape[1] - filtered_prices.shape[1],
-                args.output)
-
-    # Step 3: Save to database
-    from src import db
-    names = None
-    if 'Name' in tickers_df.columns:
-        names = dict(zip(tickers_df['Tickers'], tickers_df['Name']))
+    # Step 2: Determine start date
     conn = db.get_connection()
-    db.save_prices(conn, filtered_prices, exchange='US', asset_type='etf',
-                   names=names)
+    start = args.start
+    if args.incremental:
+        latest = db.get_latest_prices_date(conn, exchange=args.exchange)
+        if latest:
+            # Start from the day after the latest date in the DB
+            from datetime import datetime, timedelta
+            next_day = (datetime.strptime(latest, '%Y-%m-%d')
+                        + timedelta(days=1)).strftime('%Y-%m-%d')
+            logger.info("Incremental mode: latest DB date is %s, downloading from %s",
+                         latest, next_day)
+            start = next_day
+        else:
+            logger.info("Incremental mode: no existing data, full download from %s", start)
+
+    # Step 3: Download and save to database per asset type
+    logger.info("Downloading prices for %d tickers...", len(tickers_df))
+
+    if 'AssetType' in tickers_df.columns:
+        # FinanceDatabase path: download per asset type group
+        all_results = []
+        for fd_type, group in tickers_df.groupby('AssetType'):
+            db_type = ASSET_TYPE_MAP.get(fd_type, fd_type)
+            ticker_list = group[args.ticker_column].tolist()
+            names = None
+            if 'Name' in group.columns:
+                names = dict(zip(group[args.ticker_column], group['Name']))
+            logger.info("Downloading %d %s tickers...", len(ticker_list), db_type)
+            result = download_and_save(
+                ticker_list, conn, exchange=args.exchange, asset_type=db_type,
+                start=start, end=args.end, null_threshold=args.null_threshold,
+                names=names,
+            )
+            all_results.append((db_type, result))
+
+        for db_type, result in all_results:
+            logger.info("  %s: %d/%d saved, %d failed batches",
+                         db_type, result['saved_tickers'],
+                         result['total_tickers'], len(result['failed_batches']))
+    else:
+        # CSV path: single asset type
+        ticker_list = tickers_df[args.ticker_column].tolist()
+        names = None
+        if 'Name' in tickers_df.columns:
+            names = dict(zip(tickers_df[args.ticker_column], tickers_df['Name']))
+        result = download_and_save(
+            ticker_list, conn, exchange=args.exchange,
+            asset_type=args.asset_type,
+            start=start, end=args.end, null_threshold=args.null_threshold,
+            names=names,
+        )
+        logger.info("Saved %d/%d tickers, %d failed batches",
+                     result['saved_tickers'], result['total_tickers'],
+                     len(result['failed_batches']))
+
+    # Step 4: Export to CSV for backward compatibility
+    prices_df = db.load_prices(conn, exchange=args.exchange)
     conn.close()
-    logger.info("Saved prices and ticker names to database")
+    if not prices_df.empty:
+        save_to_csv(prices_df, args.output)
+    else:
+        logger.warning("No prices in database to export.")
 
 
 if __name__ == '__main__':
