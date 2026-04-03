@@ -29,6 +29,13 @@ INCLUDED_COUNTRIES = DEVELOPED_MARKETS + EMERGING_MARKETS
 MIN_HISTORY_YEARS = 5
 MIN_HISTORY_DAYS = 1260   # 5 * 252 trading days
 
+# ─── Data quality thresholds ──────────────────────────────────────────────────
+
+MAX_STALENESS_DAYS = 30          # last trade must be within 30 calendar days
+MIN_ANNUAL_VOLATILITY = 0.001    # 0.1% annualised vol minimum
+MAX_CONSECUTIVE_SAME_PRICE = 20  # flag if 20+ identical consecutive closes
+MAX_EXTREME_RETURN_PCT = 0.05    # flag if >5% of days have >10 std dev returns
+
 # ─── Portfolio constraints ────────────────────────────────────────────────────
 
 TARGET_POSITIONS = (10, 20)     # (min, max) cardinality constraint

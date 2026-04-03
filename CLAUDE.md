@@ -73,8 +73,13 @@ python -m src.backtest
 # Generate ARIMA/GARCH forecasts
 python -m src.forecast
 
-# Download fresh ETF price data
-python -m src.download_data
+# Download price data (ETFs + stocks)
+python -m src.download_data --asset-types equities etfs
+python -m src.download_data --incremental   # only new dates
+
+# Validate data quality (flag bad tickers)
+python -m src.data_quality                  # validate and flag
+python -m src.data_quality --dry-run        # preview without writing
 
 # Database
 python -m src.db                # Create empty database with schema

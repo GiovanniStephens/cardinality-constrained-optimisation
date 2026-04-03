@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS tickers (
     symbol      TEXT NOT NULL,
     name        TEXT,
     country     TEXT,
+    excluded    TEXT,
     exchange_id INTEGER NOT NULL REFERENCES exchanges(id),
     asset_type  TEXT NOT NULL DEFAULT 'etf'
         CHECK(asset_type IN ('etf', 'stock', 'fund', 'managed_fund')),
@@ -334,13 +335,16 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
 
 
 def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
-                tickers=None, exclude_countries=None, min_coverage=0.95):
+                tickers=None, exclude_countries=None, exclude_flagged=True,
+                min_coverage=0.95, ffill_limit=5):
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
 
     asset_type: optional filter, e.g. 'etf', 'stock', 'fund'.
     exclude_countries: optional list of country strings to exclude.
+    exclude_flagged: if True (default), skip tickers with non-NULL excluded column.
+    ffill_limit: max consecutive NaN rows to forward-fill (default 5).
     """
     query = """
         SELECT t.symbol, p.date, p.close
@@ -371,6 +375,8 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
         placeholders = ','.join('?' for _ in exclude_countries)
         conditions.append(f"(t.country IS NULL OR t.country NOT IN ({placeholders}))")
         params.extend(exclude_countries)
+    if exclude_flagged:
+        conditions.append("t.excluded IS NULL")
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -392,10 +398,38 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
         threshold = int(min_coverage * len(df))
         df = df.dropna(axis=1, thresh=threshold)
 
-    # Forward-fill NaN
-    df = df.ffill()
+    # Forward-fill NaN (capped to avoid propagating stale prices)
+    df = df.ffill(limit=ffill_limit)
 
     return df
+
+
+def set_ticker_excluded(conn, ticker_id, reason):
+    """Flag a ticker as excluded with a reason string."""
+    conn.execute(
+        "UPDATE tickers SET excluded = ?, updated_at = ? WHERE id = ?",
+        (reason, _now(), ticker_id),
+    )
+
+
+def clear_ticker_excluded(conn, ticker_id):
+    """Remove the exclusion flag from a ticker."""
+    conn.execute(
+        "UPDATE tickers SET excluded = NULL, updated_at = ? WHERE id = ?",
+        (_now(), ticker_id),
+    )
+
+
+def get_excluded_tickers(conn, exchange=None):
+    """Get all excluded tickers with their reasons."""
+    query = "SELECT t.id, t.symbol, t.excluded FROM tickers t WHERE t.excluded IS NOT NULL"
+    params = []
+    if exchange is not None:
+        exchange_id = _get_exchange_id(conn, exchange)
+        query += " AND t.exchange_id = ?"
+        params.append(exchange_id)
+    query += " ORDER BY t.excluded, t.symbol"
+    return conn.execute(query, params).fetchall()
 
 
 def get_latest_prices_date(conn, exchange=None, asset_type=None):
