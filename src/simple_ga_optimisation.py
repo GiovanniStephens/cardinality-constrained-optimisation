@@ -4,7 +4,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import scipy.optimize as opt
 from multiprocessing import Pool, Manager
 
 logger = logging.getLogger(__name__)
@@ -201,27 +200,8 @@ def run_parallel_ga(data, num_generations, total_population_size,
 
 
 def optimise_weights(best_solution, data, min_return=0.12):
-    selected_etfs = data.columns[best_solution == 1]
-    data = data[selected_etfs]
-    log_returns = calculate_returns(data)
-    expected_returns = calculate_expected_returns(log_returns)
-    cov_matrix = calculate_covariance_matrix(log_returns)
-    num_etfs = len(selected_etfs)
-    bounds = [(0, 1) for _ in range(num_etfs)]
-    constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
-    if min_return is not None:
-        constraints.append({'type': 'ineq', 'fun': lambda x: np.dot(expected_returns, x) - min_return})
-
-    def objective(x):
-        portfolio_return = np.dot(expected_returns, x)
-        portfolio_volatility = np.sqrt(np.dot(x.T, np.dot(cov_matrix, x)))
-        if portfolio_volatility == 0:
-            return 0
-        return -(portfolio_return / portfolio_volatility)
-
-    result = opt.minimize(objective, x0=np.ones(num_etfs) / num_etfs, method='SLSQP', bounds=bounds,
-                          constraints=constraints)
-    return result
+    from src.portfolio_utils import optimise_weights as _optimise_weights
+    return _optimise_weights(best_solution, data, min_return=min_return)
 
 
 def print_results(tickers, optimal_weights, amount_to_allocate=5000):
@@ -302,8 +282,8 @@ if __name__ == '__main__':
                     'migration_interval': migration_interval,
                     'migration_rate': migration_rate_val,
                     'num_islands': os.cpu_count(),
-                    'min_etfs': 8,
-                    'max_etfs': 20,
+                    'min_securities': 8,
+                    'max_securities': 20,
                 },
                 results={
                     'best_sharpe': final_sharpe,
@@ -312,7 +292,8 @@ if __name__ == '__main__':
                     'num_selected': len(selected_etfs),
                     'elapsed_seconds': ga_elapsed,
                 },
-                holdings=list(zip(selected_etfs, optimised_result.x)))
+                holdings=list(zip(selected_etfs, optimised_result.x)),
+                exchange='NZX')
             logger.info("Run saved to database (id=%d)", run_id)
             conn.close()
         else:

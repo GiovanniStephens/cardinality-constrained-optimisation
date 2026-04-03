@@ -103,3 +103,38 @@ def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
     :return: negative Sharpe ratio as a float.
     """
     return -sharpe_ratio(weights, expected_returns, cov_matrix)
+
+
+def optimise_weights(selection_vector, data, min_weight=0.0, max_weight=1.0,
+                     min_return=None):
+    """SLSQP weight optimisation for a selected subset of securities.
+
+    :param selection_vector: binary array (1 = selected, 0 = not).
+    :param data: DataFrame of prices (index=dates, columns=tickers).
+    :param min_weight: lower bound per position weight.
+    :param max_weight: upper bound per position weight.
+    :param min_return: if set, adds an inequality constraint for minimum
+        annualised portfolio return.
+    :return: scipy.optimize.OptimizeResult with optimised weights in .x
+    """
+    from scipy.optimize import minimize
+
+    selected = data.columns[selection_vector == 1]
+    log_returns = calculate_log_returns(data[selected])
+    expected_returns = calculate_expected_returns(log_returns)
+    cov_matrix = calculate_covariance_matrix(log_returns)
+    n = len(selected)
+
+    bounds = [(min_weight, max_weight) for _ in range(n)]
+    constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
+    if min_return is not None:
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda x: np.dot(expected_returns, x) - min_return,
+        })
+
+    def objective(x):
+        return negative_sharpe_ratio(x, expected_returns, cov_matrix)
+
+    return minimize(objective, x0=np.ones(n) / n, method='SLSQP',
+                    bounds=bounds, constraints=constraints)
