@@ -20,19 +20,19 @@ from src.portfolio_utils import (
 
 class TestLoadPricesCsv(unittest.TestCase):
     def test_returns_dataframe(self):
-        df = load_prices_csv('Data/ETF_Prices.csv')
+        df = load_prices_csv('data/ETF_Prices.csv')
         self.assertIsInstance(df, pd.DataFrame)
         self.assertGreater(df.shape[0], 0)
         self.assertGreater(df.shape[1], 0)
 
     def test_min_coverage_filters_columns(self):
-        strict = load_prices_csv('Data/ETF_Prices.csv', min_coverage=0.99)
-        lenient = load_prices_csv('Data/ETF_Prices.csv', min_coverage=0.50)
+        strict = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.99)
+        lenient = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.50)
         self.assertGreaterEqual(lenient.shape[1], strict.shape[1])
 
     def test_last_n_days(self):
-        full = load_prices_csv('Data/time_series_20251016_113257.csv')
-        recent = load_prices_csv('Data/time_series_20251016_113257.csv', last_n_days=365)
+        full = load_prices_csv('data/time_series_20251016_113257.csv')
+        recent = load_prices_csv('data/time_series_20251016_113257.csv', last_n_days=365)
         self.assertLess(recent.shape[0], full.shape[0])
 
     def test_headers_only_returns_empty_dataframe(self):

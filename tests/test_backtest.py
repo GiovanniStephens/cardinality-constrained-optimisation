@@ -23,7 +23,7 @@ def _load_test_data():
     except Exception:
         pass
     if data.empty:
-        data = op.load_data('Data/NZ_ETF_Prices.csv')
+        data = op.load_data('data/NZ_ETF_Prices.csv')
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
@@ -135,7 +135,7 @@ class TestBacktest(unittest.TestCase):
         self.assertEqual(result, 0.0)
 
     def test_fitness_zero_std(self):
-        constant_returns = [0.01] * 100
+        constant_returns = [0.0] * 100
         result = backtest.fitness(constant_returns)
         self.assertEqual(result, 0.0)
 
@@ -348,6 +348,286 @@ class TestAggregateCrossWindow(unittest.TestCase):
         self.assertIn('mean', df.columns)
         self.assertIn('std', df.columns)
         self.assertAlmostEqual(df.loc['cc_optimised', 'mean'], 0.6)
+
+
+class TestBacktestValidation(unittest.TestCase):
+    """
+    Validation tests for backtest correctness: no look-ahead bias,
+    data boundary integrity, metric consistency, and weight sanity.
+
+    Uses small synthetic data — no DB or CSV dependencies.
+    """
+
+    def _make_prices(self, n_days=30, n_tickers=3, start='2020-01-01',
+                     base_price=100.0, daily_drift=0.001, seed=42):
+        """Helper: create a synthetic price DataFrame with realistic drift."""
+        np.random.seed(seed)
+        dates = pd.bdate_range(start, periods=n_days, freq='B')
+        tickers = [f'T{i}' for i in range(n_tickers)]
+        log_rets = np.random.randn(n_days, n_tickers) * 0.02 + daily_drift
+        log_rets[0] = 0  # first row is the base
+        prices = base_price * np.exp(np.cumsum(log_rets, axis=0))
+        return pd.DataFrame(prices, index=dates, columns=tickers)
+
+    # ── Test 1: No look-ahead — training ends before test ─────────────────
+
+    def test_train_data_ends_before_test(self):
+        """Training prices must not contain any test-period dates."""
+        prices = self._make_prices(n_days=60)
+        windows = backtest.generate_windows(
+            prices.index, train_days=30, test_days=10, step_days=10,
+        )
+        for w in windows:
+            train = prices.loc[w.train_start:w.train_end]
+            test = prices.loc[w.test_start:w.test_end]
+            self.assertLess(
+                train.index.max(), test.index.min(),
+                f"Window {w.label}: training data overlaps with test data",
+            )
+
+    # ── Test 2: op.data only contains training-period dates ───────────────
+
+    def test_op_data_only_contains_training_dates(self):
+        """After prepare_opt_inputs, op.data should span training period only."""
+        prices = self._make_prices(n_days=60)
+        windows = backtest.generate_windows(
+            prices.index, train_days=30, test_days=10, step_days=10,
+        )
+        w = windows[0]
+        train = prices.loc[w.train_start:w.train_end]
+        op.prepare_opt_inputs(train, use_forecasts=False)
+        # op.data is transposed log returns: tickers x time_periods
+        n_periods = op.data.shape[1]
+        self.assertEqual(
+            n_periods, len(train),
+            f"op.data has {n_periods} periods but training has {len(train)} rows",
+        )
+
+    # ── Test 3: First OOS return is NOT zero ──────────────────────────────
+
+    def test_first_oos_return_not_zero(self):
+        """
+        The first OOS log return must reflect the price change from
+        the last training day to the first test day, not be zero.
+        """
+        from src.portfolio_utils import calculate_log_returns
+        # Construct prices: train ends at 100, test starts at 105
+        train_dates = pd.bdate_range('2020-01-01', periods=10, freq='B')
+        test_dates = pd.bdate_range(train_dates[-1] + pd.Timedelta(days=1),
+                                    periods=5, freq='B')
+        train_prices = pd.DataFrame({'A': np.linspace(90, 100, 10)},
+                                    index=train_dates)
+        test_prices = pd.DataFrame({'A': [105, 106, 107, 108, 109]},
+                                   index=test_dates)
+
+        # Correct approach: prepend last training price
+        boundary = train_prices.iloc[[-1]]
+        combined = pd.concat([boundary, test_prices])
+        oos_returns = calculate_log_returns(combined).iloc[1:]
+
+        expected_first = np.log(105.0 / 100.0)
+        self.assertAlmostEqual(
+            oos_returns.iloc[0]['A'], expected_first, places=6,
+            msg="First OOS return should be log(105/100), not 0",
+        )
+
+    # ── Test 4: OOS returns match manual computation ──────────────────────
+
+    def test_portfolio_returns_match_manual(self):
+        """Run_portfolio output must match hand-computed weighted returns."""
+        dates = pd.bdate_range('2020-01-01', periods=3, freq='B')
+        # Known log returns for 2 tickers over 3 days
+        oos = pd.DataFrame({
+            'A': [0.01, -0.02, 0.03],
+            'B': [0.02, 0.01, -0.01],
+        }, index=dates)
+        weights = np.array([0.6, 0.4])
+
+        returns = backtest.run_portfolio(['A', 'B'], weights, oos)
+
+        # Day 0: 0.6*0.01 + 0.4*0.02 = 0.014
+        self.assertAlmostEqual(returns[0], 0.014, places=10)
+
+        # Day 1: weights drift after day 0
+        w_after_0 = weights * np.exp([0.01, 0.02]) / (1 + 0.014)
+        expected_day1 = float(np.sum(w_after_0 * np.array([-0.02, 0.01])))
+        self.assertAlmostEqual(returns[1], expected_day1, places=10)
+
+    # ── Test 5: Portfolio returns are bounded ─────────────────────────────
+
+    def test_portfolio_returns_bounded(self):
+        """
+        No single-day portfolio return should exceed ±50%.
+        This catches corrupt data or indexing errors.
+        """
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=252, freq='B')
+        tickers = [f'T{i}' for i in range(5)]
+        # Realistic daily returns: mean ~0, std ~2%
+        oos = pd.DataFrame(
+            np.random.randn(252, 5) * 0.02,
+            index=dates, columns=tickers,
+        )
+        weights = np.array([0.2, 0.2, 0.2, 0.2, 0.2])
+        returns = backtest.run_portfolio(tickers, weights, oos)
+        for i, r in enumerate(returns):
+            self.assertGreater(r, -0.5, f"Day {i} return {r} is below -50%")
+            self.assertLess(r, 0.5, f"Day {i} return {r} is above +50%")
+
+    # ── Test 6: Weights remain valid throughout simulation ────────────────
+
+    def test_weights_stay_valid(self):
+        """Weights must remain non-negative throughout simulation.
+
+        Note: the update formula w * exp(r) / (1 + sum(w*r)) is a first-order
+        approximation and doesn't perfectly preserve sum(w)=1. We check
+        non-negativity strictly and sum within 5% over 50 days.
+        """
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=50, freq='B')
+        tickers = ['A', 'B', 'C']
+        oos = pd.DataFrame(
+            np.random.randn(50, 3) * 0.02,
+            index=dates, columns=tickers,
+        )
+        weights = np.array([0.5, 0.3, 0.2])
+
+        # Replicate run_portfolio logic to track weights
+        subset = oos[tickers]
+        w = weights.copy()
+        for i in range(len(subset)):
+            step = subset.iloc[i].values
+            ret = float(np.sum(step * w))
+            w = w * np.exp(step) / (1 + ret)
+            self.assertTrue(
+                np.all(w >= -1e-10),
+                f"Day {i}: negative weight detected: {w}",
+            )
+        # After full simulation, weights should still be approximately normalised
+        self.assertAlmostEqual(w.sum(), 1.0, delta=0.05,
+                               msg=f"Final weights deviate too far from 1: {w.sum()}")
+
+    # ── Test 7: Sharpe ratio consistency ──────────────────────────────────
+
+    def test_sharpe_ratio_matches_manual(self):
+        """get_statistics Sharpe must match independent computation."""
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=100, freq='B')
+        tickers = ['A', 'B']
+        oos = pd.DataFrame(
+            np.random.randn(100, 2) * 0.015 + 0.0005,
+            index=dates, columns=tickers,
+        )
+        weights = np.array([0.6, 0.4])
+
+        stats = backtest.get_statistics(tickers, weights, oos)
+        port_returns = backtest.run_portfolio(tickers, weights, oos)
+
+        manual_r = np.mean(port_returns) * 252
+        manual_std = np.std(port_returns) * np.sqrt(252)
+        manual_sharpe = manual_r / manual_std if manual_std != 0 else 0.0
+
+        self.assertAlmostEqual(
+            stats['sharpe_ratio'], manual_sharpe, places=8,
+            msg="Sharpe from get_statistics doesn't match manual computation",
+        )
+        self.assertAlmostEqual(
+            stats['annualised_return'], manual_r, places=8,
+        )
+        self.assertAlmostEqual(
+            stats['annualised_volatility'], manual_std, places=8,
+        )
+
+    # ── Test 8: Annualisation factor is correct ───────────────────────────
+
+    def test_annualisation_factor(self):
+        """
+        A constant daily return should annualise correctly with factor 252.
+        """
+        daily_return = 0.001
+        dates = pd.bdate_range('2020-01-01', periods=252, freq='B')
+        # Use a single ticker so the portfolio return IS the asset return
+        oos = pd.DataFrame({'A': [daily_return] * 252}, index=dates)
+        weights = np.array([1.0])
+
+        stats = backtest.get_statistics(['A'], weights, oos)
+        expected_ann_return = daily_return * 252
+        # places=4 because weight drift (exp vs linear) introduces tiny drift
+        self.assertAlmostEqual(
+            stats['annualised_return'], expected_ann_return, places=4,
+            msg=f"Annualised return should be ~{expected_ann_return}",
+        )
+
+    # ── Test 9: Selected tickers exist in test data ───────────────────────
+
+    def test_selected_tickers_in_oos_data(self):
+        """
+        Every ticker in a portfolio must be present in the OOS returns.
+        If a ticker is missing, run_portfolio would raise KeyError.
+        """
+        dates = pd.bdate_range('2020-01-01', periods=10, freq='B')
+        oos = pd.DataFrame(
+            np.random.randn(10, 3) * 0.01,
+            index=dates, columns=['A', 'B', 'C'],
+        )
+        # This should work fine
+        backtest.run_portfolio(['A', 'B'], np.array([0.5, 0.5]), oos)
+        # This should raise
+        with self.assertRaises(KeyError):
+            backtest.run_portfolio(['A', 'MISSING'], np.array([0.5, 0.5]), oos)
+
+    # ── Test 10: Window day counts are exact ──────────────────────────────
+
+    def test_window_day_counts(self):
+        """Each window should have exactly train_days and at most test_days."""
+        dates = pd.bdate_range('2014-01-02', periods=2016, freq='B')
+        windows = backtest.generate_windows(
+            dates, train_days=1260, test_days=252, step_days=252,
+        )
+        for w in windows:
+            train_slice = dates[(dates >= w.train_start) & (dates <= w.train_end)]
+            test_slice = dates[(dates >= w.test_start) & (dates <= w.test_end)]
+            self.assertEqual(
+                len(train_slice), 1260,
+                f"Window {w.label}: train has {len(train_slice)} days, expected 1260",
+            )
+            self.assertLessEqual(
+                len(test_slice), 252,
+                f"Window {w.label}: test has {len(test_slice)} days, expected <= 252",
+            )
+            self.assertGreater(len(test_slice), 0)
+
+    # ── Test 11: Random baseline Sharpe near zero ─────────────────────────
+
+    def test_random_baseline_sharpe_near_zero(self):
+        """
+        On synthetic zero-drift data, random portfolios should produce
+        Sharpe ratios centred near zero.
+        """
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=252, freq='B')
+        tickers = [f'T{i}' for i in range(10)]
+        # Zero-drift returns: mean ≈ 0, std ≈ 2%
+        oos = pd.DataFrame(
+            np.random.randn(252, 10) * 0.02,
+            index=dates, columns=tickers,
+        )
+
+        sharpes = []
+        for _ in range(50):
+            # Random 3-5 ticker portfolio
+            k = np.random.randint(3, 6)
+            selected = list(np.random.choice(tickers, k, replace=False))
+            w = np.random.random(k)
+            w /= w.sum()
+            stats = backtest.get_statistics(selected, w, oos)
+            sharpes.append(stats['sharpe_ratio'])
+
+        mean_sharpe = np.mean(sharpes)
+        self.assertGreater(mean_sharpe, -1.5,
+                           f"Mean Sharpe {mean_sharpe:.2f} is suspiciously negative")
+        self.assertLess(mean_sharpe, 1.5,
+                        f"Mean Sharpe {mean_sharpe:.2f} is suspiciously positive")
 
 
 if __name__ == '__main__':

@@ -43,11 +43,11 @@ benchmark/                   # Benchmarking framework package
 ├── runner.py                # Orchestrates parallel benchmark runs
 ├── analysis.py              # Result analysis and reporting
 └── results.py               # Data structures for benchmark results
-Data/                        # CSV price data, ETF lists, forecast outputs (~112 MB)
+data/                        # CSV price data, ETF lists, forecast outputs (~112 MB)
 ├── portfolio.db             # SQLite database (gitignored, created by db.py)
 ├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs
 └── ...                      # Other CSV data files
-Images/                      # Visualisation outputs
+images/                      # Visualisation outputs
 benchmark_results/           # Benchmark run outputs (JSON/PKL)
 run_benchmark.py             # CLI entry point for benchmarking
 requirements.txt
@@ -121,7 +121,7 @@ python -m unittest discover tests
 
 ## Database
 
-All optimisation results, backtest metrics, and data provenance are stored in `Data/portfolio.db` (SQLite). CSVs remain for backward compatibility.
+All optimisation results, backtest metrics, and data provenance are stored in `data/portfolio.db` (SQLite). CSVs remain for backward compatibility.
 
 ### Schema (12 tables)
 

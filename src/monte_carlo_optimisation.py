@@ -153,7 +153,7 @@ if __name__ == '__main__':
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
         from src.portfolio_utils import load_prices_csv
-        data = load_prices_csv('Data/ETF_Prices.csv', last_n_days=730)
+        data = load_prices_csv('data/ETF_Prices.csv', last_n_days=730)
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()

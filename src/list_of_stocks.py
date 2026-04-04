@@ -89,8 +89,8 @@ def main():
 
     tickers = stocks["Symbol"].sort_values().reset_index(drop=True)
     out = pd.DataFrame(tickers.values, columns=["Tickers"])
-    out.to_csv("Data/US_Stocks.csv", index=False)
-    print(f"Saved {len(out)} tickers to Data/US_Stocks.csv")
+    out.to_csv("data/US_Stocks.csv", index=False)
+    print(f"Saved {len(out)} tickers to data/US_Stocks.csv")
 
     print(f"\nFirst 10: {tickers.head(10).tolist()}")
     print(f"Last 10:  {tickers.tail(10).tolist()}")

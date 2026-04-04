@@ -102,7 +102,7 @@ if __name__ == '__main__':
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     # Load data
-    prices_df = load_prices_csv('Data/ETF_Prices.csv')
+    prices_df = load_prices_csv('data/ETF_Prices.csv')
     prices_df = prices_df.iloc[:-213]
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     log_returns = calculate_log_returns(prices_df)

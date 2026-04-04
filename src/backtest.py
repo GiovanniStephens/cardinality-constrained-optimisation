@@ -404,7 +404,11 @@ def evaluate_window(
     # ── Slice data ────────────────────────────────────────────────────────
     train_prices = full_prices.loc[window.train_start:window.train_end]
     test_prices = full_prices.loc[window.test_start:window.test_end]
-    oos_log_returns = calculate_log_returns(test_prices)
+    # Prepend last training price so the first test-day log return is
+    # log(test_price[0] / train_price[-1]) rather than 0.
+    boundary_price = train_prices.iloc[[-1]]
+    test_with_boundary = pd.concat([boundary_price, test_prices])
+    oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
 
     logger.info(
         "  Window %s: train=%d rows, test=%d rows, %d tickers",
@@ -536,7 +540,7 @@ def main():
     data = db.load_prices(conn, exchange='US')
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
-        data = op.load_data('Data/NZ_ETF_Prices.csv')
+        data = op.load_data('data/NZ_ETF_Prices.csv')
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()

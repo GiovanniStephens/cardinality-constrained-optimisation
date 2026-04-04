@@ -258,7 +258,7 @@ if __name__ == '__main__':
     conn.close()
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
-        data = load_prices_csv('Data/time_series_20251016_113257.csv', last_n_days=730)
+        data = load_prices_csv('data/time_series_20251016_113257.csv', last_n_days=730)
     else:
         # Apply same filters: last 2 years, 95% coverage, ffill
         data.index = pd.to_datetime(data.index)

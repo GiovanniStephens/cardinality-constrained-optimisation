@@ -416,8 +416,8 @@ def prepare_opt_inputs(prices, use_forecasts: bool, conn=None) -> None:
                 variances = var
         if expected_returns is None:
             try:
-                variances = load_data('Data/variances.csv')
-                expected_returns = load_data('Data/expected_returns.csv')['0']
+                variances = load_data('data/variances.csv')
+                expected_returns = load_data('data/expected_returns.csv')['0']
             except (FileNotFoundError, KeyError) as e:
                 logger.warning(
                     "Could not load forecast files (%s); falling back to historical estimates.", e
@@ -536,8 +536,8 @@ class PygadOptimiser:
                     self._variances = var
             if self._expected_returns is None:
                 try:
-                    self._variances = load_data('Data/variances.csv')
-                    self._expected_returns = load_data('Data/expected_returns.csv')['0']
+                    self._variances = load_data('data/variances.csv')
+                    self._expected_returns = load_data('data/expected_returns.csv')['0']
                 except (FileNotFoundError, KeyError) as e:
                     logger.warning(
                         "Could not load forecast files (%s); "
@@ -721,7 +721,7 @@ def main():
     _conn.close()
     if prices_df.empty:
         logger.info("No data in DB, falling back to CSV")
-        prices_df = load_data('Data/NZ_ETF_Prices.csv')
+        prices_df = load_data('data/NZ_ETF_Prices.csv')
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     # Prepare the inputs for the optimisation
     use_forecasts = True
@@ -798,7 +798,7 @@ if __name__ == '__main__':
     prices_df = _db.load_prices(_conn, exchange='US')
     _conn.close()
     if prices_df.empty:
-        prices_df = load_data('Data/NZ_ETF_Prices.csv')
+        prices_df = load_data('data/NZ_ETF_Prices.csv')
     prices_df = prices_df.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(prices_df))
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     prepare_opt_inputs(prices_df, use_forecasts=False)
@@ -806,7 +806,7 @@ if __name__ == '__main__':
     # portfolio = create_portfolio(num_children=100)
     # portfolio = ['QQQ', 'STIP', 'SPTI', 'SMOG', 'VIXM', 'LEAD']
     portfolio = ['USF.NZ', 'NZC.NZ', 'USV.NZ', 'USA.NZ', 'ASF.NZ']
-    # portfolio = load_data('Data/3x_leveraged_ETFs.csv').index.to_list()
+    # portfolio = load_data('data/3x_leveraged_ETFs.csv').index.to_list()
 
     logger.info("Portfolio: %s", portfolio)
     data = log_returns.loc[:, portfolio]

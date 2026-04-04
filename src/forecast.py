@@ -27,7 +27,7 @@ def main():
     conn.close()
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
-        data = op.load_data('Data/ETF_Prices.csv')
+        data = op.load_data('data/ETF_Prices.csv')
     data = data.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(data))
     logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
     training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
@@ -76,7 +76,7 @@ def main():
 
     expected_returns = pd.DataFrame.from_dict(expected_returns,
                                               orient='index')
-    expected_returns.to_csv('Data/expected_returns.csv')
+    expected_returns.to_csv('data/expected_returns.csv')
     logger.info("Return forecasting completed in %.1fs", time.time() - forecast_start)
 
     # Forecast volatility
@@ -113,7 +113,7 @@ def main():
 
     volatilities = pd.DataFrame.from_dict(volatilities,
                                           orient='index')
-    volatilities.to_csv('Data/variances.csv')
+    volatilities.to_csv('data/variances.csv')
     logger.info("Volatility forecasting completed in %.1fs", time.time() - vol_start)
 
     elapsed = time.time() - start_time

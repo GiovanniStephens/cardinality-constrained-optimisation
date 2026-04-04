@@ -40,7 +40,7 @@ python backtest.py
 ├── test_optimisation.py         # Tests for optimisation module
 ├── test_backtest.py             # Tests for backtest module
 │
-└── Data/
+└── data/
     ├── ETF_Prices.csv           # Main dataset: ~756 days x ~1792 ETFs (102 MB)
     ├── NZ_ETF_Prices.csv        # NZ ETF prices (smaller dataset)
     ├── leveraged_ETF_Prices.csv # 2x/3x leveraged ETFs
@@ -77,7 +77,7 @@ Yahoo Finance  ──>  ETF_Prices.csv  ──>  expected_returns.csv  ──>  
 2. **`forecast.py`** -- Generates forward-looking inputs:
    - **Returns**: Auto-ARIMA per ETF, projects price 252 days out, computes log return.
    - **Variances**: GARCH(1,1) with skew-t innovations, annualised.
-   - Outputs saved to `Data/expected_returns.csv` and `Data/variances.csv`.
+   - Outputs saved to `data/expected_returns.csv` and `data/variances.csv`.
 
 3. **`optimisation.py`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
 
@@ -178,7 +178,7 @@ Configuration: 100 portfolios, 1000 GA children, 252 OOS days, max 10 holdings, 
 
 The t-statistics confirm the GA-selected portfolios significantly outperform random selection (t ~ -37 to -42, p effectively 0). The copula-based weight optimisation gives a slight edge (~3.06 vs 2.95) but is much slower.
 
-![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/Images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
+![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
 
 ## Methodology Notes
 

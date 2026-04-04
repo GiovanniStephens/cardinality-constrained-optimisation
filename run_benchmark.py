@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument('--output-dir', type=str, default='benchmark_results',
                         help='Output directory (default: benchmark_results)')
     parser.add_argument('--data-file', type=str,
-                        default='Data/time_series_20251016_113257.csv',
+                        default='data/time_series_20251016_113257.csv',
                         help='Path to price data CSV')
     return parser.parse_args()
 
@@ -60,7 +60,7 @@ def main():
         return
 
     # Load data
-    from simple_ga_optimisation import load_data
+    from src.optimisation import load_data
     print(f"Loading data from {args.data_file}...")
     data = load_data(args.data_file)
     print(f"  {data.shape[1]} instruments, {data.shape[0]} days")

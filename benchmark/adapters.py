@@ -423,21 +423,32 @@ class MIPAdapter(OptimiserAdapter):
 
 
 class CppGAAdapter(OptimiserAdapter):
-    """Wraps the compiled C++ island GA binary (./optimisation)."""
+    """Wraps the compiled C++ island GA binary."""
 
     name = "Island GA (C++)"
 
-    def __init__(self, binary_path='./cpp/optimisation'):
+    def __init__(self, binary_path='./cpp/optimisation',
+                 num_generations=200, total_population_size=2000,
+                 num_elites=50, migration_interval=10, migration_rate=0.1,
+                 min_etfs=3, max_etfs=15, min_return=None,
+                 num_islands=4):
         self.binary_path = binary_path
+        self.num_generations = num_generations
+        self.pop_size = total_population_size // num_islands
+        self.num_elites = num_elites
+        self.migration_interval = migration_interval
+        self.migration_rate = migration_rate
+        self.min_etfs = min_etfs
+        self.max_etfs = max_etfs
+        self.min_return = min_return
+        self.num_islands = num_islands
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
+        import json as json_mod
+        import tempfile
+
         start_time = time.time()
-        convergence = []
-        best_so_far = float('-inf')
-        pattern = re.compile(
-            r'Island\s+(\d+):\s+Generation\s+(\d+):\s+Best fitness\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)'
-        )
 
         if not os.path.isfile(self.binary_path):
             return BenchmarkResult(
@@ -446,46 +457,92 @@ class CppGAAdapter(OptimiserAdapter):
                 metadata={'error': f'Binary not found: {self.binary_path}'},
             )
 
+        # Write data to temp CSV for the C++ binary
+        tmp = tempfile.NamedTemporaryFile(suffix='.csv', delete=False, mode='w')
         try:
-            proc = subprocess.Popen(
-                [self.binary_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True,
+            data.to_csv(tmp.name)
+
+            cmd = [
+                self.binary_path,
+                '--data', tmp.name,
+                '--seed', str(seed),
+                '--time-budget', str(time_budget),
+                '--pop-size', str(self.pop_size),
+                '--generations', str(self.num_generations),
+                '--min-etfs', str(self.min_etfs),
+                '--max-etfs', str(self.max_etfs),
+                '--num-islands', str(self.num_islands),
+                '--num-elites', str(self.num_elites),
+                '--migration-interval', str(self.migration_interval),
+                '--migration-rate', str(self.migration_rate),
+                '--risk-free-rate', '0.0',
+                '--missing-threshold', '1.0',  # data already cleaned by Python
+            ]
+            if self.min_return is not None:
+                cmd += ['--min-return', str(self.min_return)]
+
+            # Stream stderr for convergence, capture stdout for JSON
+            convergence = []
+            best_so_far = float('-inf')
+            pattern = re.compile(
+                r'Island\s+(\d+):\s+Generation\s+(\d+):\s+'
+                r'Best fitness\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)'
             )
 
-            for line in proc.stdout:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+
+            # Read stderr for convergence logging
+            stdout_data = []
+
+            def read_stdout():
+                for line in proc.stdout:
+                    stdout_data.append(line)
+
+            import threading
+            stdout_thread = threading.Thread(target=read_stdout)
+            stdout_thread.start()
+
+            for line in proc.stderr:
                 elapsed = time.time() - start_time
                 match = pattern.match(line.strip())
                 if match:
-                    island_id = int(match.group(1))
                     gen = int(match.group(2))
                     fitness = float(match.group(3))
                     if fitness > best_so_far:
                         best_so_far = fitness
                     convergence.append(ConvergenceRecord(
                         wall_clock_seconds=elapsed,
-                        function_evaluations=(gen + 1) * 1000,  # approx
+                        function_evaluations=(gen + 1) * self.pop_size,
                         best_fitness=best_so_far,
                         mean_fitness=fitness,
                         generation=gen,
                     ))
 
-                if elapsed > time_budget:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    break
+            proc.wait(timeout=time_budget + 30)
+            stdout_thread.join(timeout=5)
 
-            proc.wait(timeout=10)
+            # Parse JSON output
+            stdout_text = ''.join(stdout_data)
+            selected_etfs = None
+            try:
+                result_json = json_mod.loads(stdout_text)
+                best_fitness = result_json.get('best_fitness', best_so_far)
+                selected_etfs = result_json.get('selected_tickers')
+                if best_fitness <= -1e8:
+                    best_fitness = best_so_far
+            except (json_mod.JSONDecodeError, ValueError):
+                best_fitness = best_so_far
 
         except Exception as e:
             return BenchmarkResult(
                 algorithm=self.name, seed=seed, time_budget=time_budget,
-                convergence=convergence, best_fitness=best_so_far,
+                convergence=[], best_fitness=float('-inf'),
                 metadata={'error': str(e)},
             )
+        finally:
+            os.unlink(tmp.name)
 
         elapsed = time.time() - start_time
         return BenchmarkResult(
@@ -493,11 +550,9 @@ class CppGAAdapter(OptimiserAdapter):
             seed=seed,
             time_budget=time_budget,
             convergence=convergence,
-            best_fitness=best_so_far,
+            best_fitness=best_fitness,
+            selected_etfs=selected_etfs,
             timed_out=elapsed >= time_budget,
-            metadata={
-                'note': 'C++ binary uses hardcoded paths (Data/ETF_Prices.csv)',
-            },
         )
 
 

@@ -372,7 +372,7 @@ def main():
                         help='Exchanges to filter by.')
     parser.add_argument('--from-csv', default=None,
                         help='Load tickers from a local CSV instead of '
-                             'FinanceDatabase (e.g. Data/ETFs.csv).')
+                             'FinanceDatabase (e.g. data/ETFs.csv).')
     parser.add_argument('--ticker-column', default='Tickers',
                         help='Column name for tickers in the CSV.')
     parser.add_argument('--asset-type', default='etf',
@@ -384,9 +384,9 @@ def main():
                         help='Start date for price data.')
     parser.add_argument('--end', default='2025-04-30',
                         help='End date for price data.')
-    parser.add_argument('--output', default='Data/Prices.csv',
+    parser.add_argument('--output', default='data/Prices.csv',
                         help='Output CSV file path for prices.')
-    parser.add_argument('--universe-output', default='Data/Securities.csv',
+    parser.add_argument('--universe-output', default='data/Securities.csv',
                         help='Output CSV for the security universe list.')
     parser.add_argument('--null-threshold', type=float, default=0.9,
                         help='Fraction of non-null values required to keep '
