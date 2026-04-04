@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 from src import db
-from src import universe_config as uc
+from src import config as uc
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def _check_zero_variance(conn, exchange_id, min_annual_vol):
         if len(closes) < 30:
             continue
         log_rets = np.diff(np.log(closes))
-        annual_vol = np.std(log_rets) * np.sqrt(252)
+        annual_vol = np.std(log_rets) * np.sqrt(uc.TRADING_DAYS_PER_YEAR)
         if annual_vol < min_annual_vol:
             flagged.append((tr['id'], f"zero_variance:vol={annual_vol:.6f}"))
     return flagged

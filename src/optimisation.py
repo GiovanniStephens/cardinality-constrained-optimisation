@@ -1,4 +1,5 @@
 import logging
+import time
 import warnings
 
 import numpy as np
@@ -9,6 +10,14 @@ from copulae import GaussianCopula, TCopula
 from muarch import MUArch
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
+from src.portfolio_utils import load_prices_csv, calculate_log_returns, OptimisationResult
+from src.config import (
+    GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+    GA_MIN_WEIGHT, GA_MAX_WEIGHT,
+    GA_TARGET_RETURN, GA_NUM_GENERATIONS, GA_POPULATION_SIZE,
+    TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE,
+)
+
 # Suppress known noisy warnings from dependencies, not all warnings globally.
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*divide by zero.*")
@@ -16,14 +25,12 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*invalid va
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
-
-MAX_NUM_STOCKS = 15
-MIN_NUM_STOCKS = 3
-TARGET_RETURN = 0.15
+MAX_NUM_STOCKS = GA_MAX_SECURITIES
+MIN_NUM_STOCKS = GA_MIN_SECURITIES
+TARGET_RETURN = GA_TARGET_RETURN
 TARGET_RISK = None
-MAX_WEIGHT = 0.45
-MIN_WEIGHT = 0.05
+MAX_WEIGHT = GA_MAX_WEIGHT
+MIN_WEIGHT = GA_MIN_WEIGHT
 last_fitness = 0
 data = None
 variances = None
@@ -56,13 +63,9 @@ def load_data(filename: str) -> pd.DataFrame:
     :filename: string of the filename.
     :return: pandas dataframe of the data.
     """
-    prices_df = pd.read_csv(filename, index_col=0)
+    prices_df = load_prices_csv(filename, min_coverage=0.10)
     if prices_df.empty:
         raise ValueError(f"Loaded CSV '{filename}' is empty.")
-    # Remove columns with 10% or more null values
-    prices_df = prices_df.dropna(axis=1, thresh=int(len(prices_df)/10))
-    # Fill the null values with the previous day's close price
-    prices_df = prices_df.ffill()
     return prices_df
 
 
@@ -95,7 +98,7 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
         missing_cols = set(data.columns) - set(variances.index)
         if missing_cols:
             logger.warning("Columns missing from variances: %s. Falling back to historical cov.", missing_cols)
-            return data.cov() * 252
+            return data.cov() * TRADING_DAYS_PER_YEAR
 
     # Correlation matrix R
     if use_copulae:
@@ -113,7 +116,7 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
             var_values = np.clip(var_values, 0, None)
         diag = np.sqrt(var_values)
     else:
-        diag = data.std().values * np.sqrt(252)
+        diag = data.std().values * np.sqrt(TRADING_DAYS_PER_YEAR)
     np.fill_diagonal(D, diag)
 
     # CCC reconstruction: Cov = D × R × D
@@ -289,10 +292,7 @@ def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
     :data: pandas dataframe of the data.
     :return: pandas dataframe of the log returns.
     """
-    log_returns = np.log(data/data.shift(1))
-    log_returns = log_returns.fillna(0)
-    log_returns = log_returns.replace([np.inf, -np.inf], 0)
-    return log_returns
+    return calculate_log_returns(data)
 
 
 def fitness(individual, data):
@@ -391,31 +391,42 @@ def on_generation(ga_instance: pygad.GA) -> None:
     last_fitness = current_fitness
 
 
-def prepare_opt_inputs(prices, use_forecasts: bool) -> None:
+def prepare_opt_inputs(prices, use_forecasts: bool, conn=None) -> None:
     """
     Prepares the inputs for the optimisation.
 
     :prices: pandas dataframe of the prices.
     :use_forecasts: bool of whether to use forecasts.
+    :conn: optional sqlite3 connection for loading forecasts from DB.
     """
     global variances, expected_returns, data
     if prices is None or prices.empty:
         raise ValueError("prices DataFrame is None or empty.")
+    data = calculate_returns(prices).transpose()
     if use_forecasts:
-        data = calculate_returns(prices).transpose()
-        try:
-            variances = load_data('Data/variances.csv')
-            expected_returns = load_data('Data/expected_returns.csv')['0']
-        except (FileNotFoundError, KeyError) as e:
-            logger.warning(
-                "Could not load forecast files (%s); falling back to historical estimates.", e
-            )
-            variances = None
-            expected_returns = data.T.mean() * 252
-    else:
-        data = calculate_returns(prices).transpose()
         variances = None
-        expected_returns = data.T.mean()*252
+        expected_returns = None
+        # Try DB first, then CSV fallback
+        if conn is not None:
+            from src import db
+            er = db.load_expected_returns(conn)
+            var = db.load_variances(conn)
+            if not er.empty and not var.empty:
+                expected_returns = er
+                variances = var
+        if expected_returns is None:
+            try:
+                variances = load_data('Data/variances.csv')
+                expected_returns = load_data('Data/expected_returns.csv')['0']
+            except (FileNotFoundError, KeyError) as e:
+                logger.warning(
+                    "Could not load forecast files (%s); falling back to historical estimates.", e
+                )
+                variances = None
+                expected_returns = data.T.mean() * TRADING_DAYS_PER_YEAR
+    else:
+        variances = None
+        expected_returns = data.T.mean() * TRADING_DAYS_PER_YEAR
 
 
 def cardinality_constrained_optimisation(num_children: int = 1000,
@@ -478,6 +489,228 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
     return list(portfolio)
 
 
+class PygadOptimiser:
+    """PyGAD-based genetic algorithm with copula/CCC covariance support.
+
+    Self-contained optimiser that does not mutate module-level globals.
+    Uses closures to pass instance state to PyGAD fitness callbacks.
+    """
+
+    def __init__(self, num_children=GA_POPULATION_SIZE,
+                 num_generations=GA_NUM_GENERATIONS,
+                 min_securities=GA_MIN_SECURITIES,
+                 max_securities=GA_MAX_SECURITIES,
+                 min_weight=GA_MIN_WEIGHT, max_weight=GA_MAX_WEIGHT,
+                 target_return=GA_TARGET_RETURN, target_risk=None,
+                 use_copulae=False, use_forecasts=False, conn=None):
+        self.num_children = num_children
+        self.num_generations = num_generations
+        self.min_securities = min_securities
+        self.max_securities = max_securities
+        self.min_weight = min_weight
+        self.max_weight = max_weight
+        self.target_return = target_return
+        self.target_risk = target_risk
+        self.use_copulae = use_copulae
+        self.use_forecasts = use_forecasts
+        self.conn = conn
+        # Instance state — set by _prepare_inputs()
+        self._data = None
+        self._expected_returns = None
+        self._variances = None
+
+    def _prepare_inputs(self, prices):
+        """Prepare log returns, expected returns, and variances."""
+        if prices is None or prices.empty:
+            raise ValueError("prices DataFrame is None or empty.")
+        self._data = calculate_returns(prices).transpose()
+        if self.use_forecasts:
+            self._variances = None
+            self._expected_returns = None
+            if self.conn is not None:
+                from src import db
+                er = db.load_expected_returns(self.conn)
+                var = db.load_variances(self.conn)
+                if not er.empty and not var.empty:
+                    self._expected_returns = er
+                    self._variances = var
+            if self._expected_returns is None:
+                try:
+                    self._variances = load_data('Data/variances.csv')
+                    self._expected_returns = load_data('Data/expected_returns.csv')['0']
+                except (FileNotFoundError, KeyError) as e:
+                    logger.warning(
+                        "Could not load forecast files (%s); "
+                        "falling back to historical estimates.", e)
+                    self._variances = None
+                    self._expected_returns = (
+                        self._data.T.mean() * TRADING_DAYS_PER_YEAR)
+        else:
+            self._variances = None
+            self._expected_returns = (
+                self._data.T.mean() * TRADING_DAYS_PER_YEAR)
+
+    def _get_cov_matrix(self, ret_data, use_copulae=False):
+        """CCC covariance matrix using instance variances (not globals)."""
+        if self._variances is not None:
+            missing_cols = set(ret_data.columns) - set(self._variances.index)
+            if missing_cols:
+                logger.warning(
+                    "Columns missing from variances: %s. "
+                    "Falling back to historical cov.", missing_cols)
+                return ret_data.cov() * TRADING_DAYS_PER_YEAR
+
+        if use_copulae:
+            corr = estimate_corr_using_copulas(ret_data)
+        else:
+            corr = ret_data.corr().values
+
+        D = np.zeros((ret_data.shape[1], ret_data.shape[1]))
+        if self._variances is not None:
+            var_values = self._variances.loc[ret_data.columns].values.flatten()
+            if np.any(var_values < 0):
+                logger.warning("Negative forecast variances found; clipping to 0.")
+                var_values = np.clip(var_values, 0, None)
+            diag = np.sqrt(var_values)
+        else:
+            diag = ret_data.std().values * np.sqrt(TRADING_DAYS_PER_YEAR)
+        np.fill_diagonal(D, diag)
+        return np.matmul(np.matmul(D, corr), D)
+
+    def _optimize_weights(self, ret_data, initial_weights):
+        """SLSQP weight optimisation using instance expected returns."""
+        cov_matrix = self._get_cov_matrix(ret_data, self.use_copulae)
+        rets = self._expected_returns.loc[ret_data.columns].values
+        cons = [{'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}]
+        if self.target_risk is not None and self.target_return is None:
+            cons.append({'type': 'eq',
+                         'fun': lambda W: self.target_risk -
+                         np.sqrt(np.dot(W.T, np.dot(cov_matrix, W)))})
+        if self.target_return is not None and self.target_risk is None:
+            cons.append({'type': 'eq',
+                         'fun': lambda W: self.target_return -
+                         np.sum(rets * W)})
+        bounds = tuple((self.min_weight, self.max_weight)
+                        for _ in range(len(initial_weights)))
+        sol = opt.minimize(sharpe_ratio, initial_weights,
+                           args=(rets, cov_matrix), method='SLSQP',
+                           bounds=bounds, constraints=cons)
+        if not sol.success:
+            logger.warning("Optimization did not converge: %s", sol.message)
+        return sol
+
+    def _make_fitness_fn(self):
+        """Create a closure that captures instance state for PyGAD."""
+        inst_data = self._data
+        inst_er = self._expected_returns
+        min_sec = self.min_securities
+        max_sec = self.max_securities
+        target_ret = self.target_return
+        target_risk = self.target_risk
+        max_w = self.max_weight
+        min_w = self.min_weight
+
+        def _fitness(ga_instance, solution, solution_idx):
+            num_stocks = np.count_nonzero(solution)
+            subset = inst_data.iloc[np.array(solution).astype(bool), :]
+            if num_stocks >= 2:
+                random_w = np.random.random(num_stocks)
+                random_w /= np.sum(random_w)
+                cov_matrix = subset.transpose().cov().values * TRADING_DAYS_PER_YEAR
+                rets = inst_er.loc[subset.index].values
+                cons = [{'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}]
+                if target_ret is not None and target_risk is None:
+                    cons.append({'type': 'eq',
+                                 'fun': lambda W: target_ret - np.sum(rets * W)})
+                if target_risk is not None and target_ret is None:
+                    cons.append({'type': 'eq',
+                                 'fun': lambda W: target_risk -
+                                 np.sqrt(np.dot(W.T, np.dot(cov_matrix, W)))})
+                bounds = tuple((min_w, max_w) for _ in range(num_stocks))
+                sol = opt.minimize(sharpe_ratio, random_w,
+                                   args=(rets, cov_matrix), method='SLSQP',
+                                   bounds=bounds, constraints=cons)
+                base_fitness = -sol.fun
+            else:
+                base_fitness = -1
+
+            if num_stocks > max_sec:
+                return base_fitness - (num_stocks - max_sec) ** 2
+            elif num_stocks < min_sec:
+                return base_fitness - (min_sec - num_stocks) ** 2
+            return base_fitness
+
+        return _fitness
+
+    def _create_individual(self):
+        """Create a random binary individual for the GA."""
+        n = len(self._data)
+        p = self.max_securities / n
+        individual = np.random.binomial(1, p, n)
+        while np.count_nonzero(individual) < self.min_securities:
+            individual = np.random.binomial(1, p, n)
+        return individual
+
+    def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        self._prepare_inputs(prices)
+
+        fitness_fn = self._make_fitness_fn()
+        initial_pop = np.array([self._create_individual()
+                                for _ in range(self.num_children)])
+
+        start = time.time()
+        ga_instance = pygad.GA(
+            num_generations=self.num_generations,
+            initial_population=initial_pop,
+            num_parents_mating=max(2, self.num_children // 10),
+            gene_type=int,
+            init_range_low=0, init_range_high=2,
+            parent_selection_type='rank',
+            keep_parents=0,
+            random_mutation_min_val=-1, random_mutation_max_val=1,
+            mutation_type="random",
+            crossover_type="single_point",
+            crossover_probability=0.85,
+            fitness_func=fitness_fn,
+            stop_criteria='saturate_5',
+        )
+        ga_instance.run()
+        elapsed = time.time() - start
+
+        solution, solution_fitness, _ = ga_instance.best_solution(
+            ga_instance.last_generation_fitness)
+        indices = np.array(solution).astype(bool)
+        portfolio = list(self._data.transpose().iloc[:, indices].columns)
+
+        if not portfolio:
+            return OptimisationResult(
+                selected_tickers=[], weights=np.array([]),
+                sharpe_ratio=float('-inf'),
+                metadata={'error': 'No valid solution found'},
+            )
+
+        # SLSQP weight refinement
+        log_rets = self._data.loc[portfolio, :]
+        random_weights = np.random.random(len(portfolio))
+        random_weights /= np.sum(random_weights)
+        sol = self._optimize_weights(log_rets.transpose(), random_weights)
+        weights = sol.x if sol.success else np.ones(len(portfolio)) / len(portfolio)
+        final_sharpe = -sol.fun if sol.success else float(solution_fitness)
+
+        return OptimisationResult(
+            selected_tickers=portfolio,
+            weights=weights,
+            sharpe_ratio=final_sharpe,
+            metadata={
+                'num_children': self.num_children,
+                'num_generations': self.num_generations,
+                'use_copulae': self.use_copulae,
+                'use_forecasts': self.use_forecasts,
+                'elapsed_seconds': elapsed,
+            },
+        )
+
+
 def main():
     import time as _time
 
@@ -515,9 +748,9 @@ def main():
     if not sol.success:
         logger.warning("Weight optimisation did not converge: %s", sol.message)
     best_weights = sol['x']
-    cov = best_portfolio_returns.cov()*252
+    cov = best_portfolio_returns.cov() * TRADING_DAYS_PER_YEAR
     risk = float(np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights))))
-    portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean()*252)))
+    portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean() * TRADING_DAYS_PER_YEAR)))
     best_sharpe = float(fitness(best_individual, log_returns.T))
     selected_tickers = list(prices_df.iloc[:, indeces].columns)
     stock_allocations = {ticker: weight for ticker, weight in
@@ -566,7 +799,7 @@ if __name__ == '__main__':
     _conn.close()
     if prices_df.empty:
         prices_df = load_data('Data/NZ_ETF_Prices.csv')
-    prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
+    prices_df = prices_df.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(prices_df))
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     prepare_opt_inputs(prices_df, use_forecasts=False)
     log_returns = calculate_returns(prices_df)

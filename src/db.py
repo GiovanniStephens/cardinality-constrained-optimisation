@@ -140,7 +140,13 @@ CREATE TABLE IF NOT EXISTS backtest_sessions (
     use_forecast    INTEGER DEFAULT 0,
     optimiser_params_json TEXT,
     elapsed_seconds REAL,
-    notes           TEXT
+    notes           TEXT,
+    window_train_start TEXT,
+    window_train_end   TEXT,
+    window_test_start  TEXT,
+    window_test_end    TEXT,
+    window_label       TEXT,
+    run_group_id       TEXT
 );
 
 -- Individual portfolio results within a backtest session
@@ -666,7 +672,9 @@ def save_backtest_session(conn, params):
 
     params: dict with keys 'data_source', 'data_source_id', 'num_portfolios',
             'num_days_oos', 'use_forecast', 'optimiser_params' (dict),
-            'elapsed_seconds', 'notes'
+            'elapsed_seconds', 'notes', and optional rolling-window fields:
+            'window_train_start', 'window_train_end', 'window_test_start',
+            'window_test_end', 'window_label', 'run_group_id'.
     Returns session_id.
     """
     now = _now()
@@ -677,8 +685,11 @@ def save_backtest_session(conn, params):
             """INSERT INTO backtest_sessions (
                 created_at, data_source, data_source_id, num_portfolios,
                 num_days_oos, use_forecast, optimiser_params_json,
-                elapsed_seconds, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                elapsed_seconds, notes,
+                window_train_start, window_train_end,
+                window_test_start, window_test_end,
+                window_label, run_group_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 now,
                 params.get('data_source'),
@@ -689,6 +700,12 @@ def save_backtest_session(conn, params):
                 opt_params_json,
                 params.get('elapsed_seconds'),
                 params.get('notes'),
+                params.get('window_train_start'),
+                params.get('window_train_end'),
+                params.get('window_test_start'),
+                params.get('window_test_end'),
+                params.get('window_label'),
+                params.get('run_group_id'),
             ),
         )
     return cur.lastrowid
@@ -886,8 +903,9 @@ def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
     er_series = er['0'] if '0' in er.columns else er.iloc[:, 0]
     var_series = var['0'] if '0' in var.columns else var.iloc[:, 0]
 
+    from src.config import TRADING_DAYS_PER_YEAR
     save_forecast_results(conn, er_series, var_series,
-                          n_periods=252, exchange=exchange,
+                          n_periods=TRADING_DAYS_PER_YEAR, exchange=exchange,
                           notes=f'Migrated from {er_filename} + {var_filename}')
 
 

@@ -1,7 +1,24 @@
 """Shared portfolio utility functions used across all optimisation methods."""
 
+from dataclasses import dataclass, field
+from typing import List
+
 import numpy as np
 import pandas as pd
+
+from src.config import TRADING_DAYS_PER_YEAR
+
+
+# ─── Common interface ────────────────────────────────────────────────────────
+
+
+@dataclass
+class OptimisationResult:
+    """Standard output from any optimiser."""
+    selected_tickers: List[str]
+    weights: np.ndarray
+    sharpe_ratio: float
+    metadata: dict = field(default_factory=dict)
 
 
 def load_prices_csv(filename, min_coverage=0.95, last_n_days=None):
@@ -45,7 +62,7 @@ def calculate_covariance_matrix(log_returns, annualise=True):
     """
     cov = log_returns.cov()
     if annualise:
-        cov = cov * 252
+        cov = cov * TRADING_DAYS_PER_YEAR
     return cov
 
 
@@ -58,7 +75,7 @@ def calculate_expected_returns(log_returns, annualise=True):
     """
     er = log_returns.mean()
     if annualise:
-        er = er * 252
+        er = er * TRADING_DAYS_PER_YEAR
     return er
 
 
@@ -71,7 +88,7 @@ def calculate_variances(log_returns, annualise=True):
     """
     var = log_returns.var()
     if annualise:
-        var = var * 252
+        var = var * TRADING_DAYS_PER_YEAR
     return var
 
 
@@ -103,6 +120,83 @@ def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
     :return: negative Sharpe ratio as a float.
     """
     return -sharpe_ratio(weights, expected_returns, cov_matrix)
+
+
+# ─── Performance Metrics ──────────────────────────────────────────────────────
+
+
+def maximum_drawdown(portfolio_returns):
+    """
+    Calculates the out-of-sample maximum drawdown
+    from the simulation.
+
+    :portfolio_returns: The input portfolio returns. List of floats.
+    :return: The maximum drawdown, which is the percentage drawdown
+             from the highest peak to the lowest low.
+    """
+    if not portfolio_returns:
+        raise ValueError("portfolio_returns cannot be empty")
+    cummax = []
+    cum_return = []
+    drawdowns = []
+
+    cummax.append(np.exp(portfolio_returns[0]))
+    cum_return.append(np.exp(portfolio_returns[0]))
+    drawdowns.append(0)
+    for i in range(1, len(portfolio_returns)):
+        cummax.append(max(np.exp(portfolio_returns[i]) * cum_return[i-1], cum_return[i-1]))
+        cum_return.append(np.exp(portfolio_returns[i]) * cum_return[i-1])
+        drawdowns.append(cum_return[i] / cummax[i] - 1)
+    return min(drawdowns)
+
+
+def downside_deviation(portfolio_returns, mar=0):
+    """
+    Calculates the downside deviation of the portfolio
+    returns.
+
+    :portfolio_returns: The input portfolio returns. List of floats.
+    :mar: threshold below which one would calculate the deviation.
+    :return: downside deviation.
+    """
+    if not portfolio_returns:
+        return 0.0
+    squared_dev = 0
+    for i in portfolio_returns:
+        if i < mar:
+            squared_dev += (i - mar)**2
+    return (squared_dev / len(portfolio_returns))**0.5
+
+
+def sortino_ratio(r, downside_deviation, MAR=0):
+    """
+    Calculates the Sortino ratio given the inputs.
+
+    :r: float for the portfolio returns (annualised)
+    :downside_deviation: the standard deviation of the
+                         returns below MAR.
+    :MAR: The threshold under which the deviation is calculated.
+    :return: float for the Sortino Ratio.
+    """
+    if downside_deviation == 0:
+        return 0.0
+    return (r - MAR) / downside_deviation
+
+
+def calmar_ratio(r, downside_drawdown):
+    """
+    Calculates that the portfolio Calmar ratio would be.
+
+    :r: float for the portfolio returns (annualised)
+    :downside_deviation: The maximum drawdown over a period in % terms.
+    :return: a float for the Calmar ratio
+    """
+    if downside_drawdown == 0:
+        return 0.0
+    return r / abs(downside_drawdown)
+
+
+# ─── Weight Optimisation ─────────────────────────────────────────────────────
 
 
 def optimise_weights(selection_vector, data, min_weight=0.0, max_weight=1.0,

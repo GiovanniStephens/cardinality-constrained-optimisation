@@ -4,33 +4,18 @@ import numpy as np
 import pandas as pd
 import pulp
 
+from src.portfolio_utils import (
+    load_prices_csv,
+    calculate_log_returns,
+    calculate_expected_returns,
+    calculate_variances,
+    calculate_covariance_matrix,
+    optimise_weights,
+    OptimisationResult,
+)
+from src.config import GA_MAX_SECURITIES
+
 logger = logging.getLogger(__name__)
-
-
-def load_data(filename: str) -> pd.DataFrame:
-    prices_df = pd.read_csv(filename, index_col=0)
-    prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
-    prices_df = prices_df.ffill()
-    return prices_df
-
-
-def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
-    log_returns = np.log(data / data.shift(1))
-    log_returns = log_returns.fillna(0)
-    log_returns = log_returns.replace([np.inf, -np.inf], 0)
-    return log_returns
-
-
-def calculate_variances(log_returns: pd.DataFrame) -> pd.Series:
-    return log_returns.var() * 252
-
-
-def calculate_expected_returns(log_returns: pd.DataFrame) -> pd.Series:
-    return log_returns.mean() * 252
-
-
-def calculate_covariance_matrix(log_returns: pd.DataFrame) -> pd.DataFrame:
-    return log_returns.cov() * 252
 
 
 def calculate_portfolio_variance(weights, cov_matrix):
@@ -64,16 +49,63 @@ def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk
     return portfolio_problem, selection
 
 
+class MIPOptimiser:
+    """Mixed Integer Linear Programming portfolio selection."""
+
+    def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=0.8):
+        self.max_securities = max_securities
+        self.risk_aversion = risk_aversion
+
+    def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        log_returns = calculate_log_returns(prices)
+        er = calculate_expected_returns(log_returns)
+        volatilities = np.sqrt(calculate_variances(log_returns))
+
+        problem, selection = setup_portfolio_selection_problem(
+            log_returns.columns, er, volatilities, self.risk_aversion)
+        # Override max ETFs constraint with our setting
+        problem.constraints.pop("Max_ETFs", None)
+        problem += (
+            pulp.lpSum([selection[etf] for etf in log_returns.columns])
+            <= self.max_securities, "Max_ETFs"
+        )
+        problem.solve(pulp.PULP_CBC_CMD(msg=0))
+
+        selected = [etf for etf in log_returns.columns
+                     if pulp.value(selection[etf]) > 0.5]
+        sharpe = portfolio_sharpe_ratio(selection, er, log_returns)
+
+        # SLSQP weight optimisation on selected subset
+        sel_vector = np.array([1 if c in selected else 0
+                               for c in prices.columns])
+        weights = np.ones(len(selected)) / len(selected)
+        if len(selected) >= 2:
+            result = optimise_weights(sel_vector, prices)
+            if result.success:
+                weights = result.x
+                sharpe = -result.fun
+
+        return OptimisationResult(
+            selected_tickers=selected,
+            weights=weights,
+            sharpe_ratio=sharpe,
+            metadata={
+                'risk_aversion': self.risk_aversion,
+                'solver_status': pulp.LpStatus[problem.status],
+            },
+        )
+
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     # Load data
-    prices_df = load_data('Data/ETF_Prices.csv')
+    prices_df = load_prices_csv('Data/ETF_Prices.csv')
     prices_df = prices_df.iloc[:-213]
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
-    log_returns = calculate_returns(prices_df)
+    log_returns = calculate_log_returns(prices_df)
     expected_returns = calculate_expected_returns(log_returns)
     volatilities = np.sqrt(calculate_variances(log_returns))
 

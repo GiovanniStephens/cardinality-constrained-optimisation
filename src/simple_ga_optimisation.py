@@ -6,47 +6,21 @@ import numpy as np
 import pandas as pd
 from multiprocessing import Pool, Manager
 
+from src.portfolio_utils import (
+    load_prices_csv,
+    calculate_log_returns,
+    calculate_expected_returns,
+    calculate_covariance_matrix,
+    OptimisationResult,
+)
+from src.config import (
+    DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE,
+    ISLAND_GA_NUM_GENERATIONS, ISLAND_GA_POPULATION_SIZE,
+    ISLAND_GA_NUM_ELITES, ISLAND_GA_MIGRATION_INTERVAL,
+    ISLAND_GA_MIGRATION_RATE,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def load_data(filename: str) -> pd.DataFrame:
-    prices_df = pd.read_csv(filename, index_col=0)
-    # Convert index to datetime and keep only last 2 years
-    prices_df.index = pd.to_datetime(prices_df.index)
-    prices_df = prices_df.sort_index()
-    two_years_ago = prices_df.index[-1] - pd.Timedelta(days=730)
-    prices_df = prices_df[prices_df.index >= two_years_ago]
-    # Now apply the original filter
-    prices_df = prices_df.dropna(axis=1, thresh=0.95*len(prices_df))
-    prices_df = prices_df.ffill()
-    return prices_df
-
-
-def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
-    log_returns = np.log(data / data.shift(1))
-    log_returns = log_returns.fillna(0)
-    log_returns = log_returns.replace([np.inf, -np.inf], 0)
-    return log_returns
-
-
-def calculate_variances(log_returns: pd.DataFrame) -> pd.Series:
-    return log_returns.var() * 252
-
-
-def calculate_expected_returns(log_returns: pd.DataFrame, use_forecasts=False) -> pd.Series:
-    if use_forecasts:
-        expected_returns = pd.read_csv('Data/expected_returns.csv', index_col=0)
-        expected_returns = expected_returns[expected_returns.index.isin(log_returns.columns)]
-        for ticker in expected_returns.index:
-            if expected_returns.loc[ticker, '0'] > 0.5 or np.isnan(expected_returns.loc[ticker, '0']):
-                expected_returns.loc[ticker, '0'] = log_returns[ticker].mean() * 252
-        return expected_returns['0']
-    else:
-        return log_returns.mean() * 252
-
-
-def calculate_covariance_matrix(log_returns: pd.DataFrame) -> pd.DataFrame:
-    return log_returns.cov() * 252
 
 
 def initialise_population(size, num_etfs, max_num_etfs):
@@ -119,7 +93,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                       min_etfs=8, max_etfs=20, min_return=0.12):
     num_etfs = data.shape[1]
     population = initialise_population(population_size, num_etfs, max_num_etfs=20)
-    log_returns = calculate_returns(data)
+    log_returns = calculate_log_returns(data)
     expected_returns = calculate_expected_returns(log_returns)
     best_overall_fitness = float('-inf')
     best_overall_individual = None
@@ -204,6 +178,67 @@ def optimise_weights(best_solution, data, min_return=0.12):
     return _optimise_weights(best_solution, data, min_return=min_return)
 
 
+class IslandGAOptimiser:
+    """Parallel island-model genetic algorithm for portfolio selection."""
+
+    def __init__(self, num_generations=ISLAND_GA_NUM_GENERATIONS,
+                 population_size=ISLAND_GA_POPULATION_SIZE,
+                 num_elites=ISLAND_GA_NUM_ELITES,
+                 migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
+                 migration_rate=ISLAND_GA_MIGRATION_RATE,
+                 min_securities=8, max_securities=20,
+                 min_return=0.12):
+        self.num_generations = num_generations
+        self.population_size = population_size
+        self.num_elites = num_elites
+        self.migration_interval = migration_interval
+        self.migration_rate = migration_rate
+        self.min_securities = min_securities
+        self.max_securities = max_securities
+        self.min_return = min_return
+
+    def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        mutation_rate = 1 / prices.shape[1]
+        start = time.time()
+        best_solution, best_fitness = run_parallel_ga(
+            prices,
+            num_generations=self.num_generations,
+            total_population_size=self.population_size,
+            mutation_rate=mutation_rate,
+            num_elites=self.num_elites,
+            migration_interval=self.migration_interval,
+            migration_rate=self.migration_rate,
+        )
+        elapsed = time.time() - start
+
+        if best_solution is None:
+            return OptimisationResult(
+                selected_tickers=[], weights=np.array([]),
+                sharpe_ratio=float('-inf'),
+                metadata={'error': 'No valid solution found'},
+            )
+
+        selected = list(prices.columns[best_solution == 1])
+        weights = np.ones(len(selected)) / len(selected)
+
+        result = optimise_weights(best_solution, prices,
+                                  min_return=self.min_return)
+        if result.success:
+            weights = result.x
+            best_fitness = -result.fun
+
+        return OptimisationResult(
+            selected_tickers=selected,
+            weights=weights,
+            sharpe_ratio=best_fitness,
+            metadata={
+                'num_generations': self.num_generations,
+                'population_size': self.population_size,
+                'elapsed_seconds': elapsed,
+            },
+        )
+
+
 def print_results(tickers, optimal_weights, amount_to_allocate=5000):
     logger.info("Optimised Portfolio Allocation:")
     for ticker, weight in zip(tickers, optimal_weights):
@@ -223,22 +258,22 @@ if __name__ == '__main__':
     conn.close()
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
-        data = load_data('Data/time_series_20251016_113257.csv')
+        data = load_prices_csv('Data/time_series_20251016_113257.csv', last_n_days=730)
     else:
-        # Apply same filters as load_data: last 2 years, 95% coverage, ffill
+        # Apply same filters: last 2 years, 95% coverage, ffill
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
-        two_years_ago = data.index[-1] - pd.Timedelta(days=730)
-        data = data[data.index >= two_years_ago]
-        data = data.dropna(axis=1, thresh=int(0.95 * len(data)))
+        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
+        data = data[data.index >= cutoff]
+        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
         data = data.ffill()
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
-    num_generations = 70
-    total_population_size = 8000
+    num_generations = ISLAND_GA_NUM_GENERATIONS
+    total_population_size = ISLAND_GA_POPULATION_SIZE
     mutation_rate = 1 / data.shape[1]
-    num_elites = 100
-    migration_interval = 10
-    migration_rate_val = 0.1
+    num_elites = ISLAND_GA_NUM_ELITES
+    migration_interval = ISLAND_GA_MIGRATION_INTERVAL
+    migration_rate_val = ISLAND_GA_MIGRATION_RATE
 
     ga_start = time.time()
     best_solution, best_fitness = run_parallel_ga(data,
@@ -262,7 +297,7 @@ if __name__ == '__main__':
             logger.info("Final Optimised Sharpe Ratio: %.4f", final_sharpe)
 
             # Save to database
-            log_returns = calculate_returns(data[selected_etfs])
+            log_returns = calculate_log_returns(data[selected_etfs])
             expected_rets = calculate_expected_returns(log_returns)
             portfolio_return = float(np.dot(optimised_result.x, expected_rets))
             cov_matrix = calculate_covariance_matrix(log_returns)

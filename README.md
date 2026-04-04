@@ -244,3 +244,5 @@ beautifulsoup4  # Web scraping (yfinance dependency)
 - [ ] Portfolio beta and alpha (requires benchmark specification)
 - [ ] Verify weights match an independent optimisation engine
 - [ ] Refactor and expand test coverage
+- [ ] Download full stock + ETF universe (~25k tickers from FinanceDatabase) and run data quality validation
+- [ ] Run optimisation on the combined stocks + ETFs universe

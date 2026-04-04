@@ -9,6 +9,7 @@ from arch import arch_model
 
 from src import backtest
 from src import optimisation as op
+from src.config import TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def main():
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
         data = op.load_data('Data/ETF_Prices.csv')
-    data = data.dropna(axis=1, thresh=0.95*len(data))
+    data = data.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(data))
     logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
     training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
 
@@ -39,7 +40,7 @@ def main():
     log_returns = op.calculate_returns(training_data)
 
     # Forecast returns
-    n_periods = 252
+    n_periods = TRADING_DAYS_PER_YEAR
     logger.info('Forecasting returns for %d tickers...', len(data.columns))
     forecast_start = time.time()
     expected_returns = {}
@@ -61,13 +62,13 @@ def main():
                                                return_conf_int=False)
             if forecast.iloc[0] <= 0:
                 logger.warning("Ticker %s: ARIMA forecast starts at %.4f; using historical mean.", ticker, forecast.iloc[0])
-                expected_returns[ticker] = log_returns[ticker].mean() * 252
+                expected_returns[ticker] = log_returns[ticker].mean() * TRADING_DAYS_PER_YEAR
             else:
                 expected_returns[ticker] = np.log(max(0.0001,
                                                        forecast.iloc[-1])/forecast.iloc[0])
         except Exception as e:
             logger.warning("ARIMA forecast failed for %s (%s); using historical mean.", ticker, e)
-            expected_returns[ticker] = log_returns[ticker].mean() * 252
+            expected_returns[ticker] = log_returns[ticker].mean() * TRADING_DAYS_PER_YEAR
             failed_return_tickers.append(ticker)
 
     if failed_return_tickers:
@@ -96,15 +97,15 @@ def main():
             forecast = res.forecast(horizon=n_periods,
                                     reindex=False)
             vol = forecast.residual_variance.iloc[-1].mean() \
-                / np.power(100, 2)*252
+                / np.power(100, 2) * TRADING_DAYS_PER_YEAR
             if np.isnan(vol) or vol <= 0:
                 logger.warning("Ticker %s: GARCH forecast produced invalid variance (%.6f); using sample variance.", ticker, vol)
-                volatilities[ticker] = log_returns[ticker].var() * 252
+                volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
             else:
                 volatilities[ticker] = vol
         except Exception as e:
             logger.warning("GARCH forecast failed for %s (%s); using sample variance.", ticker, e)
-            volatilities[ticker] = log_returns[ticker].var() * 252
+            volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
             failed_vol_tickers.append(ticker)
 
     if failed_vol_tickers:

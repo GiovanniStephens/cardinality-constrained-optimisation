@@ -11,6 +11,11 @@ from src.portfolio_utils import (
     calculate_expected_returns,
     calculate_covariance_matrix,
     optimise_weights,
+    OptimisationResult,
+)
+from src.config import (
+    DATA_MIN_COVERAGE, DATA_LOOKBACK_DAYS,
+    GA_MIN_SECURITIES, GA_MAX_SECURITIES,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +92,53 @@ def parallel_monte_carlo(data, num_trials, num_processes,
     return best_solution, best_fitness
 
 
+class MonteCarloOptimiser:
+    """Random search portfolio selection with SLSQP weight refinement."""
+
+    def __init__(self, n_trials=10_000_000,
+                 min_securities=GA_MIN_SECURITIES,
+                 max_securities=GA_MAX_SECURITIES,
+                 num_processes=None):
+        self.n_trials = n_trials
+        self.min_securities = min_securities
+        self.max_securities = max_securities
+        self.num_processes = num_processes or os.cpu_count()
+
+    def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        start = time.time()
+        best_solution, best_fitness = parallel_monte_carlo(
+            prices, self.n_trials, self.num_processes,
+            self.min_securities, self.max_securities,
+        )
+        elapsed = time.time() - start
+
+        if best_solution is None:
+            return OptimisationResult(
+                selected_tickers=[], weights=np.array([]),
+                sharpe_ratio=float('-inf'),
+                metadata={'error': 'No valid solution found'},
+            )
+
+        selected = list(prices.columns[best_solution == 1])
+        weights = np.ones(len(selected)) / len(selected)
+
+        result = optimise_weights(best_solution, prices)
+        if result.success:
+            weights = result.x
+            best_fitness = -result.fun
+
+        return OptimisationResult(
+            selected_tickers=selected,
+            weights=weights,
+            sharpe_ratio=best_fitness,
+            metadata={
+                'n_trials': self.n_trials,
+                'num_processes': self.num_processes,
+                'elapsed_seconds': elapsed,
+            },
+        )
+
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
@@ -105,9 +157,9 @@ if __name__ == '__main__':
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
-        two_years_ago = data.index[-1] - pd.Timedelta(days=730)
-        data = data[data.index >= two_years_ago]
-        data = data.dropna(axis=1, thresh=int(0.95 * len(data)))
+        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
+        data = data[data.index >= cutoff]
+        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
         data = data.ffill()
 
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
