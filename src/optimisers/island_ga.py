@@ -13,8 +13,9 @@ from src.portfolio_utils import (
     calculate_covariance_matrix,
     OptimisationResult,
 )
+from src.optimisers.base import BaseOptimiser
 from src.config import (
-    DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE,
+    DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE, DATA_FFILL_LIMIT,
     ISLAND_GA_NUM_GENERATIONS, ISLAND_GA_POPULATION_SIZE,
     ISLAND_GA_NUM_ELITES, ISLAND_GA_MIGRATION_INTERVAL,
     ISLAND_GA_MIGRATION_RATE,
@@ -92,7 +93,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                       convergence_log=None, start_time=None, time_budget=None,
                       min_etfs=8, max_etfs=20, min_return=0.12):
     num_etfs = data.shape[1]
-    population = initialise_population(population_size, num_etfs, max_num_etfs=20)
+    population = initialise_population(population_size, num_etfs, max_num_etfs=max_etfs)
     log_returns = calculate_log_returns(data)
     expected_returns = calculate_expected_returns(log_returns)
     best_overall_fitness = float('-inf')
@@ -141,7 +142,8 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
 
 def run_parallel_ga(data, num_generations, total_population_size,
                     mutation_rate, num_elites, migration_interval,
-                    migration_rate):
+                    migration_rate, min_etfs=8, max_etfs=20,
+                    min_return=0.12):
     num_islands = os.cpu_count()
     manager = Manager()
     return_dict = manager.dict()
@@ -158,7 +160,9 @@ def run_parallel_ga(data, num_generations, total_population_size,
         island_pop_size = total_population_size // num_islands
         args = [(i, num_islands, data, num_generations, island_pop_size,
                  mutation_rate, num_elites, migration_interval,
-                 migration_rate, return_dict) for i in range(num_islands)]
+                 migration_rate, return_dict,
+                 None, None, None,
+                 min_etfs, max_etfs, min_return) for i in range(num_islands)]
         results = pool.starmap(genetic_algorithm, args)
     elapsed = time.time() - start
     best_fitness = float('-inf')
@@ -178,7 +182,7 @@ def optimise_weights(best_solution, data, min_return=0.12):
     return _optimise_weights(best_solution, data, min_return=min_return)
 
 
-class IslandGAOptimiser:
+class IslandGAOptimiser(BaseOptimiser):
     """Parallel island-model genetic algorithm for portfolio selection."""
 
     def __init__(self, num_generations=ISLAND_GA_NUM_GENERATIONS,
@@ -208,6 +212,9 @@ class IslandGAOptimiser:
             num_elites=self.num_elites,
             migration_interval=self.migration_interval,
             migration_rate=self.migration_rate,
+            min_etfs=self.min_securities,
+            max_etfs=self.max_securities,
+            min_return=self.min_return,
         )
         elapsed = time.time() - start
 
@@ -247,9 +254,8 @@ def print_results(tickers, optimal_weights, amount_to_allocate=5000):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    from src.logging_config import setup_logging
+    setup_logging(
     )
     # Load from database (falls back to CSV if DB is empty)
     from src import db
@@ -266,7 +272,7 @@ if __name__ == '__main__':
         cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
         data = data[data.index >= cutoff]
         data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill()
+        data = data.ffill(limit=DATA_FFILL_LIMIT)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
     num_generations = ISLAND_GA_NUM_GENERATIONS
     total_population_size = ISLAND_GA_POPULATION_SIZE
@@ -308,7 +314,7 @@ if __name__ == '__main__':
             conn = db.get_connection()
             run_id = db.save_optimisation_run(conn,
                 params={
-                    'script': 'simple_ga_optimisation',
+                    'script': 'island_ga',
                     'data_source': 'investnow',
                     'num_generations': num_generations,
                     'total_population_size': total_population_size,

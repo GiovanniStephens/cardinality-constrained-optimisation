@@ -14,7 +14,12 @@ from src.config import TRADING_DAYS_PER_YEAR
 
 @dataclass
 class OptimisationResult:
-    """Standard output from any optimiser."""
+    """Standard output from any optimiser.
+
+    WARNING: sharpe_ratio is an in-sample value computed on the training data.
+    It is biased upward by selection bias — typical IS-to-OOS degradation is
+    30-50%. See CLAUDE.md "Sharpe Ratio Overfitting" for details.
+    """
     selected_tickers: List[str]
     weights: np.ndarray
     sharpe_ratio: float
@@ -37,7 +42,7 @@ def load_prices_csv(filename, min_coverage=0.95, last_n_days=None):
         prices_df = prices_df[prices_df.index >= cutoff]
     thresh = int(min_coverage * len(prices_df))
     prices_df = prices_df.loc[:, prices_df.notna().sum() >= thresh]
-    prices_df = prices_df.ffill()
+    prices_df = prices_df.ffill(limit=5)
     return prices_df
 
 
@@ -194,6 +199,145 @@ def calmar_ratio(r, downside_drawdown):
     if downside_drawdown == 0:
         return 0.0
     return r / abs(downside_drawdown)
+
+
+# ─── Overfitting Detection ──────────────────────────────────────────────────
+
+import logging
+from scipy.stats import norm
+
+# In-sample Sharpe thresholds for annual equity portfolios.
+# See CLAUDE.md "Sharpe Ratio Overfitting" for academic backing.
+SHARPE_WARN_THRESHOLD = 2.0
+SHARPE_CRITICAL_THRESHOLD = 3.0
+
+_overfit_logger = logging.getLogger(__name__)
+
+
+def sharpe_ratio_variance(sr, n, skewness=0.0, excess_kurtosis=0.0):
+    """Variance of the Sharpe ratio estimator (Lo 2002, Bailey & López de Prado 2014).
+
+    Accounts for non-normality of returns via skewness and excess kurtosis.
+    For normal returns (skewness=0, excess_kurtosis=0), simplifies to
+    (1 + sr^2/2) / n.
+
+    :param sr: observed Sharpe ratio.
+    :param n: number of return observations.
+    :param skewness: sample skewness of returns (default 0).
+    :param excess_kurtosis: sample excess kurtosis of returns (default 0).
+    :return: variance of the SR estimator.
+    """
+    return (1 - skewness * sr + (excess_kurtosis / 4) * sr ** 2) / n
+
+
+def deflated_sharpe_ratio(observed_sr, n, num_trials, skewness=0.0,
+                          excess_kurtosis=0.0, sr_benchmark=0.0):
+    """Probability that observed Sharpe is genuine after multiple testing correction.
+
+    Implements the Deflated Sharpe Ratio of Bailey & López de Prado (2014).
+    Returns P(SR > E[max SR under null]) — values near 1.0 indicate the
+    observed Sharpe likely reflects genuine skill, values near 0 indicate
+    it is likely due to overfitting.
+
+    :param observed_sr: the best observed Sharpe ratio.
+    :param n: number of return observations used to compute the SR.
+    :param num_trials: number of independent strategy variations tested
+        (for GA: ~population_size * generations).
+    :param skewness: sample skewness of returns.
+    :param excess_kurtosis: sample excess kurtosis of returns.
+    :param sr_benchmark: Sharpe ratio of the null hypothesis (default 0).
+    :return: DSR probability in [0, 1].
+    """
+    sr_var = sharpe_ratio_variance(observed_sr, n, skewness, excess_kurtosis)
+    sr_std = np.sqrt(max(sr_var, 1e-10))
+
+    # Expected maximum SR under the null (Euler-Mascheroni approximation)
+    euler_gamma = 0.5772156649
+    if num_trials <= 1:
+        expected_max_sr = sr_benchmark
+    else:
+        z = norm.ppf(1 - 1 / num_trials)
+        expected_max_sr = sr_std * (
+            (1 - euler_gamma) * z
+            + euler_gamma * norm.ppf(1 - 1 / (num_trials * np.e))
+        ) + sr_benchmark
+
+    # DSR = P(observed SR > expected max SR under null)
+    return float(norm.cdf((observed_sr - expected_max_sr) / sr_std))
+
+
+def warn_if_sharpe_suspicious(sr, context, logger=None):
+    """Log warnings if a Sharpe ratio is suspiciously high (likely overfit).
+
+    :param sr: observed Sharpe ratio.
+    :param context: descriptive label for log messages (e.g. "GA in-sample").
+    :param logger: logger instance (defaults to module logger).
+    """
+    log = logger or _overfit_logger
+    if sr > SHARPE_CRITICAL_THRESHOLD:
+        log.warning(
+            "%s: Sharpe=%.2f exceeds %.1f — almost certainly overfit on annual "
+            "data (Harvey et al. 2016). Apply heavy OOS discount. "
+            "See CLAUDE.md 'Sharpe Ratio Overfitting'.",
+            context, sr, SHARPE_CRITICAL_THRESHOLD,
+        )
+    elif sr > SHARPE_WARN_THRESHOLD:
+        log.warning(
+            "%s: Sharpe=%.2f exceeds %.1f — likely inflated by in-sample "
+            "optimisation bias. Expect 30-50%% OOS degradation. "
+            "See CLAUDE.md 'Sharpe Ratio Overfitting'.",
+            context, sr, SHARPE_WARN_THRESHOLD,
+        )
+
+
+# ─── Binary data format for C++ optimiser ────────────────────────────────────
+
+
+def write_binary_data(log_returns, path):
+    """Write log returns matrix in binary format for the C++ optimiser.
+
+    Format: uint32 num_rows, uint32 num_cols, then num_cols null-terminated
+    ticker strings, then num_rows * num_cols float64 values in row-major order.
+
+    :param log_returns: DataFrame of log returns (index=dates, columns=tickers).
+    :param path: output file path.
+    """
+    import struct
+
+    tickers = list(log_returns.columns)
+    mat = log_returns.values.astype(np.float64)
+    num_rows, num_cols = mat.shape
+
+    with open(path, 'wb') as f:
+        f.write(struct.pack('<II', num_rows, num_cols))
+        for ticker in tickers:
+            f.write(ticker.encode('utf-8') + b'\x00')
+        f.write(mat.tobytes(order='C'))
+
+
+def read_binary_data(path):
+    """Read binary data file written by write_binary_data.
+
+    :param path: input file path.
+    :return: (log_returns DataFrame, tickers list).
+    """
+    import struct
+
+    with open(path, 'rb') as f:
+        num_rows, num_cols = struct.unpack('<II', f.read(8))
+        tickers = []
+        for _ in range(num_cols):
+            chars = []
+            while True:
+                c = f.read(1)
+                if c == b'\x00':
+                    break
+                chars.append(c)
+            tickers.append(b''.join(chars).decode('utf-8'))
+        data = np.frombuffer(f.read(num_rows * num_cols * 8), dtype=np.float64)
+        mat = data.reshape(num_rows, num_cols)
+
+    return pd.DataFrame(mat, columns=tickers), tickers
 
 
 # ─── Weight Optimisation ─────────────────────────────────────────────────────

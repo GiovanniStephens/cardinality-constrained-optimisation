@@ -13,8 +13,9 @@ from src.portfolio_utils import (
     optimise_weights,
     OptimisationResult,
 )
+from src.optimisers.base import BaseOptimiser
 from src.config import (
-    DATA_MIN_COVERAGE, DATA_LOOKBACK_DAYS,
+    DATA_MIN_COVERAGE, DATA_FFILL_LIMIT, DATA_LOOKBACK_DAYS,
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
 )
 
@@ -92,7 +93,7 @@ def parallel_monte_carlo(data, num_trials, num_processes,
     return best_solution, best_fitness
 
 
-class MonteCarloOptimiser:
+class MonteCarloOptimiser(BaseOptimiser):
     """Random search portfolio selection with SLSQP weight refinement."""
 
     def __init__(self, n_trials=10_000_000,
@@ -140,10 +141,8 @@ class MonteCarloOptimiser:
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
 
     # ── Load prices from DB (CSV fallback) ────────────────────────────────
     from src import db
@@ -160,7 +159,7 @@ if __name__ == '__main__':
         cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
         data = data[data.index >= cutoff]
         data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill()
+        data = data.ffill(limit=DATA_FFILL_LIMIT)
 
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 
@@ -205,7 +204,7 @@ if __name__ == '__main__':
             run_id = db.save_optimisation_run(
                 conn,
                 params={
-                    'script': 'monte_carlo_optimisation',
+                    'script': 'monte_carlo',
                     'data_source': 'yahoo_finance',
                     'num_trials': num_trials,
                     'num_processes': num_processes,

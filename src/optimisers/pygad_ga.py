@@ -10,7 +10,11 @@ from copulae import GaussianCopula, TCopula
 from muarch import MUArch
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
-from src.portfolio_utils import load_prices_csv, calculate_log_returns, OptimisationResult
+from src.portfolio_utils import (
+    load_prices_csv, calculate_log_returns, negative_sharpe_ratio,
+    OptimisationResult,
+)
+from src.optimisers.base import BaseOptimiser
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
     GA_MIN_WEIGHT, GA_MAX_WEIGHT,
@@ -36,24 +40,6 @@ data = None
 variances = None
 expected_returns = None
 
-
-def sharpe_ratio(weights: np.ndarray, returns: np.ndarray, cov: np.ndarray) -> float:
-    """
-    Calculates the Sharpe ratio of a portfolio.
-    The Sharpe ratio is the ratio of the mean return of the portfolio
-    to the portfolio standard deviation.
-
-    :weights: numpy array of weights.
-    :p_returns: list of the portfolio's expected return.
-    :return: float of the negative Sharpe ratio.
-    """
-    p_returns = np.sum(weights*returns)
-    variance = np.dot(weights.T, np.dot(cov, weights))
-    if variance <= 0:
-        logger.warning("Portfolio variance is non-positive (%.6f), returning 0.", variance)
-        return 0.0
-    p_volatility = np.sqrt(variance)
-    return -p_returns/p_volatility
 
 
 def load_data(filename: str) -> pd.DataFrame:
@@ -179,7 +165,8 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
 
         return cop.sigma
     except Exception as e:
-        logger.warning("Copula estimation failed (%s); falling back to sample correlation.", e)
+        logger.warning("Copula estimation failed: %s; falling back to sample correlation.", e)
+        logger.debug("Copula traceback:", exc_info=True)
         return data.corr()
 
 
@@ -273,7 +260,7 @@ def optimize(data: pd.DataFrame,
                            bounds=bounds,
                            constraints=cons)
     else:
-        sol = opt.minimize(sharpe_ratio,
+        sol = opt.minimize(negative_sharpe_ratio,
                            initial_weights,
                            args=(rets, cov_matrix),
                            method='SLSQP',
@@ -489,7 +476,7 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
     return list(portfolio)
 
 
-class PygadOptimiser:
+class PygadOptimiser(BaseOptimiser):
     """PyGAD-based genetic algorithm with copula/CCC covariance support.
 
     Self-contained optimiser that does not mutate module-level globals.
@@ -592,7 +579,7 @@ class PygadOptimiser:
                          np.sum(rets * W)})
         bounds = tuple((self.min_weight, self.max_weight)
                         for _ in range(len(initial_weights)))
-        sol = opt.minimize(sharpe_ratio, initial_weights,
+        sol = opt.minimize(negative_sharpe_ratio, initial_weights,
                            args=(rets, cov_matrix), method='SLSQP',
                            bounds=bounds, constraints=cons)
         if not sol.success:
@@ -627,7 +614,7 @@ class PygadOptimiser:
                                  'fun': lambda W: target_risk -
                                  np.sqrt(np.dot(W.T, np.dot(cov_matrix, W)))})
                 bounds = tuple((min_w, max_w) for _ in range(num_stocks))
-                sol = opt.minimize(sharpe_ratio, random_w,
+                sol = opt.minimize(negative_sharpe_ratio, random_w,
                                    args=(rets, cov_matrix), method='SLSQP',
                                    bounds=bounds, constraints=cons)
                 base_fitness = -sol.fun
@@ -789,10 +776,8 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     from src import db as _db
     _conn = _db.get_connection()
     prices_df = _db.load_prices(_conn, exchange='US')

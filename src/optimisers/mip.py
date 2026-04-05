@@ -13,6 +13,7 @@ from src.portfolio_utils import (
     optimise_weights,
     OptimisationResult,
 )
+from src.optimisers.base import BaseOptimiser
 from src.config import GA_MAX_SECURITIES
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk
     return portfolio_problem, selection
 
 
-class MIPOptimiser:
+class MIPOptimiser(BaseOptimiser):
     """Mixed Integer Linear Programming portfolio selection."""
 
     def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=0.8):
@@ -97,10 +98,8 @@ class MIPOptimiser:
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     # Load data
     prices_df = load_prices_csv('data/ETF_Prices.csv')
     prices_df = prices_df.iloc[:-213]
