@@ -16,6 +16,7 @@
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
 struct Config {
+    std::string mode = "ga";  // "ga" or "mc"
     std::string data_path = "data/ETF_Prices.csv";
     int pop_size = 1000;
     int num_generations = 50;
@@ -31,6 +32,8 @@ struct Config {
     double migration_rate = 0.1;
     int top_k = 5;
     double missing_threshold = 0.02; // fraction of rows allowed to be NaN
+    int mc_log_interval = 5000;      // MC: log every N trials per thread
+    bool binary_input = false;       // if true, read binary format instead of CSV
 };
 
 Config parse_args(int argc, char* argv[]) {
@@ -39,26 +42,32 @@ Config parse_args(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: optimisation [options]\n"
+                << "  --mode MODE            Algorithm: ga or mc (default: ga)\n"
                 << "  --data PATH            Price CSV (default: data/ETF_Prices.csv)\n"
-                << "  --pop-size N           Population per island (default: 1000)\n"
-                << "  --generations N        Generations per island (default: 50)\n"
+                << "  --pop-size N           GA: population per island (default: 1000)\n"
+                << "  --generations N        GA: generations per island (default: 50)\n"
                 << "  --min-etfs N           Minimum ETFs per portfolio (default: 3)\n"
                 << "  --max-etfs N           Maximum ETFs per portfolio (default: 15)\n"
                 << "  --risk-free-rate R     Risk-free rate (default: 0.0)\n"
                 << "  --seed N               Random seed, -1 for random (default: -1)\n"
-                << "  --num-islands N        Number of islands, -1 for auto (default: -1)\n"
+                << "  --num-islands N        Threads (GA islands or MC workers) (default: auto)\n"
                 << "  --time-budget S        Time budget in seconds, -1 for none (default: -1)\n"
                 << "  --min-return R         Minimum portfolio return, -1 for none (default: -1)\n"
-                << "  --num-elites N         Elites per island (default: 10)\n"
-                << "  --migration-interval N Generations between migrations (default: 10)\n"
-                << "  --migration-rate R     Fraction of population to migrate (default: 0.1)\n"
+                << "  --num-elites N         GA: elites per island (default: 10)\n"
+                << "  --migration-interval N GA: generations between migrations (default: 10)\n"
+                << "  --migration-rate R     GA: fraction of population to migrate (default: 0.1)\n"
                 << "  --top-k N              Top K solutions to output (default: 5)\n"
-                << "  --missing-threshold R  Max fraction of NaN rows per column (default: 0.02)\n";
+                << "  --missing-threshold R  Max fraction of NaN rows per column (default: 0.02)\n"
+                << "  --mc-log-interval N    MC: log every N trials per thread (default: 5000)\n"
+                << "  --binary               Read binary format instead of CSV\n";
             std::exit(0);
         }
+        // Boolean flags (no value)
+        if (arg == "--binary") { cfg.binary_input = true; continue; }
         if (i + 1 >= argc) break;
         std::string val = argv[++i];
-        if (arg == "--data") cfg.data_path = val;
+        if (arg == "--mode") cfg.mode = val;
+        else if (arg == "--data") cfg.data_path = val;
         else if (arg == "--pop-size") cfg.pop_size = std::stoi(val);
         else if (arg == "--generations") cfg.num_generations = std::stoi(val);
         else if (arg == "--min-etfs") cfg.min_etfs = std::stoi(val);
@@ -73,6 +82,7 @@ Config parse_args(int argc, char* argv[]) {
         else if (arg == "--migration-rate") cfg.migration_rate = std::stod(val);
         else if (arg == "--top-k") cfg.top_k = std::stoi(val);
         else if (arg == "--missing-threshold") cfg.missing_threshold = std::stod(val);
+        else if (arg == "--mc-log-interval") cfg.mc_log_interval = std::stoi(val);
     }
     if (cfg.num_islands < 0)
         cfg.num_islands = static_cast<int>(std::thread::hardware_concurrency());
@@ -80,6 +90,42 @@ Config parse_args(int argc, char* argv[]) {
 }
 
 // ─── Data I/O ──────────────────────────────────────────────────────────────────
+
+// Binary format: uint32 num_rows, uint32 num_cols,
+//   num_cols null-terminated ticker strings,
+//   num_rows * num_cols float64 values (row-major).
+// Returns the matrix directly as log returns (no further processing needed).
+Eigen::MatrixXd readBinaryData(const std::string& filename,
+                                std::vector<std::string>& tickers) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Cannot open binary file: " + filename);
+
+    uint32_t numRows, numCols;
+    file.read(reinterpret_cast<char*>(&numRows), 4);
+    file.read(reinterpret_cast<char*>(&numCols), 4);
+
+    tickers.clear();
+    tickers.reserve(numCols);
+    for (uint32_t i = 0; i < numCols; ++i) {
+        std::string ticker;
+        char c;
+        while (file.get(c) && c != '\0')
+            ticker += c;
+        tickers.push_back(ticker);
+    }
+
+    // Read row-major float64 data directly into Eigen (which is col-major)
+    std::vector<double> buf(numRows * numCols);
+    file.read(reinterpret_cast<char*>(buf.data()), numRows * numCols * sizeof(double));
+
+    // Map row-major buffer into Eigen col-major matrix
+    Eigen::MatrixXd mat(numRows, numCols);
+    for (uint32_t r = 0; r < numRows; ++r)
+        for (uint32_t c = 0; c < numCols; ++c)
+            mat(r, c) = buf[r * numCols + c];
+
+    return mat;
+}
 
 Eigen::MatrixXd readETFData(const std::string& filename, std::vector<std::string>& tickers) {
     csv::CSVFormat format;
@@ -429,6 +475,84 @@ void run_island(int id, const Config& cfg,
     result.bestIndividual = bestIndividual;
 }
 
+// ─── Monte Carlo worker ────────────────────────────────────────────────────────
+
+struct MCResult {
+    double bestFitness = -std::numeric_limits<double>::infinity();
+    Eigen::RowVectorXi bestIndividual;
+    long long trials = 0;
+};
+
+void run_mc_worker(int id, const Config& cfg,
+                   const Eigen::MatrixXd& logReturns,
+                   const Eigen::VectorXd& expectedReturns,
+                   int numETFs, const std::vector<std::string>& tickers,
+                   std::chrono::steady_clock::time_point deadline,
+                   bool hasDeadline,
+                   std::mutex& outputMutex,
+                   MCResult& result) {
+
+    unsigned int workerSeed;
+    if (cfg.seed >= 0) {
+        workerSeed = static_cast<unsigned int>(cfg.seed + id);
+    } else {
+        std::random_device rd;
+        workerSeed = rd();
+    }
+    std::mt19937 rng(workerSeed);
+    std::uniform_int_distribution<int> numDist(cfg.min_etfs, cfg.max_etfs);
+
+    Eigen::RowVectorXi individual(numETFs);
+    double bestFitness = -std::numeric_limits<double>::infinity();
+    Eigen::RowVectorXi bestIndividual(numETFs);
+    bestIndividual.setZero();
+    long long trials = 0;
+
+    // Pre-build index array for sampling
+    std::vector<int> allIndices(numETFs);
+    std::iota(allIndices.begin(), allIndices.end(), 0);
+
+    while (true) {
+        if (hasDeadline && (trials % 256 == 0)
+            && std::chrono::steady_clock::now() >= deadline)
+            break;
+
+        // Generate random portfolio with exactly k instruments
+        int k = numDist(rng);
+        individual.setZero();
+        // Fisher-Yates partial shuffle to pick k indices
+        for (int i = 0; i < k; ++i) {
+            std::uniform_int_distribution<int> pick(i, numETFs - 1);
+            std::swap(allIndices[i], allIndices[pick(rng)]);
+            individual(allIndices[i]) = 1;
+        }
+
+        double f = calculateFitness(individual, logReturns, expectedReturns,
+                                    cfg.min_etfs, cfg.max_etfs,
+                                    cfg.risk_free_rate, cfg.min_return);
+        trials++;
+
+        if (f > bestFitness) {
+            bestFitness = f;
+            bestIndividual = individual;
+        }
+
+        // Log periodically
+        if (trials % cfg.mc_log_interval == 0) {
+            std::lock_guard<std::mutex> lock(outputMutex);
+            std::cerr << "MC worker " << id
+                      << ": Trial " << trials
+                      << ": Best fitness = " << bestFitness
+                      << std::endl;
+        }
+
+    }
+
+    result.bestFitness = bestFitness;
+    result.bestIndividual = bestIndividual;
+    result.trials = trials;
+}
+
 // ─── JSON helpers ──────────────────────────────────────────────────────────────
 
 std::string escapeJson(const std::string& s) {
@@ -448,57 +572,102 @@ int main(int argc, char* argv[]) {
 
     auto globalStart = std::chrono::steady_clock::now();
 
-    // Load and preprocess data
+    // Load data
     std::vector<std::string> tickers;
-    std::cerr << "Loading data from " << cfg.data_path << "..." << std::endl;
-    Eigen::MatrixXd etfData = readETFData(cfg.data_path, tickers);
-    Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData, tickers, cfg.missing_threshold);
-    forwardFill(filteredData);
-    backwardFill(filteredData);
-    int numETFs = filteredData.cols();
-    Eigen::MatrixXd logReturns = calculateLogReturns(filteredData);
-    Eigen::VectorXd expectedReturns = calculateExpectedReturn(logReturns);
+    Eigen::MatrixXd logReturns;
+    Eigen::VectorXd expectedReturns;
+    int numETFs;
+
+    if (cfg.binary_input) {
+        // Binary format: already contains log returns, no processing needed
+        std::cerr << "Loading binary data from " << cfg.data_path << "..." << std::endl;
+        logReturns = readBinaryData(cfg.data_path, tickers);
+        numETFs = logReturns.cols();
+        expectedReturns = calculateExpectedReturn(logReturns);
+    } else {
+        // CSV format: raw prices, need full preprocessing
+        std::cerr << "Loading CSV data from " << cfg.data_path << "..." << std::endl;
+        Eigen::MatrixXd etfData = readETFData(cfg.data_path, tickers);
+        Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData, tickers, cfg.missing_threshold);
+        forwardFill(filteredData);
+        backwardFill(filteredData);
+        numETFs = filteredData.cols();
+        logReturns = calculateLogReturns(filteredData);
+        expectedReturns = calculateExpectedReturn(logReturns);
+    }
     std::cerr << "Loaded " << numETFs << " instruments, "
               << logReturns.rows() << " return observations." << std::endl;
 
-    // Time budget
+    // Time budget starts AFTER data loading
     bool hasDeadline = cfg.time_budget > 0;
-    auto deadline = globalStart + std::chrono::milliseconds(
+    auto computeStart = std::chrono::steady_clock::now();
+    auto deadline = computeStart + std::chrono::milliseconds(
         static_cast<long long>(cfg.time_budget * 1000));
 
-    // Migration buffer
-    MigrationBuffer migration(cfg.num_islands);
     std::mutex outputMutex;
 
-    // Launch islands
-    std::vector<std::thread> threads;
-    std::vector<IslandResult> results(cfg.num_islands);
-
-    for (int i = 0; i < cfg.num_islands; ++i) {
-        threads.emplace_back(run_island, i, std::cref(cfg),
-                             std::cref(logReturns), std::cref(expectedReturns),
-                             numETFs, std::cref(tickers),
-                             std::ref(migration), deadline, hasDeadline,
-                             std::ref(outputMutex), std::ref(results[i]));
-    }
-
-    for (auto& t : threads) t.join();
-
-    // Collect top-K unique solutions across all islands
     struct Solution {
         double fitness;
         std::vector<std::string> selectedTickers;
     };
     std::vector<Solution> allSolutions;
-    for (int i = 0; i < cfg.num_islands; ++i) {
-        if (results[i].bestFitness <= -1e3) continue;
-        Solution sol;
-        sol.fitness = results[i].bestFitness;
-        for (int j = 0; j < results[i].bestIndividual.size(); ++j)
-            if (results[i].bestIndividual(j) == 1)
-                sol.selectedTickers.push_back(tickers[j]);
-        allSolutions.push_back(sol);
+    long long totalTrials = 0;
+
+    int numThreads = cfg.num_islands; // num_islands doubles as thread count for MC
+
+    if (cfg.mode == "mc") {
+        // ── Monte Carlo mode ───────────────────────────────────────────────
+        std::cerr << "Mode: Monte Carlo (" << numThreads << " threads)" << std::endl;
+        std::vector<std::thread> threads;
+        std::vector<MCResult> mcResults(numThreads);
+
+        for (int i = 0; i < numThreads; ++i) {
+            threads.emplace_back(run_mc_worker, i, std::cref(cfg),
+                                 std::cref(logReturns), std::cref(expectedReturns),
+                                 numETFs, std::cref(tickers),
+                                 deadline, hasDeadline,
+                                 std::ref(outputMutex), std::ref(mcResults[i]));
+        }
+        for (auto& t : threads) t.join();
+
+        for (int i = 0; i < numThreads; ++i) {
+            totalTrials += mcResults[i].trials;
+            if (mcResults[i].bestFitness <= -1e3) continue;
+            Solution sol;
+            sol.fitness = mcResults[i].bestFitness;
+            for (int j = 0; j < mcResults[i].bestIndividual.size(); ++j)
+                if (mcResults[i].bestIndividual(j) == 1)
+                    sol.selectedTickers.push_back(tickers[j]);
+            allSolutions.push_back(sol);
+        }
+
+    } else {
+        // ── GA mode ────────────────────────────────────────────────────────
+        std::cerr << "Mode: Island GA (" << numThreads << " islands)" << std::endl;
+        MigrationBuffer migration(numThreads);
+        std::vector<std::thread> threads;
+        std::vector<IslandResult> gaResults(numThreads);
+
+        for (int i = 0; i < numThreads; ++i) {
+            threads.emplace_back(run_island, i, std::cref(cfg),
+                                 std::cref(logReturns), std::cref(expectedReturns),
+                                 numETFs, std::cref(tickers),
+                                 std::ref(migration), deadline, hasDeadline,
+                                 std::ref(outputMutex), std::ref(gaResults[i]));
+        }
+        for (auto& t : threads) t.join();
+
+        for (int i = 0; i < numThreads; ++i) {
+            if (gaResults[i].bestFitness <= -1e3) continue;
+            Solution sol;
+            sol.fitness = gaResults[i].bestFitness;
+            for (int j = 0; j < gaResults[i].bestIndividual.size(); ++j)
+                if (gaResults[i].bestIndividual(j) == 1)
+                    sol.selectedTickers.push_back(tickers[j]);
+            allSolutions.push_back(sol);
+        }
     }
+
     std::sort(allSolutions.begin(), allSolutions.end(),
               [](const Solution& a, const Solution& b) { return a.fitness > b.fitness; });
 
@@ -509,9 +678,12 @@ int main(int argc, char* argv[]) {
         std::chrono::steady_clock::now() - globalStart).count();
 
     std::cout << "{" << std::endl;
+    std::cout << "  \"mode\": \"" << cfg.mode << "\"," << std::endl;
     std::cout << "  \"elapsed_seconds\": " << elapsed << "," << std::endl;
-    std::cout << "  \"num_islands\": " << cfg.num_islands << "," << std::endl;
+    std::cout << "  \"num_threads\": " << numThreads << "," << std::endl;
     std::cout << "  \"num_instruments\": " << numETFs << "," << std::endl;
+    if (totalTrials > 0)
+        std::cout << "  \"total_trials\": " << totalTrials << "," << std::endl;
     std::cout << "  \"best_fitness\": "
               << (allSolutions.empty() ? -1e9 : allSolutions[0].fitness) << "," << std::endl;
 

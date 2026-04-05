@@ -18,7 +18,13 @@ class ConvergenceRecord:
 
 @dataclass
 class BenchmarkResult:
-    """Result of a single algorithm run."""
+    """Result of a single algorithm run.
+
+    NOTE: best_fitness is an IN-SAMPLE Sharpe ratio computed on training data.
+    It is biased upward by selection bias and should not be interpreted as
+    expected out-of-sample performance. Typical degradation is 30-50%.
+    See CLAUDE.md "Sharpe Ratio Overfitting" section.
+    """
     algorithm: str
     seed: int
     time_budget: float

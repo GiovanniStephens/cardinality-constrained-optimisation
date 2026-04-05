@@ -1,6 +1,7 @@
 """Orchestrates benchmark runs across all adapters."""
 
 import json
+import logging
 import os
 import pickle
 import time
@@ -10,6 +11,9 @@ import pandas as pd
 
 from benchmark.adapters import OptimiserAdapter
 from benchmark.results import BenchmarkSuite
+from src.portfolio_utils import warn_if_sharpe_suspicious
+
+logger = logging.getLogger(__name__)
 
 
 class BenchmarkRunner:
@@ -38,35 +42,39 @@ class BenchmarkRunner:
             if adapter.name in suite.results:
                 done_seeds = {r.seed for r in suite.results[adapter.name]}
 
-            print(f"\n{'='*60}")
-            print(f"Algorithm: {adapter.name}")
-            print(f"{'='*60}")
+            logger.info("=" * 60)
+            logger.info("Algorithm: %s", adapter.name)
+            logger.info("=" * 60)
 
             for i, seed in enumerate(self.seeds):
                 current += 1
                 if seed in done_seeds:
-                    print(f"  Run {i+1}/{self.num_runs} (seed={seed}) "
-                          f"[{current}/{total_runs}]... SKIPPED (already done)")
+                    logger.info("  Run %d/%d (seed=%d) [%d/%d]... SKIPPED (already done)",
+                                i + 1, self.num_runs, seed, current, total_runs)
                     continue
 
-                print(f"  Run {i+1}/{self.num_runs} (seed={seed}) "
-                      f"[{current}/{total_runs}]...", end=' ', flush=True)
+                logger.info("  Run %d/%d (seed=%d) [%d/%d]...",
+                            i + 1, self.num_runs, seed, current, total_runs)
 
                 t0 = time.time()
                 try:
                     result = adapter.run(self.data, self.time_budget, seed, i)
                     elapsed = time.time() - t0
                     suite.add_result(result)
-                    print(f"OK | best={result.best_fitness:.4f} | "
-                          f"time={elapsed:.1f}s | "
-                          f"convergence_pts={len(result.convergence)}")
+                    logger.info("    OK | best=%.4f | time=%.1fs | convergence_pts=%d",
+                                result.best_fitness, elapsed, len(result.convergence))
+                    warn_if_sharpe_suspicious(
+                        result.best_fitness,
+                        f"{adapter.name} seed={seed} IS",
+                        logger,
+                    )
                 except Exception as e:
                     elapsed = time.time() - t0
-                    print(f"FAILED ({elapsed:.1f}s): {e}")
+                    logger.error("    FAILED (%.1fs): %s", elapsed, e, exc_info=True)
 
             # Save incrementally after each algorithm
             self._save(suite)
-            print(f"  Saved results for {adapter.name}")
+            logger.info("  Saved results for %s", adapter.name)
 
         return suite
 

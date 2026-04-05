@@ -8,6 +8,7 @@ import pandas as pd
 from scipy import stats
 
 from benchmark.results import BenchmarkResult, BenchmarkSuite
+from src.portfolio_utils import warn_if_sharpe_suspicious
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +360,25 @@ def generate_full_report(suite: BenchmarkSuite, time_budget: float,
     csv_path = os.path.join(output_dir, 'summary_table.csv')
     table.to_csv(csv_path)
     print(f"\n  Saved {csv_path}")
+
+    # Overfitting awareness banner
+    print("\n" + "-" * 60)
+    print("NOTE: All fitness values above are IN-SAMPLE Sharpe ratios")
+    print("computed on training data. These are biased upward and will")
+    print("degrade 30-50% out-of-sample. See CLAUDE.md 'Sharpe Ratio")
+    print("Overfitting' section for details and academic references.")
+    print("-" * 60)
+
+    # Flag suspicious Sharpe ratios
+    import logging
+    _bench_logger = logging.getLogger(__name__)
+    for algo in suite.algorithms:
+        fitnesses = [r.best_fitness for r in suite.results[algo]
+                     if r.best_fitness > -1e3]
+        if fitnesses:
+            warn_if_sharpe_suspicious(
+                max(fitnesses), f"Benchmark {algo} best IS", _bench_logger,
+            )
 
     # AOCC
     best_overall = max(

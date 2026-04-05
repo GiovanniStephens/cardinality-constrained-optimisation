@@ -29,7 +29,7 @@ class OptimiserAdapter(ABC):
 
 
 class SimpleGAAdapter(OptimiserAdapter):
-    """Wraps simple_ga_optimisation.py (parallel island-based GA)."""
+    """Wraps optimisers/island_ga.py (parallel island-based GA)."""
 
     name = "Island GA (Python)"
 
@@ -47,9 +47,8 @@ class SimpleGAAdapter(OptimiserAdapter):
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        from src.simple_ga_optimisation import (
-            genetic_algorithm, optimise_weights,
-        )
+        from src.optimisers.island_ga import genetic_algorithm
+        from src.portfolio_utils import optimise_weights
         np.random.seed(seed)
         num_islands = min(os.cpu_count(), 4)
         manager = Manager()
@@ -145,7 +144,7 @@ class PygadGAAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pygad
-        from src import optimisation as opt_mod
+        from src.optimisers import pygad_ga as opt_mod
 
         np.random.seed(seed)
         start_time = time.time()
@@ -265,7 +264,7 @@ class PygadGAAdapter(OptimiserAdapter):
 
 
 class MonteCarloAdapter(OptimiserAdapter):
-    """Wraps monte_carlo_optimisation.py (random search)."""
+    """Wraps optimisers/monte_carlo.py (random search)."""
 
     name = "Monte Carlo"
 
@@ -358,7 +357,7 @@ class MonteCarloAdapter(OptimiserAdapter):
 
 
 class MIPAdapter(OptimiserAdapter):
-    """Wraps mip_optimisation.py (Mixed Integer Linear Programming)."""
+    """Wraps optimisers/mip.py (Mixed Integer Linear Programming)."""
 
     name = "MILP"
 
@@ -374,7 +373,7 @@ class MIPAdapter(OptimiserAdapter):
             calculate_expected_returns,
             calculate_variances,
         )
-        from src.mip_optimisation import portfolio_sharpe_ratio
+        from src.optimisers.mip import portfolio_sharpe_ratio
 
         start_time = time.time()
 
@@ -422,8 +421,109 @@ class MIPAdapter(OptimiserAdapter):
         )
 
 
+def _run_cpp_binary(binary_path, cmd, start_time, time_budget, stderr_pattern,
+                    evals_fn):
+    """Shared logic for running the C++ binary and collecting results.
+
+    :param binary_path: path to the compiled binary.
+    :param cmd: full command list to execute.
+    :param start_time: wall-clock start time.
+    :param time_budget: time budget in seconds.
+    :param stderr_pattern: compiled regex for parsing stderr convergence lines.
+    :param evals_fn: callable(match) -> int, extracts function_evaluations from
+        a regex match object.
+    :return: (convergence, best_so_far, result_json or None).
+    """
+    import json as json_mod
+    import threading
+
+    convergence = []
+    best_so_far = float('-inf')
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+
+    stdout_data = []
+
+    def read_stdout():
+        for line in proc.stdout:
+            stdout_data.append(line)
+
+    stdout_thread = threading.Thread(target=read_stdout)
+    stdout_thread.start()
+
+    for line in proc.stderr:
+        elapsed = time.time() - start_time
+        match = stderr_pattern.match(line.strip())
+        if match:
+            fitness = float(match.group(3))
+            if fitness > best_so_far:
+                best_so_far = fitness
+            convergence.append(ConvergenceRecord(
+                wall_clock_seconds=elapsed,
+                function_evaluations=evals_fn(match),
+                best_fitness=best_so_far,
+                mean_fitness=fitness,
+                generation=int(match.group(2)),
+            ))
+
+    proc.wait(timeout=time_budget + 30)
+    stdout_thread.join(timeout=5)
+
+    stdout_text = ''.join(stdout_data)
+    result_json = None
+    try:
+        result_json = json_mod.loads(stdout_text)
+    except (json_mod.JSONDecodeError, ValueError):
+        pass
+
+    return convergence, best_so_far, result_json
+
+
+def _slsqp_refine_topk(result_json, data):
+    """Run SLSQP weight optimisation on top-K solutions from C++ output.
+
+    Returns (best_fitness, selected_etfs, optimised_weights).
+    """
+    from src.portfolio_utils import optimise_weights, calculate_log_returns
+
+    top_solutions = result_json.get('top_solutions', [])
+    if not top_solutions:
+        return None, None, None
+
+    best_fitness = float('-inf')
+    best_etfs = None
+    best_weights = None
+
+    all_tickers = list(data.columns)
+    for sol in top_solutions:
+        tickers = sol.get('tickers', [])
+        if len(tickers) < 2:
+            continue
+        # Build selection vector
+        selection = np.zeros(len(all_tickers), dtype=int)
+        for t in tickers:
+            if t in all_tickers:
+                selection[all_tickers.index(t)] = 1
+        if np.sum(selection) < 2:
+            continue
+        try:
+            opt = optimise_weights(selection, data)
+            if opt.success and -opt.fun > best_fitness:
+                best_fitness = -opt.fun
+                best_etfs = tickers
+                best_weights = opt.x
+        except Exception:
+            continue
+
+    if best_etfs is None:
+        return None, None, None
+    return best_fitness, best_etfs, best_weights
+
+
 class CppGAAdapter(OptimiserAdapter):
-    """Wraps the compiled C++ island GA binary."""
+    """Wraps the compiled C++ island GA binary with SLSQP weight refinement."""
 
     name = "Island GA (C++)"
 
@@ -445,8 +545,8 @@ class CppGAAdapter(OptimiserAdapter):
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        import json as json_mod
         import tempfile
+        from src.portfolio_utils import calculate_log_returns, write_binary_data
 
         start_time = time.time()
 
@@ -457,14 +557,18 @@ class CppGAAdapter(OptimiserAdapter):
                 metadata={'error': f'Binary not found: {self.binary_path}'},
             )
 
-        # Write data to temp CSV for the C++ binary
-        tmp = tempfile.NamedTemporaryFile(suffix='.csv', delete=False, mode='w')
+        tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
+        tmp.close()
         try:
-            data.to_csv(tmp.name)
+            # Write binary data (log returns)
+            log_returns = calculate_log_returns(data)
+            write_binary_data(log_returns, tmp.name)
 
             cmd = [
                 self.binary_path,
+                '--binary',
                 '--data', tmp.name,
+                '--mode', 'ga',
                 '--seed', str(seed),
                 '--time-budget', str(time_budget),
                 '--pop-size', str(self.pop_size),
@@ -476,64 +580,37 @@ class CppGAAdapter(OptimiserAdapter):
                 '--migration-interval', str(self.migration_interval),
                 '--migration-rate', str(self.migration_rate),
                 '--risk-free-rate', '0.0',
-                '--missing-threshold', '1.0',  # data already cleaned by Python
             ]
             if self.min_return is not None:
                 cmd += ['--min-return', str(self.min_return)]
 
-            # Stream stderr for convergence, capture stdout for JSON
-            convergence = []
-            best_so_far = float('-inf')
             pattern = re.compile(
                 r'Island\s+(\d+):\s+Generation\s+(\d+):\s+'
                 r'Best fitness\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)'
             )
-
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            pop = self.pop_size
+            convergence, best_so_far, result_json = _run_cpp_binary(
+                self.binary_path, cmd, start_time, time_budget, pattern,
+                evals_fn=lambda m: (int(m.group(2)) + 1) * pop,
             )
 
-            # Read stderr for convergence logging
-            stdout_data = []
-
-            def read_stdout():
-                for line in proc.stdout:
-                    stdout_data.append(line)
-
-            import threading
-            stdout_thread = threading.Thread(target=read_stdout)
-            stdout_thread.start()
-
-            for line in proc.stderr:
-                elapsed = time.time() - start_time
-                match = pattern.match(line.strip())
-                if match:
-                    gen = int(match.group(2))
-                    fitness = float(match.group(3))
-                    if fitness > best_so_far:
-                        best_so_far = fitness
-                    convergence.append(ConvergenceRecord(
-                        wall_clock_seconds=elapsed,
-                        function_evaluations=(gen + 1) * self.pop_size,
-                        best_fitness=best_so_far,
-                        mean_fitness=fitness,
-                        generation=gen,
-                    ))
-
-            proc.wait(timeout=time_budget + 30)
-            stdout_thread.join(timeout=5)
-
-            # Parse JSON output
-            stdout_text = ''.join(stdout_data)
+            # Extract equal-weight fitness from C++ output
             selected_etfs = None
-            try:
-                result_json = json_mod.loads(stdout_text)
-                best_fitness = result_json.get('best_fitness', best_so_far)
+            best_fitness = best_so_far
+            optimised_weights = None
+            if result_json:
+                cpp_fitness = result_json.get('best_fitness', best_so_far)
                 selected_etfs = result_json.get('selected_tickers')
-                if best_fitness <= -1e8:
-                    best_fitness = best_so_far
-            except (json_mod.JSONDecodeError, ValueError):
-                best_fitness = best_so_far
+                if cpp_fitness > -1e8:
+                    best_fitness = cpp_fitness
+
+                # SLSQP weight refinement on top-K solutions
+                slsqp_fitness, slsqp_etfs, slsqp_weights = \
+                    _slsqp_refine_topk(result_json, data)
+                if slsqp_fitness is not None and slsqp_fitness > best_fitness:
+                    best_fitness = slsqp_fitness
+                    selected_etfs = slsqp_etfs
+                    optimised_weights = slsqp_weights
 
         except Exception as e:
             return BenchmarkResult(
@@ -552,6 +629,106 @@ class CppGAAdapter(OptimiserAdapter):
             convergence=convergence,
             best_fitness=best_fitness,
             selected_etfs=selected_etfs,
+            optimised_weights=optimised_weights,
+            timed_out=elapsed >= time_budget,
+        )
+
+
+class CppMonteCarloAdapter(OptimiserAdapter):
+    """Wraps the C++ binary in Monte Carlo mode with SLSQP weight refinement."""
+
+    name = "Monte Carlo (C++)"
+
+    def __init__(self, binary_path='./cpp/optimisation',
+                 min_etfs=3, max_etfs=15, min_return=None,
+                 num_threads=None, mc_log_interval=5000):
+        self.binary_path = binary_path
+        self.min_etfs = min_etfs
+        self.max_etfs = max_etfs
+        self.min_return = min_return
+        self.num_threads = num_threads or min(os.cpu_count(), 8)
+        self.mc_log_interval = mc_log_interval
+
+    def run(self, data: pd.DataFrame, time_budget: float,
+            seed: int, run_id: int) -> BenchmarkResult:
+        import tempfile
+        from src.portfolio_utils import calculate_log_returns, write_binary_data
+
+        start_time = time.time()
+
+        if not os.path.isfile(self.binary_path):
+            return BenchmarkResult(
+                algorithm=self.name, seed=seed, time_budget=time_budget,
+                convergence=[], best_fitness=float('-inf'),
+                metadata={'error': f'Binary not found: {self.binary_path}'},
+            )
+
+        tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
+        tmp.close()
+        try:
+            log_returns = calculate_log_returns(data)
+            write_binary_data(log_returns, tmp.name)
+
+            cmd = [
+                self.binary_path,
+                '--binary',
+                '--mode', 'mc',
+                '--data', tmp.name,
+                '--seed', str(seed),
+                '--time-budget', str(time_budget),
+                '--min-etfs', str(self.min_etfs),
+                '--max-etfs', str(self.max_etfs),
+                '--num-islands', str(self.num_threads),
+                '--risk-free-rate', '0.0',
+                '--mc-log-interval', str(self.mc_log_interval),
+            ]
+            if self.min_return is not None:
+                cmd += ['--min-return', str(self.min_return)]
+
+            pattern = re.compile(
+                r'MC worker\s+(\d+):\s+Trial\s+(\d+):\s+'
+                r'Best fitness\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)'
+            )
+            convergence, best_so_far, result_json = _run_cpp_binary(
+                self.binary_path, cmd, start_time, time_budget, pattern,
+                evals_fn=lambda m: int(m.group(2)),
+            )
+
+            selected_etfs = None
+            best_fitness = best_so_far
+            optimised_weights = None
+            if result_json:
+                cpp_fitness = result_json.get('best_fitness', best_so_far)
+                selected_etfs = result_json.get('selected_tickers')
+                if cpp_fitness > -1e8:
+                    best_fitness = cpp_fitness
+
+                # SLSQP weight refinement on top-K solutions
+                slsqp_fitness, slsqp_etfs, slsqp_weights = \
+                    _slsqp_refine_topk(result_json, data)
+                if slsqp_fitness is not None and slsqp_fitness > best_fitness:
+                    best_fitness = slsqp_fitness
+                    selected_etfs = slsqp_etfs
+                    optimised_weights = slsqp_weights
+
+        except Exception as e:
+            return BenchmarkResult(
+                algorithm=self.name, seed=seed, time_budget=time_budget,
+                convergence=[], best_fitness=float('-inf'),
+                metadata={'error': str(e)},
+            )
+        finally:
+            os.unlink(tmp.name)
+
+        elapsed = time.time() - start_time
+        return BenchmarkResult(
+            algorithm=self.name,
+            seed=seed,
+            time_budget=time_budget,
+            convergence=convergence,
+            best_fitness=best_fitness,
+            selected_etfs=selected_etfs,
+            optimised_weights=optimised_weights,
             timed_out=elapsed >= time_budget,
         )
 
@@ -563,6 +740,7 @@ ALL_ADAPTERS = {
     'Monte Carlo': MonteCarloAdapter,
     'MILP': MIPAdapter,
     'Island GA (C++)': CppGAAdapter,
+    'Monte Carlo (C++)': CppMonteCarloAdapter,
 }
 
 DEFAULT_ADAPTERS = ['Island GA (Python)', 'Pygad GA', 'Monte Carlo', 'MILP']

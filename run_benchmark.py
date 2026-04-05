@@ -60,7 +60,7 @@ def main():
         return
 
     # Load data
-    from src.optimisation import load_data
+    from src.optimisers.pygad_ga import load_data
     print(f"Loading data from {args.data_file}...")
     data = load_data(args.data_file)
     print(f"  {data.shape[1]} instruments, {data.shape[0]} days")
@@ -103,4 +103,6 @@ def main():
 
 
 if __name__ == '__main__':
+    from src.logging_config import setup_logging
+    setup_logging()
     main()
