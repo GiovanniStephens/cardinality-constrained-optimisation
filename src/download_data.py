@@ -8,10 +8,14 @@ for working with previously scraped lists.
 
 import argparse
 import logging
+import os
+import sys
+import time
 
 import financedatabase as fd
 import pandas as pd
 import yfinance as yf
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +267,7 @@ def download_and_save(
     start='2014-04-30', end='2025-04-30',
     batch_size=500, null_threshold=0.9,
     names=None, countries=None, max_retries=3,
+    on_batch_complete=None, rate_limit_delay=0.0,
 ):
     """
     Download prices in batches and persist each batch to the database immediately.
@@ -281,6 +286,9 @@ def download_and_save(
     :param names: optional dict {symbol: name_string}.
     :param countries: optional dict {symbol: country_string}.
     :param max_retries: retries per batch on download failure.
+    :param on_batch_complete: optional callback(saved_tickers: list[str], batch_num: int)
+        called after each successful batch save.
+    :param rate_limit_delay: seconds to sleep between batches (default: 0).
     :returns: dict with keys total_tickers, saved_tickers, failed_batches.
     """
     from src import db
@@ -292,29 +300,50 @@ def download_and_save(
     total_saved = 0
     failed_batches = []
 
-    for batch_num, batch in enumerate(batches, 1):
-        logger.info("Batch %d/%d (%d tickers)...", batch_num, len(batches), len(batch))
+    use_tqdm = sys.stderr.isatty()
+    batch_iter = enumerate(batches, 1)
+    if use_tqdm:
+        pbar = tqdm(total=len(batches), desc="Downloading", unit="batch",
+                    file=sys.stderr)
+    else:
+        pbar = None
+
+    for batch_num, batch in batch_iter:
+        if not use_tqdm:
+            logger.info("Batch %d/%d (%d tickers)...",
+                        batch_num, len(batches), len(batch))
         batch_df = None
         for attempt in range(1, max_retries + 1):
             try:
                 batch_df = _download_batch(batch, start, end)
                 break
             except Exception as e:
-                logger.warning("Batch %d attempt %d/%d failed: %s",
-                               batch_num, attempt, max_retries, e)
-                if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
+                error_msg = str(e).lower()
+                if '429' in error_msg or 'too many' in error_msg or 'rate' in error_msg:
+                    backoff = 2 ** (attempt + 2)
+                    logger.warning("Rate limited on batch %d, backing off %ds",
+                                   batch_num, backoff)
+                    time.sleep(backoff)
+                else:
+                    logger.warning("Batch %d attempt %d/%d failed: %s",
+                                   batch_num, attempt, max_retries, e)
+                    logger.debug("Batch %d traceback:", batch_num, exc_info=True)
+                    if attempt < max_retries:
+                        time.sleep(2 ** attempt)
 
         if batch_df is None or batch_df.empty:
             logger.warning("Batch %d: no data returned, skipping.", batch_num)
             failed_batches.append(batch_num)
+            if pbar:
+                pbar.update(1)
             continue
 
         # Filter out tickers with too many nulls
         threshold = int(len(batch_df) * null_threshold)
         batch_df = batch_df.dropna(axis=1, thresh=threshold)
         if batch_df.empty:
+            if pbar:
+                pbar.update(1)
             continue
 
         # Build per-batch metadata dicts
@@ -327,9 +356,24 @@ def download_and_save(
 
         db.save_prices(conn, batch_df, exchange=exchange, asset_type=asset_type,
                        names=batch_names, countries=batch_countries)
-        total_saved += batch_df.shape[1]
-        logger.info("Batch %d: saved %d tickers (total: %d)",
-                     batch_num, batch_df.shape[1], total_saved)
+        saved_tickers_list = list(batch_df.columns)
+        total_saved += len(saved_tickers_list)
+
+        if pbar:
+            pbar.update(1)
+            pbar.set_postfix(saved=total_saved)
+        else:
+            logger.info("Batch %d: saved %d tickers (total: %d)",
+                        batch_num, len(saved_tickers_list), total_saved)
+
+        if on_batch_complete:
+            on_batch_complete(saved_tickers_list, batch_num)
+
+        if rate_limit_delay > 0 and batch_num < len(batches):
+            time.sleep(rate_limit_delay)
+
+    if pbar:
+        pbar.close()
 
     return {
         'total_tickers': len(tickers),
@@ -354,12 +398,12 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     parser = argparse.ArgumentParser(
         description='Build a security universe and download price data.')
+
+    # Universe source arguments
     parser.add_argument('--asset-types', nargs='+',
                         default=['etfs'],
                         choices=['equities', 'etfs', 'funds'],
@@ -394,11 +438,70 @@ def main():
     parser.add_argument('--incremental', action='store_true',
                         help='Only download data after the latest date already '
                              'in the database.')
+
+    # Pipeline arguments
+    parser.add_argument('--subset', type=int, default=None,
+                        help='Download only the first N tickers (for testing).')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Show what would be downloaded and check disk, '
+                             'then exit without downloading.')
+    parser.add_argument('--stage-only', action='store_true',
+                        help='Download into staging DB but do not promote '
+                             'to production.')
+    parser.add_argument('--promote', default=None, metavar='STAGING_DB',
+                        help='Promote a previously staged DB to production.')
+    parser.add_argument('--rollback', default=None, metavar='BACKUP_PATH',
+                        help='Restore production DB from a backup file.')
+    parser.add_argument('--resume', default=None, metavar='CHECKPOINT',
+                        help='Resume a previously interrupted download from '
+                             'a checkpoint JSON file.')
+    parser.add_argument('--rate-limit', type=float, default=None,
+                        help='Seconds to wait between batches '
+                             '(default: from config).')
+    parser.add_argument('--no-backup', action='store_true',
+                        help='Skip production DB backup before promotion.')
+    parser.add_argument('--keep-staging', action='store_true',
+                        help='Keep staging DB after promotion (for forensics).')
+    parser.add_argument('--validate-only', action='store_true',
+                        help='Run data quality checks on existing DB without '
+                             'downloading.')
+    parser.add_argument('--skip-validation', action='store_true',
+                        help='Skip data quality checks after download.')
     args = parser.parse_args()
 
     from src import db
 
-    # Step 1: Get tickers
+    # ── Standalone operations (no download needed) ─────────────────────────
+
+    if args.rollback:
+        from src.pipeline import rollback
+        rollback(args.rollback, db.DB_PATH)
+        logger.info("Rollback complete.")
+        return
+
+    if args.promote:
+        from src.pipeline import promote_staging, backup_database
+        conn_prod = db.get_connection()
+        if not args.no_backup and os.path.exists(db.DB_PATH):
+            from datetime import datetime as dt
+            ts = dt.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{db.DB_PATH}.backup_{ts}"
+            backup_database(conn_prod, backup_path)
+        promoted = promote_staging(args.promote, conn_prod, exchange=args.exchange)
+        conn_prod.close()
+        logger.info("Promoted %d tickers from %s", promoted, args.promote)
+        return
+
+    if args.validate_only:
+        from src.data_quality import validate_universe
+        conn = db.get_connection()
+        summary = validate_universe(conn, exchange=args.exchange)
+        conn.close()
+        logger.info("Validation summary: %s", summary)
+        return
+
+    # ── Build ticker list ──────────────────────────────────────────────────
+
     if args.from_csv:
         logger.info("Loading tickers from %s", args.from_csv)
         tickers_df = load_tickers(args.from_csv, args.ticker_column)
@@ -412,19 +515,20 @@ def main():
         )
         tickers_df.to_csv(args.universe_output, index=False)
         logger.info("Saved %d securities to %s", len(tickers_df), args.universe_output)
-        for asset_type in tickers_df['AssetType'].unique():
-            count = (tickers_df['AssetType'] == asset_type).sum()
-            logger.info("  %s: %d", asset_type, count)
+        for at in tickers_df['AssetType'].unique():
+            count = (tickers_df['AssetType'] == at).sum()
+            logger.info("  %s: %d", at, count)
 
-    # Step 2: Determine start date
-    conn = db.get_connection()
+    # ── Determine start date ───────────────────────────────────────────────
+
     start = args.start
     if args.incremental:
+        conn = db.get_connection()
         latest = db.get_latest_prices_date(conn, exchange=args.exchange)
+        conn.close()
         if latest:
-            # Start from the day after the latest date in the DB
-            from datetime import datetime, timedelta
-            next_day = (datetime.strptime(latest, '%Y-%m-%d')
+            from datetime import datetime as dt_cls, timedelta
+            next_day = (dt_cls.strptime(latest, '%Y-%m-%d')
                         + timedelta(days=1)).strftime('%Y-%m-%d')
             logger.info("Incremental mode: latest DB date is %s, downloading from %s",
                          latest, next_day)
@@ -432,12 +536,58 @@ def main():
         else:
             logger.info("Incremental mode: no existing data, full download from %s", start)
 
-    # Step 3: Download and save to database per asset type
+    # ── Dry run ────────────────────────────────────────────────────────────
+
+    if args.dry_run:
+        from src.pipeline import preflight_check
+        num_tickers = len(tickers_df)
+        if args.subset:
+            num_tickers = min(num_tickers, args.subset)
+
+        from datetime import datetime as dt_cls
+        start_dt = dt_cls.strptime(start, '%Y-%m-%d')
+        end_dt = dt_cls.strptime(args.end, '%Y-%m-%d')
+        est_days = int((end_dt - start_dt).days * 252 / 365)
+
+        data_dir = os.path.dirname(db.DB_PATH)
+        staging_path = os.path.join(data_dir, 'staging_dryrun.db')
+        preflight = preflight_check(db.DB_PATH, staging_path,
+                                    num_tickers, est_days)
+
+        logger.info("DRY RUN — would download %d tickers, %s to %s",
+                     num_tickers, start, args.end)
+        logger.info("  Estimated staging DB: %.2f GB", preflight['estimated_staging_gb'])
+        logger.info("  Production DB: %.2f GB", preflight['prod_size_gb'])
+        logger.info("  Total space needed: %.2f GB", preflight['estimated_total_gb'])
+        logger.info("  Disk available: %.2f GB", preflight['available_gb'])
+        if preflight['ok']:
+            logger.info("  Preflight: PASS")
+        else:
+            for w in preflight['warnings']:
+                logger.warning("  Preflight: FAIL — %s", w)
+        return
+
+    # ── Resume from checkpoint ─────────────────────────────────────────────
+
+    checkpoint_path = None
+    staging_db_path = None
+    if args.resume:
+        from src.pipeline import load_checkpoint
+        checkpoint = load_checkpoint(args.resume)
+        if not checkpoint:
+            logger.error("Checkpoint file not found or empty: %s", args.resume)
+            return
+        checkpoint_path = args.resume
+        staging_db_path = checkpoint.get('staging_db')
+
+    # ── Run pipeline per asset type ────────────────────────────────────────
+
+    from src.pipeline import run_pipeline
+
     logger.info("Downloading prices for %d tickers...", len(tickers_df))
 
     if 'AssetType' in tickers_df.columns:
-        # FinanceDatabase path: download per asset type group
-        all_results = []
+        all_manifests = []
         for fd_type, group in tickers_df.groupby('AssetType'):
             db_type = ASSET_TYPE_MAP.get(fd_type, fd_type)
             ticker_list = group[args.ticker_column].tolist()
@@ -447,41 +597,62 @@ def main():
             countries = None
             if 'Country' in group.columns:
                 countries = dict(zip(group[args.ticker_column], group['Country']))
-            logger.info("Downloading %d %s tickers...", len(ticker_list), db_type)
-            result = download_and_save(
-                ticker_list, conn, exchange=args.exchange, asset_type=db_type,
+            logger.info("Running pipeline for %d %s tickers...",
+                        len(ticker_list), db_type)
+            manifest = run_pipeline(
+                ticker_list, exchange=args.exchange, asset_type=db_type,
                 start=start, end=args.end, null_threshold=args.null_threshold,
                 names=names, countries=countries,
+                subset=args.subset,
+                stage_only=args.stage_only,
+                skip_validation=args.skip_validation,
+                keep_staging=args.keep_staging,
+                no_backup=args.no_backup,
+                checkpoint_path=checkpoint_path,
+                staging_db_path=staging_db_path,
+                rate_limit_delay=args.rate_limit,
             )
-            all_results.append((db_type, result))
+            all_manifests.append((db_type, manifest))
 
-        for db_type, result in all_results:
-            logger.info("  %s: %d/%d saved, %d failed batches",
-                         db_type, result['saved_tickers'],
-                         result['total_tickers'], len(result['failed_batches']))
+        for db_type, manifest in all_manifests:
+            dl = manifest.get('download_result', {})
+            logger.info("  %s: status=%s, saved=%s, failed_batches=%s",
+                         db_type, manifest['status'],
+                         dl.get('saved_tickers', 'N/A'),
+                         len(dl.get('failed_batches', [])))
     else:
-        # CSV path: single asset type
         ticker_list = tickers_df[args.ticker_column].tolist()
         names = None
         if 'Name' in tickers_df.columns:
             names = dict(zip(tickers_df[args.ticker_column], tickers_df['Name']))
-        result = download_and_save(
-            ticker_list, conn, exchange=args.exchange,
-            asset_type=args.asset_type,
+        manifest = run_pipeline(
+            ticker_list, exchange=args.exchange, asset_type=args.asset_type,
             start=start, end=args.end, null_threshold=args.null_threshold,
             names=names,
+            subset=args.subset,
+            stage_only=args.stage_only,
+            skip_validation=args.skip_validation,
+            keep_staging=args.keep_staging,
+            no_backup=args.no_backup,
+            checkpoint_path=checkpoint_path,
+            staging_db_path=staging_db_path,
+            rate_limit_delay=args.rate_limit,
         )
-        logger.info("Saved %d/%d tickers, %d failed batches",
-                     result['saved_tickers'], result['total_tickers'],
-                     len(result['failed_batches']))
+        dl = manifest.get('download_result', {})
+        logger.info("Pipeline: status=%s, saved=%s, failed_batches=%s",
+                     manifest['status'],
+                     dl.get('saved_tickers', 'N/A'),
+                     len(dl.get('failed_batches', [])))
 
-    # Step 4: Export to CSV for backward compatibility
-    prices_df = db.load_prices(conn, exchange=args.exchange)
-    conn.close()
-    if not prices_df.empty:
-        save_to_csv(prices_df, args.output)
-    else:
-        logger.warning("No prices in database to export.")
+    # Step 4: Export to CSV for backward compatibility (only after promotion)
+    if not args.stage_only:
+        conn = db.get_connection()
+        prices_df = db.load_prices(conn, exchange=args.exchange)
+        conn.close()
+        if not prices_df.empty:
+            save_to_csv(prices_df, args.output)
+        else:
+            logger.warning("No prices in database to export.")
 
 
 if __name__ == '__main__':

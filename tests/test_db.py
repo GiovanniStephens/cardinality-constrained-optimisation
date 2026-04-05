@@ -258,7 +258,7 @@ class TestOptimisationRuns(unittest.TestCase):
         run_id = db.save_optimisation_run(
             self.conn,
             params={
-                'script': 'simple_ga_optimisation',
+                'script': 'island_ga',
                 'data_source': 'investnow',
                 'num_generations': 70,
                 'total_population_size': 8000,
@@ -290,7 +290,7 @@ class TestOptimisationRuns(unittest.TestCase):
         run_id = db.save_optimisation_run(
             self.conn,
             params={
-                'script': 'simple_ga_optimisation',
+                'script': 'island_ga',
                 'num_generations': 70,
                 'total_population_size': 8000,
                 'mutation_rate': 0.01,

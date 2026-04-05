@@ -9,14 +9,16 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy.stats import friedmanchisquare, ttest_rel
+from tqdm import tqdm
 
-from src import optimisation as op
+from src.optimisers import pygad_ga as op
 from src.portfolio_utils import (
     calculate_log_returns,
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
     calmar_ratio,
+    warn_if_sharpe_suspicious,
 )
 from src.config import (
     BACKTEST_NUM_PORTFOLIOS,
@@ -29,6 +31,7 @@ from src.config import (
     BACKTEST_FORECAST_WINDOWS,
     TRADING_DAYS_PER_YEAR,
     DATA_MIN_COVERAGE,
+    DATA_FFILL_LIMIT,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +70,7 @@ class PortfolioResult:
     portfolio: List[str]
     weights: np.ndarray
     metrics: Dict[str, float]
+    is_sharpe: Optional[float] = None  # in-sample Sharpe (biased upward)
 
 
 @dataclass
@@ -387,6 +391,12 @@ def evaluate_window(
     Creates portfolios via GA, MC, and random selection, computes weights
     (optimal, copula, random), and evaluates OOS performance.
 
+    OVERFITTING AWARENESS: The GA optimises on training data, producing
+    in-sample (IS) Sharpe ratios that are biased upward due to selection
+    bias. The OOS Sharpe ratios from the test period are the real measure
+    of portfolio quality. Typical IS -> OOS degradation is 30-50%.
+    See CLAUDE.md "Sharpe Ratio Overfitting" section.
+
     :param window: WindowSpec defining train/test boundaries.
     :param full_prices: complete price DataFrame (will be sliced).
     :param conn: sqlite3 connection (for forecast loading).
@@ -396,7 +406,7 @@ def evaluate_window(
     :param use_forecast: whether to also run forecast-based GA.
     :return: WindowResult with all method results.
     """
-    from src import monte_carlo_optimisation as mc
+    from src.optimisers import monte_carlo as mc
 
     window_start = time.time()
     result = WindowResult(window=window)
@@ -460,7 +470,7 @@ def evaluate_window(
     logger.info("  Creating %d MC portfolios (%d trials)...", num_portfolios, mc_trials)
     start = time.time()
     mc_portfolios = []
-    for _ in range(num_portfolios):
+    for _ in tqdm(range(num_portfolios), desc="  MC portfolios", leave=False):
         solution, _ = mc.monte_carlo_search(
             train_prices, mc_trials,
             min_num_etfs=op.MIN_NUM_STOCKS,
@@ -473,38 +483,44 @@ def evaluate_window(
             mc_portfolios.append(list(log_returns_train.iloc[:, indices].columns))
     logger.info("  MC done in %.1fs", time.time() - start)
 
+    # ── Compute in-sample Sharpe for each portfolio (overfitting diagnostic) ──
+    train_log_returns = calculate_log_returns(train_prices)
+
+    def _compute_is_sharpe(portfolio, weights):
+        """In-sample Sharpe on training data — biased upward by construction."""
+        try:
+            is_stats = get_statistics(portfolio, weights, train_log_returns)
+            return is_stats['sharpe_ratio']
+        except Exception:
+            return None
+
     # ── Helper: build PortfolioResults for a set of portfolios + weights ──
     def _evaluate(portfolios, weights_list, category):
         prs = []
         for p, w in zip(portfolios, weights_list):
             metrics = get_statistics(p, w, oos_log_returns)
-            prs.append(PortfolioResult(portfolio=p, weights=w, metrics=metrics))
+            is_sr = _compute_is_sharpe(p, w)
+            prs.append(PortfolioResult(
+                portfolio=p, weights=w, metrics=metrics, is_sharpe=is_sr,
+            ))
         result.method_results[category] = MethodResults(
             category=category, portfolios=prs,
         )
 
     # ── Compute weights and evaluate ──────────────────────────────────────
-    _evaluate(ga_portfolios,
-              [optimal_weights(p, use_copulae=False) for p in ga_portfolios],
-              'cc_optimised')
-    _evaluate(ga_portfolios,
-              [optimal_weights(p, use_copulae=True) for p in ga_portfolios],
-              'cc_copulae')
-    _evaluate(ga_portfolios,
-              [get_random_weights(p) for p in ga_portfolios],
-              'cc_random_weights')
-    _evaluate(mc_portfolios,
-              [optimal_weights(p) for p in mc_portfolios],
-              'mc_optimised')
-    _evaluate(mc_portfolios,
-              [get_random_weights(p) for p in mc_portfolios],
-              'mc_random_weights')
-    _evaluate(random_portfolios,
-              [optimal_weights(p) for p in random_portfolios],
-              'random_optimised')
-    _evaluate(random_portfolios,
-              [get_random_weights(p) for p in random_portfolios],
-              'random_random')
+    logger.info("  Optimising weights and running OOS evaluation...")
+    categories = [
+        ('cc_optimised',     ga_portfolios,     lambda p: optimal_weights(p, use_copulae=False)),
+        ('cc_copulae',       ga_portfolios,     lambda p: optimal_weights(p, use_copulae=True)),
+        ('cc_random_weights', ga_portfolios,    get_random_weights),
+        ('mc_optimised',     mc_portfolios,     lambda p: optimal_weights(p)),
+        ('mc_random_weights', mc_portfolios,    get_random_weights),
+        ('random_optimised', random_portfolios, lambda p: optimal_weights(p)),
+        ('random_random',    random_portfolios, get_random_weights),
+    ]
+    for cat_name, portfolios, weight_fn in tqdm(categories, desc="  Evaluating", leave=False):
+        weights_list = [weight_fn(p) for p in portfolios]
+        _evaluate(portfolios, weights_list, cat_name)
 
     if use_forecast and forecast_portfolios:
         # Re-prepare with forecasts for weight optimisation
@@ -518,11 +534,22 @@ def evaluate_window(
 
     result.elapsed_seconds = time.time() - window_start
 
-    # Log per-window summary
+    # Log per-window summary with IS vs OOS comparison
     logger.info("  Window %s results (%.1fs):", window.label, result.elapsed_seconds)
     for cat, mr in sorted(result.method_results.items()):
-        logger.info("    %-25s  mean_sharpe=%.4f  std=%.4f",
-                     cat, mr.mean_sharpe, mr.sharpe_ratios.std())
+        is_sharpes = [p.is_sharpe for p in mr.portfolios if p.is_sharpe is not None]
+        if is_sharpes:
+            mean_is = np.mean(is_sharpes)
+            mean_oos = mr.mean_sharpe
+            degradation = ((mean_is - mean_oos) / mean_is * 100) if mean_is > 0 else float('nan')
+            logger.info(
+                "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  degradation=%.0f%%",
+                cat, mean_is, mean_oos, degradation,
+            )
+            warn_if_sharpe_suspicious(mean_is, f"Window {window.label} {cat} IS", logger)
+        else:
+            logger.info("    %-25s  OOS_sharpe=%.4f  std=%.4f",
+                         cat, mr.mean_sharpe, mr.sharpe_ratios.std())
 
     return result
 
@@ -545,7 +572,7 @@ def main():
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
         data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill()
+        data = data.ffill(limit=DATA_FFILL_LIMIT)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 
     # ── Generate rolling windows ──────────────────────────────────────────
@@ -669,8 +696,6 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     main()

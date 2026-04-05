@@ -6,13 +6,16 @@ Uses sqlite3 (stdlib) + pandas. All timestamps are ISO 8601 UTC.
 """
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 
 import pandas as pd
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Data', 'portfolio.db')
+logger = logging.getLogger(__name__)
+
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'portfolio.db')
 
 SCHEMA_SQL = """
 -- Broad market groupings (US, NZX, ASX, etc.)
@@ -295,6 +298,8 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     countries: optional dict {symbol: country_string} to populate ticker countries.
     Returns data_source id.
     """
+    import time as _time
+    t0 = _time.time()
     exchange_id = _get_exchange_id(conn, exchange)
     symbols = list(prices_df.columns)
     dupes = [s for s in set(symbols) if symbols.count(s) > 1]
@@ -337,6 +342,8 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
             num_tickers=len(symbols),
             num_rows=len(rows),
         )
+    logger.info("save_prices: %d tickers, %d rows in %.1fs",
+                len(symbols), len(rows), _time.time() - t0)
     return ds_id
 
 
@@ -388,8 +395,11 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY p.date, t.symbol"
 
+    import time as _time
+    t0 = _time.time()
     rows = conn.execute(query, params).fetchall()
     if not rows:
+        logger.info("load_prices: no rows found (%.1fs)", _time.time() - t0)
         return pd.DataFrame()
 
     # Pivot to wide format
@@ -407,6 +417,8 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
     # Forward-fill NaN (capped to avoid propagating stale prices)
     df = df.ffill(limit=ffill_limit)
 
+    logger.info("load_prices: %d rows x %d tickers in %.1fs",
+                len(df), df.shape[1], _time.time() - t0)
     return df
 
 
@@ -850,22 +862,21 @@ def migrate_csvs(conn, data_dir=None):
     _migrate_ticker_list(conn, data_dir, '2x_leveraged_ETFs.csv', 'US', 'etf')
     _migrate_ticker_list(conn, data_dir, '3x_leveraged_ETFs.csv', 'US', 'etf')
 
-    # Print summary
-    print("\nMigration summary:")
+    logger.info("Migration summary:")
     for table in ['tickers', 'prices', 'forecast_runs', 'expected_returns',
                    'variances', 'data_sources']:
         count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        print(f"  {table}: {count} rows")
+        logger.info("  %s: %d rows", table, count)
 
 
 def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
     """Import a single price CSV file."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):
-        print(f"  Skipping {filename} (not found)")
+        logger.info("  Skipping %s (not found)", filename)
         return
 
-    print(f"Importing {filename}...")
+    logger.info("Importing %s...", filename)
     df = pd.read_csv(filepath, index_col=0)
 
     # Handle the InvestNow time series with datetime+timezone index
@@ -878,9 +889,10 @@ def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
             df.index = parsed.strftime('%Y-%m-%d')
         except (ValueError, TypeError):
             # Integer indices (0, 1, 2, ...) — cannot store without dates.
-            # Skip this file; data should be re-downloaded with proper dates.
-            print(f"  Skipping {filename}: index is not date-formatted. "
-                  f"Re-download with download_and_save() to get proper dates.")
+            logger.warning("  Skipping %s: index is not date-formatted. "
+                           "Re-download with download_and_save() to get proper dates.",
+                           filename)
+            logger.debug("Date parsing traceback for %s:", filename, exc_info=True)
             return
 
     save_prices(conn, df, exchange=exchange, asset_type=asset_type,
@@ -892,10 +904,10 @@ def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
     er_path = os.path.join(data_dir, er_filename)
     var_path = os.path.join(data_dir, var_filename)
     if not os.path.exists(er_path) or not os.path.exists(var_path):
-        print(f"  Skipping {er_filename}/{var_filename} (not found)")
+        logger.info("  Skipping %s/%s (not found)", er_filename, var_filename)
         return
 
-    print(f"Importing {er_filename} + {var_filename}...")
+    logger.info("Importing %s + %s...", er_filename, var_filename)
     er = pd.read_csv(er_path, index_col=0)
     var = pd.read_csv(var_path, index_col=0)
 
@@ -913,10 +925,10 @@ def _migrate_ticker_list(conn, data_dir, filename, exchange, asset_type):
     """Import a ticker list CSV (single column of symbols)."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):
-        print(f"  Skipping {filename} (not found)")
+        logger.info("  Skipping %s (not found)", filename)
         return
 
-    print(f"Importing ticker list {filename}...")
+    logger.info("Importing ticker list %s...", filename)
     df = pd.read_csv(filepath, encoding='utf-8-sig')
     col = df.columns[0]  # Usually 'Tickers'
     symbols = df[col].dropna().tolist()
@@ -929,6 +941,8 @@ def _migrate_ticker_list(conn, data_dir, filename, exchange, asset_type):
 
 if __name__ == '__main__':
     import sys
+    from src.logging_config import setup_logging
+    setup_logging()
 
     if len(sys.argv) > 1 and sys.argv[1] == 'migrate':
         conn = get_connection()
@@ -941,9 +955,9 @@ if __name__ == '__main__':
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
-        print(f"Database created at: {DB_PATH}")
-        print(f"Tables ({len(tables)}):")
+        logger.info("Database created at: %s", DB_PATH)
+        logger.info("Tables (%d):", len(tables))
         for t in tables:
             count = conn.execute(f"SELECT COUNT(*) FROM {t['name']}").fetchone()[0]
-            print(f"  {t['name']}: {count} rows")
+            logger.info("  %s: %d rows", t['name'], count)
         conn.close()

@@ -7,6 +7,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from unittest.mock import MagicMock
+
 from src.portfolio_utils import (
     load_prices_csv,
     calculate_log_returns,
@@ -15,6 +17,16 @@ from src.portfolio_utils import (
     calculate_variances,
     sharpe_ratio,
     negative_sharpe_ratio,
+    maximum_drawdown,
+    downside_deviation,
+    sortino_ratio,
+    calmar_ratio,
+    optimise_weights,
+    sharpe_ratio_variance,
+    deflated_sharpe_ratio,
+    warn_if_sharpe_suspicious,
+    SHARPE_WARN_THRESHOLD,
+    SHARPE_CRITICAL_THRESHOLD,
 )
 
 
@@ -163,6 +175,165 @@ class TestSharpeRatio(unittest.TestCase):
         cov = np.array([[0.04, 0.01], [0.01, 0.04]])
         with self.assertRaises((ValueError, IndexError)):
             sharpe_ratio(weights, er, cov)
+
+
+class TestMaximumDrawdown(unittest.TestCase):
+    def test_known_values(self):
+        # Up 1%, down 5%, up 2%: peak at day 1, trough at day 2
+        returns = [0.01, -0.05, 0.02]
+        dd = maximum_drawdown(returns)
+        self.assertLess(dd, 0)
+
+    def test_all_positive_returns(self):
+        returns = [0.01, 0.02, 0.01]
+        dd = maximum_drawdown(returns)
+        self.assertEqual(dd, 0)
+
+    def test_empty_raises(self):
+        with self.assertRaises(ValueError):
+            maximum_drawdown([])
+
+
+class TestDownsideDeviation(unittest.TestCase):
+    def test_no_downside(self):
+        returns = [0.01, 0.02, 0.03]
+        dd = downside_deviation(returns, mar=0)
+        self.assertEqual(dd, 0.0)
+
+    def test_known_values(self):
+        returns = [-0.02, -0.01, 0.01]
+        dd = downside_deviation(returns, mar=0)
+        self.assertGreater(dd, 0)
+
+    def test_empty_returns_zero(self):
+        self.assertEqual(downside_deviation([]), 0.0)
+
+
+class TestSortinoRatio(unittest.TestCase):
+    def test_known_values(self):
+        result = sortino_ratio(0.10, 0.05)
+        self.assertAlmostEqual(result, 2.0)
+
+    def test_zero_deviation_returns_zero(self):
+        self.assertEqual(sortino_ratio(0.10, 0), 0.0)
+
+
+class TestCalmarRatio(unittest.TestCase):
+    def test_known_values(self):
+        result = calmar_ratio(0.10, -0.20)
+        self.assertAlmostEqual(result, 0.5)
+
+    def test_zero_drawdown_returns_zero(self):
+        self.assertEqual(calmar_ratio(0.10, 0), 0.0)
+
+
+class TestOptimiseWeights(unittest.TestCase):
+    def test_returns_optimize_result(self):
+        from scipy.optimize import OptimizeResult
+        prices = pd.DataFrame(
+            np.random.RandomState(42).randn(100, 4).cumsum(axis=0) + 100,
+            columns=['A', 'B', 'C', 'D'],
+        )
+        selection = np.array([1, 1, 0, 1])
+        result = optimise_weights(selection, prices)
+        self.assertIsInstance(result, OptimizeResult)
+
+    def test_weights_sum_to_one(self):
+        prices = pd.DataFrame(
+            np.random.RandomState(42).randn(100, 3).cumsum(axis=0) + 100,
+            columns=['X', 'Y', 'Z'],
+        )
+        selection = np.array([1, 1, 1])
+        result = optimise_weights(selection, prices)
+        if result.success:
+            self.assertAlmostEqual(sum(result.x), 1.0, places=3)
+
+
+class TestSharpeRatioVariance(unittest.TestCase):
+    def test_normal_returns_sr_zero(self):
+        """For normal returns and SR=0, Var(SR) = 1/n."""
+        var = sharpe_ratio_variance(sr=0.0, n=252)
+        self.assertAlmostEqual(var, 1 / 252)
+
+    def test_normal_returns_sr_nonzero(self):
+        """For normal returns, Var(SR) = (1 + sr^2/2) / n via the general formula
+        with skewness=0 and excess_kurtosis=0 the formula gives 1/n (no sr^2 term
+        because excess_kurtosis=0). The (1+sr^2/2)/n form requires kurtosis=3."""
+        var = sharpe_ratio_variance(sr=1.0, n=252, skewness=0.0, excess_kurtosis=0.0)
+        self.assertAlmostEqual(var, 1 / 252)
+
+    def test_skewness_changes_result(self):
+        """Negative skewness with positive SR should increase variance."""
+        var_normal = sharpe_ratio_variance(sr=1.0, n=252, skewness=0.0)
+        var_skewed = sharpe_ratio_variance(sr=1.0, n=252, skewness=-1.0)
+        self.assertGreater(var_skewed, var_normal)
+
+    def test_excess_kurtosis_changes_result(self):
+        """Positive excess kurtosis should increase variance for nonzero SR."""
+        var_normal = sharpe_ratio_variance(sr=1.0, n=252, excess_kurtosis=0.0)
+        var_fat = sharpe_ratio_variance(sr=1.0, n=252, excess_kurtosis=3.0)
+        self.assertGreater(var_fat, var_normal)
+
+    def test_more_observations_reduces_variance(self):
+        var_short = sharpe_ratio_variance(sr=1.0, n=100)
+        var_long = sharpe_ratio_variance(sr=1.0, n=1000)
+        self.assertGreater(var_short, var_long)
+
+
+class TestDeflatedSharpeRatio(unittest.TestCase):
+    def test_range_zero_to_one(self):
+        dsr = deflated_sharpe_ratio(observed_sr=1.5, n=252, num_trials=100)
+        self.assertGreaterEqual(dsr, 0.0)
+        self.assertLessEqual(dsr, 1.0)
+
+    def test_more_trials_lowers_dsr(self):
+        """More trials increases expected max SR under null, lowering DSR.
+        Uses few observations (n=50) so SR_std is large enough for the
+        multiple testing penalty to bite."""
+        dsr_few = deflated_sharpe_ratio(observed_sr=0.5, n=50, num_trials=10)
+        dsr_many = deflated_sharpe_ratio(observed_sr=0.5, n=50, num_trials=100000)
+        self.assertGreater(dsr_few, dsr_many)
+
+    def test_higher_sr_raises_dsr(self):
+        dsr_low = deflated_sharpe_ratio(observed_sr=0.5, n=252, num_trials=100)
+        dsr_high = deflated_sharpe_ratio(observed_sr=3.0, n=252, num_trials=100)
+        self.assertGreater(dsr_high, dsr_low)
+
+    def test_single_trial_returns_high_dsr(self):
+        """With only 1 trial, there is no multiple testing penalty."""
+        dsr = deflated_sharpe_ratio(observed_sr=1.0, n=252, num_trials=1)
+        self.assertGreater(dsr, 0.5)
+
+    def test_massive_trials_low_sr_gives_low_dsr(self):
+        """A modest SR with huge trial count and few observations should
+        produce a low DSR since expected max under null exceeds observed."""
+        dsr = deflated_sharpe_ratio(observed_sr=0.3, n=50, num_trials=100000)
+        self.assertLess(dsr, 0.5)
+
+
+class TestWarnIfSharpeSuspicious(unittest.TestCase):
+    def test_no_warning_below_threshold(self):
+        mock_logger = MagicMock()
+        warn_if_sharpe_suspicious(1.5, "test", logger=mock_logger)
+        mock_logger.warning.assert_not_called()
+
+    def test_warn_above_warn_threshold(self):
+        mock_logger = MagicMock()
+        warn_if_sharpe_suspicious(2.5, "test", logger=mock_logger)
+        mock_logger.warning.assert_called_once()
+        msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("30-50%", msg)
+
+    def test_critical_above_critical_threshold(self):
+        mock_logger = MagicMock()
+        warn_if_sharpe_suspicious(4.0, "test", logger=mock_logger)
+        mock_logger.warning.assert_called_once()
+        msg = mock_logger.warning.call_args[0][0]
+        self.assertIn("Harvey", msg)
+
+    def test_uses_module_logger_by_default(self):
+        """Should not raise when no logger is passed."""
+        warn_if_sharpe_suspicious(1.0, "test")
 
 
 if __name__ == '__main__':

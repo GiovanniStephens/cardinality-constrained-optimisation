@@ -7,18 +7,15 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
-from src import backtest
-from src import optimisation as op
-from src.config import TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE
+from src.optimisers import pygad_ga as op
+from src.config import BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE
 
 logger = logging.getLogger(__name__)
 
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     start_time = time.time()
 
     from src import db
@@ -30,7 +27,7 @@ def main():
         data = op.load_data('data/ETF_Prices.csv')
     data = data.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(data))
     logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
-    training_data = data.iloc[:-backtest.NUM_DAYS_OUT_OF_SAMPLE, :]
+    training_data = data.iloc[:-BACKTEST_NUM_DAYS_OOS, :]
 
     if len(training_data) < 30:
         raise ValueError(
@@ -67,7 +64,8 @@ def main():
                 expected_returns[ticker] = np.log(max(0.0001,
                                                        forecast.iloc[-1])/forecast.iloc[0])
         except Exception as e:
-            logger.warning("ARIMA forecast failed for %s (%s); using historical mean.", ticker, e)
+            logger.warning("ARIMA forecast failed for %s: %s", ticker, e)
+            logger.debug("ARIMA traceback for %s:", ticker, exc_info=True)
             expected_returns[ticker] = log_returns[ticker].mean() * TRADING_DAYS_PER_YEAR
             failed_return_tickers.append(ticker)
 
@@ -104,7 +102,8 @@ def main():
             else:
                 volatilities[ticker] = vol
         except Exception as e:
-            logger.warning("GARCH forecast failed for %s (%s); using sample variance.", ticker, e)
+            logger.warning("GARCH forecast failed for %s: %s", ticker, e)
+            logger.debug("GARCH traceback for %s:", ticker, exc_info=True)
             volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
             failed_vol_tickers.append(ticker)
 

@@ -1,5 +1,6 @@
 import unittest
-from src import optimisation as op
+from src.optimisers import pygad_ga as op
+from src.portfolio_utils import negative_sharpe_ratio
 import pandas as pd
 import numpy as np
 
@@ -74,9 +75,9 @@ class TestOptimisation(unittest.TestCase):
             2*cov*weights[0]*weights[1]
         cov_matrix = [[stdDevs[0]**2, cov], [cov, stdDevs[1]**2]]
         sharpe_ratio = np.dot(weights, returns)/np.sqrt(port_var)
-        model_sharpe = op.sharpe_ratio(np.array(weights),
-                                       np.array(returns),
-                                       cov_matrix)
+        model_sharpe = negative_sharpe_ratio(np.array(weights),
+                                             np.array(returns),
+                                             np.array(cov_matrix))
         self.assertAlmostEqual(sharpe_ratio, -model_sharpe)
 
     def test_load_data_no_file(self):
@@ -307,7 +308,7 @@ class TestOptimisation(unittest.TestCase):
         weights = np.array([0.0, 0.0])
         returns = np.array([0.2, 0.3])
         cov_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
-        result = op.sharpe_ratio(weights, returns, cov_matrix)
+        result = negative_sharpe_ratio(weights, returns, cov_matrix)
         self.assertEqual(result, 0.0)
 
     def test_load_data_empty_csv(self):

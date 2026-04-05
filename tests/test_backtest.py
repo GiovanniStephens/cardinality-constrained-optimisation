@@ -1,6 +1,6 @@
 import unittest
 from src import backtest
-from src import optimisation as op
+from src.optimisers import pygad_ga as op
 from src.portfolio_utils import (
     maximum_drawdown,
     downside_deviation,

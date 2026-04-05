@@ -231,10 +231,8 @@ def validate_universe(conn, exchange='US', dry_run=False):
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    from src.logging_config import setup_logging
+    setup_logging()
     parser = argparse.ArgumentParser(
         description='Validate universe data quality and flag bad tickers.')
     parser.add_argument('--exchange', default='US',

@@ -40,6 +40,7 @@ MAX_EXTREME_RETURN_PCT = 0.05    # flag if >5% of days have >10 std dev returns
 
 TRADING_DAYS_PER_YEAR = 252
 DATA_MIN_COVERAGE = 0.95         # keep columns with >= 95% non-null rows
+DATA_FFILL_LIMIT = 5             # max consecutive NaN rows to forward-fill
 DATA_LOOKBACK_DAYS = 730         # 2 years of calendar days
 
 # ─── Portfolio constraints ───────────────────────────────────────────────────
@@ -78,3 +79,11 @@ BACKTEST_TRAIN_YEARS = 5
 BACKTEST_TEST_DAYS = 252       # 1 year OOS per window
 BACKTEST_STEP_DAYS = 252       # non-overlapping yearly windows
 BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. ['2015-2019/2020']
+
+# ─── Pipeline defaults ───────────────────────────────────────────────────────
+
+PIPELINE_BATCH_SIZE = 500
+PIPELINE_RATE_LIMIT_DELAY = 0.5    # seconds between batches
+PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
+PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space
+PIPELINE_MAX_RETRIES = 3
