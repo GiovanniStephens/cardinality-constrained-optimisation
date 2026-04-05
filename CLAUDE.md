@@ -16,14 +16,18 @@ Solves the cardinality-constrained portfolio selection problem: find an optimal 
 ```
 src/                         # Python source package
 ├── __init__.py
-├── optimisation.py          # Core: GA selection + SLSQP weights + copula correlation + risk parity
-├── simple_ga_optimisation.py # Simpler parallel island-based GA using InvestNow data
+├── optimisers/              # All portfolio optimisation algorithms
+│   ├── __init__.py          # Re-exports all optimisers + BaseOptimiser
+│   ├── base.py              # BaseOptimiser ABC
+│   ├── pygad_ga.py          # PyGAD GA + SLSQP + copula/CCC correlation
+│   ├── island_ga.py         # Parallel island-based GA
+│   ├── monte_carlo.py       # Monte Carlo brute-force baseline
+│   └── mip.py               # Mixed Integer Linear Programming
 ├── backtest.py              # Forward-walk backtesting with Sharpe/Sortino/Calmar/drawdown stats
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
 ├── db.py                    # SQLite database module (schema, save/load functions, CSV migration)
-├── monte_carlo_optimisation.py  # Monte Carlo brute-force baseline
-├── mip_optimisation.py      # Mixed Integer Linear Programming alternative
-├── portfolio_utils.py       # Shared utility functions
+├── portfolio_utils.py       # Shared utility functions + OptimisationResult
+├── config.py                # Centralised algorithm/pipeline configuration
 ├── download_data.py         # Yahoo Finance data downloader
 ├── list_of_stocks.py        # ETF/stock universe definitions
 └── prices_EDA.py            # Exploratory data analysis / visualisation
@@ -62,10 +66,10 @@ README.md
 pip install -r requirements.txt
 
 # Run the main GA optimisation (InvestNow data)
-python -m src.simple_ga_optimisation
+python -m src.optimisers.island_ga
 
 # Run the full optimisation with copulas/forecasts
-python -m src.optimisation
+python -m src.optimisers.pygad_ga
 
 # Run backtests
 python -m src.backtest
@@ -97,7 +101,7 @@ python -m unittest discover tests
 - **Sharpe ratio** = E(R) / Std(R) is the primary objective function
 - **Cardinality constraint**: typically 10-20 instruments from a universe of thousands
 - **Genetic algorithm** selects which instruments; **SLSQP** optimises portfolio weights
-- **Island-based parallel GA** with migration for better convergence (`src/simple_ga_optimisation.py`, `cpp/optimisation.cpp`)
+- **Island-based parallel GA** with migration for better convergence (`src/optimisers/island_ga.py`, `cpp/optimisation.cpp`)
 - **CCC model** (Bollerslev 1990): forecast variances via GARCH, historical correlations for covariance
 - **Copula-GARCH**: AR(1)-GARCH residuals fitted with skew-t copulas for better correlation estimation
 - **Backtesting**: forward-walk out-of-sample evaluation; hypothesis testing confirms optimised portfolios significantly outperform random selection
@@ -118,6 +122,61 @@ python -m unittest discover tests
 - No short selling by default (weights >= 0)
 - Tests use `unittest` in `tests/`; run `python -m unittest discover tests` to verify changes
 - When modifying optimisation parameters (population size, generations, mutation rate, migration), document the rationale — small changes significantly affect convergence
+
+## Sharpe Ratio Overfitting — Critical Awareness
+
+### The Pitfall
+
+When we optimise a portfolio on historical data (maximising the in-sample Sharpe ratio), the reported Sharpe is **biased upward**. The GA searches over a vast combinatorial space of portfolio selections (choosing 10-20 from 1700+ instruments), and the best-found solution will almost certainly exploit noise patterns in the training data that do not persist out-of-sample. This is compounded by SLSQP weight optimisation, which further tailors weights to historical noise.
+
+**This is not a bug — it is an inherent property of optimisation on finite samples.**
+
+### Evidence in This Project
+
+- Benchmark in-sample Sharpe ratios: **2.3 to 5.7** (see `benchmark_results/`)
+- Realistic annual equity portfolio Sharpe ratios: **0.3 to 1.0**
+- Typical in-sample to out-of-sample degradation: **30-50%** (median ~44% per academic literature)
+- A Sharpe ratio of 5.7 on annual equity data is not a sign of a great strategy — it is a sign of overfitting
+
+### Academic References
+
+1. **Bailey & López de Prado (2014)**, "The Deflated Sharpe Ratio" (*Journal of Portfolio Management*, Vol. 40, No. 5, pp. 94-107) — corrects observed Sharpe for selection bias when multiple strategies are tested and for non-normality (skewness, kurtosis) of returns. The DSR gives the probability that an observed Sharpe is genuine after accounting for how many trials were run.
+
+2. **Harvey, Liu, Zhu (2016)**, "…and the Cross-Section of Expected Returns" (*Review of Financial Studies*, Vol. 29, No. 1, pp. 5-68) — argues the t-statistic threshold for significance should be ~3.0, not the traditional 2.0, to account for multiple testing across hundreds of strategies/factors.
+
+3. **López de Prado (2015)**, "The Probability of Backtest Overfitting" — provides a model-free, metric-agnostic framework for computing the probability that a backtested strategy is overfit, using Combinatorially Symmetric Cross-Validation (CSCV).
+
+### Key Formula: Variance of the Sharpe Ratio Estimator
+
+```
+Var(SR) = [1 - skewness * SR + (excess_kurtosis / 4) * SR^2] / T
+```
+
+Where `T` is the number of observations. For normal returns (skewness=0, excess kurtosis=0), this simplifies to `1/T`. Fat tails and negative skew (common in equities) inflate the variance further.
+
+### Mitigations in Place
+
+- Forward-walk backtesting with non-overlapping OOS windows (5yr train + 1yr test)
+- Multiple evaluation metrics beyond Sharpe (Sortino, Calmar, max drawdown)
+- Hypothesis testing (paired t-tests, Friedman tests) across windows
+- Cardinality constraints (10-20 holdings) limiting parameter space
+- Weight bounds (5-45%) preventing extreme concentration
+
+### Future Work
+
+- Ledoit-Wolf shrinkage estimators for the covariance matrix
+- Full Deflated Sharpe Ratio computation gating results
+- Combinatorially Purged Cross-Validation (CPCV) for more robust OOS evaluation
+- Transaction cost modelling to further deflate apparent performance
+- Regime-aware validation (compare training vs test period volatility)
+
+### Rules for Interpreting Results
+
+- **Never trust an in-sample Sharpe above 2.0** for annual equity portfolios without strong OOS confirmation
+- **Sharpe above 3.0** on annual data is almost certainly overfit (Harvey et al. 2016 threshold)
+- **Always report IS and OOS Sharpe side-by-side** — the gap is the overfitting signal
+- The benchmark framework reports **in-sample** fitness values; these measure optimisation quality, not expected real-world performance
+- When in doubt, apply a 50% haircut to any in-sample Sharpe as a rough OOS estimate
 
 ## Database
 

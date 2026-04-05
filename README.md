@@ -14,7 +14,7 @@ python download_data.py
 python forecast.py
 
 # 3. Run the optimisation
-python optimisation.py
+python -m src.optimisers.pygad_ga
 
 # 4. Run the backtest to validate performance
 python backtest.py
@@ -24,21 +24,19 @@ python backtest.py
 
 ```
 .
-├── optimisation.py              # Core: GA selects ETFs, SLSQP optimises weights
-├── backtest.py                  # Out-of-sample backtesting framework
-├── forecast.py                  # ARIMA return + GARCH variance forecasts
-├── download_data.py             # Fetches ETF prices from Yahoo Finance
-│
-├── simple_ga_optimisation.py    # Alternative: island-model parallel GA
-├── monte_carlo_optimisation.py  # Alternative: random search (10M+ trials)
-├── mip_optimisation.py          # Alternative: mixed integer programming (PuLP)
-│
-├── prices_EDA.py                # Exploratory data analysis
-├── list_of_ETFs.py              # ETF list utilities
-├── optimisation.cpp             # C++ implementation (compiled binary: ./optimisation)
-│
-├── test_optimisation.py         # Tests for optimisation module
-├── test_backtest.py             # Tests for backtest module
+├── src/
+│   ├── optimisers/              # All optimisation algorithms (BaseOptimiser ABC)
+│   │   ├── pygad_ga.py          # PyGAD GA + SLSQP + copula/CCC correlation
+│   │   ├── island_ga.py         # Parallel island-model GA
+│   │   ├── monte_carlo.py       # Random search (10M+ trials)
+│   │   └── mip.py               # Mixed integer programming (PuLP)
+│   ├── backtest.py              # Out-of-sample backtesting framework
+│   ├── forecast.py              # ARIMA return + GARCH variance forecasts
+│   ├── download_data.py         # Fetches prices from Yahoo Finance
+│   └── portfolio_utils.py       # Shared analytics + OptimisationResult
+├── cpp/
+│   └── optimisation.cpp         # C++ parallel island GA
+├── tests/                       # Unit tests
 │
 └── data/
     ├── ETF_Prices.csv           # Main dataset: ~756 days x ~1792 ETFs (102 MB)
@@ -66,7 +64,7 @@ Given the selected ETFs, `scipy.optimize.minimize` finds weights that maximise t
 ### Data Pipeline
 
 ```
-download_data.py          forecast.py                  optimisation.py
+download_data.py          forecast.py              optimisers/pygad_ga.py
 Yahoo Finance  ──>  ETF_Prices.csv  ──>  expected_returns.csv  ──>  Portfolio
                                     ──>  variances.csv              selection
                                          (optional)                 + weights
@@ -79,13 +77,13 @@ Yahoo Finance  ──>  ETF_Prices.csv  ──>  expected_returns.csv  ──>  
    - **Variances**: GARCH(1,1) with skew-t innovations, annualised.
    - Outputs saved to `data/expected_returns.csv` and `data/variances.csv`.
 
-3. **`optimisation.py`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
+3. **`optimisers/pygad_ga.py`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
 
 4. **`backtest.py`** -- Validates the approach out-of-sample (see Backtest section below).
 
 ## Key Configuration
 
-These globals in `optimisation.py` control the optimisation behaviour:
+These parameters in `src/config.py` control the optimisation behaviour:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -138,12 +136,12 @@ The repo includes three alternative solvers beyond the primary PyGAD-based appro
 
 | File | Method | Pros | Cons |
 |------|--------|------|------|
-| `optimisation.py` | PyGAD genetic algorithm | Flexible constraints, good results | ~100s per portfolio |
-| `simple_ga_optimisation.py` | Island-model parallel GA | Multi-threaded, 8000 population with migration | More complex, harder to tune |
-| `monte_carlo_optimisation.py` | Random search (10M+ trials) | Dead simple, embarrassingly parallel | Inefficient convergence |
-| `mip_optimisation.py` | Mixed integer linear program (PuLP) | Exact solution | Linear approximation of Sharpe Ratio |
+| `optimisers/pygad_ga.py` | PyGAD genetic algorithm | Flexible constraints, good results | ~100s per portfolio |
+| `optimisers/island_ga.py` | Island-model parallel GA | Multi-threaded, 8000 population with migration | More complex, harder to tune |
+| `optimisers/monte_carlo.py` | Random search (10M+ trials) | Dead simple, embarrassingly parallel | Inefficient convergence |
+| `optimisers/mip.py` | Mixed integer linear program (PuLP) | Exact solution | Linear approximation of Sharpe Ratio |
 
-The primary approach (`optimisation.py` with PyGAD) gives the best balance of result quality and complexity.
+All optimisers implement `BaseOptimiser.optimise(prices) -> OptimisationResult`. The PyGAD approach gives the best balance of result quality and complexity.
 
 ## Backtest
 
@@ -213,7 +211,7 @@ GARCH(1,1) with GJR leverage term and skew-t innovations. The forecast variance 
 ## Running Tests
 
 ```bash
-python -m pytest test_optimisation.py test_backtest.py
+python -m unittest discover tests
 ```
 
 Tests cover data loading, return calculations, Sharpe Ratio computation, weight constraints, and covariance matrix generation.
