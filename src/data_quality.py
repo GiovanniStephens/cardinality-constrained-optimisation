@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -21,6 +22,54 @@ from src import db
 from src import config as uc
 
 logger = logging.getLogger(__name__)
+
+# MAD-to-standard-deviation conversion factor (exact for normal distributions).
+MAD_TO_STD = 1.4826
+
+
+# ─── Shared helpers ──────────────────────────────────────────────────────────
+
+def _load_prices_by_ticker(conn, exchange_id):
+    """Batch-load all close prices for an exchange in a single query.
+
+    Returns dict mapping ticker_id -> (symbol, list_of_closes) where closes
+    are ordered by date.
+    """
+    rows = conn.execute(
+        """SELECT t.id, t.symbol, p.close
+           FROM tickers t
+           JOIN prices p ON p.ticker_id = t.id
+           WHERE t.exchange_id = ?
+           ORDER BY t.id, p.date""",
+        (exchange_id,),
+    ).fetchall()
+
+    symbols = {}
+    prices = defaultdict(list)
+    for r in rows:
+        tid = r['id']
+        symbols[tid] = r['symbol']
+        prices[tid].append(r['close'])
+
+    return {tid: (symbols[tid], closes) for tid, closes in prices.items()}
+
+
+def _check_per_ticker(prices_by_ticker, min_rows, check_fn):
+    """Apply *check_fn* to each ticker with at least *min_rows* prices.
+
+    :param prices_by_ticker: dict from _load_prices_by_ticker().
+    :param min_rows: minimum price rows required; tickers below are skipped.
+    :param check_fn: callable(ticker_id, closes_list) -> (tid, reason) or None.
+    :return: list of (ticker_id, reason) tuples for flagged tickers.
+    """
+    flagged = []
+    for tid, (_symbol, closes) in prices_by_ticker.items():
+        if len(closes) < min_rows:
+            continue
+        result = check_fn(tid, closes)
+        if result is not None:
+            flagged.append(result)
+    return flagged
 
 
 # ─── Individual checks ────────────────────────────────────────────────────────
@@ -65,56 +114,33 @@ def _check_stale_prices(conn, exchange_id, max_staleness_days):
     return [(r['id'], f"stale:last_trade_{r['last_date']}") for r in rows]
 
 
-def _check_zero_variance(conn, exchange_id, min_annual_vol):
-    """Flag tickers with annualised volatility below threshold.
+def _check_zero_variance(prices_by_ticker, min_annual_vol):
+    """Flag tickers with annualised volatility below threshold."""
 
-    Computes log-return std from raw prices in SQL/Python hybrid.
-    """
-    # Get all ticker IDs for this exchange
-    ticker_rows = conn.execute(
-        "SELECT id, symbol FROM tickers WHERE exchange_id = ?",
-        (exchange_id,),
-    ).fetchall()
-
-    flagged = []
-    for tr in ticker_rows:
-        prices = conn.execute(
-            "SELECT close FROM prices WHERE ticker_id = ? ORDER BY date",
-            (tr['id'],),
-        ).fetchall()
-        if len(prices) < 30:
-            continue  # too few rows; min_history check handles this
-        closes = np.array([r['close'] for r in prices], dtype=float)
-        closes = closes[closes > 0]  # drop zeros
+    def _check(tid, closes_list):
+        closes = np.array(closes_list, dtype=float)
+        closes = closes[closes > 0]
         if len(closes) < 30:
-            continue
+            return None
         log_rets = np.diff(np.log(closes))
         annual_vol = np.std(log_rets) * np.sqrt(uc.TRADING_DAYS_PER_YEAR)
         if annual_vol < min_annual_vol:
-            flagged.append((tr['id'], f"zero_variance:vol={annual_vol:.6f}"))
-    return flagged
+            return (tid, f"zero_variance:vol={annual_vol:.6f}")
+        return None
+
+    return _check_per_ticker(prices_by_ticker, 30, _check)
 
 
-def _check_frozen_prices(conn, exchange_id, max_consecutive_same):
+def _check_frozen_prices(prices_by_ticker, max_consecutive_same):
     """Flag tickers with long runs of identical consecutive close prices."""
-    ticker_rows = conn.execute(
-        "SELECT id, symbol FROM tickers WHERE exchange_id = ?",
-        (exchange_id,),
-    ).fetchall()
 
-    flagged = []
-    for tr in ticker_rows:
-        prices = conn.execute(
-            "SELECT close FROM prices WHERE ticker_id = ? ORDER BY date",
-            (tr['id'],),
-        ).fetchall()
-        if len(prices) < max_consecutive_same:
-            continue
-        closes = [r['close'] for r in prices]
+    def _check(tid, closes):
         max_run = _longest_constant_run(closes)
         if max_run >= max_consecutive_same:
-            flagged.append((tr['id'], f"frozen_price:run={max_run}_days"))
-    return flagged
+            return (tid, f"frozen_price:run={max_run}_days")
+        return None
+
+    return _check_per_ticker(prices_by_ticker, max_consecutive_same, _check)
 
 
 def _longest_constant_run(values):
@@ -133,42 +159,31 @@ def _longest_constant_run(values):
     return max_run
 
 
-def _check_extreme_returns(conn, exchange_id, max_extreme_pct):
+def _check_extreme_returns(prices_by_ticker, max_extreme_pct):
     """Flag tickers where >max_extreme_pct of days have returns >10x the
     robust standard deviation (MAD-based).
 
     Uses median absolute deviation instead of regular std to prevent
     the extreme returns themselves from inflating the threshold.
     """
-    ticker_rows = conn.execute(
-        "SELECT id, symbol FROM tickers WHERE exchange_id = ?",
-        (exchange_id,),
-    ).fetchall()
 
-    flagged = []
-    for tr in ticker_rows:
-        prices = conn.execute(
-            "SELECT close FROM prices WHERE ticker_id = ? ORDER BY date",
-            (tr['id'],),
-        ).fetchall()
-        if len(prices) < 60:
-            continue
-        closes = np.array([r['close'] for r in prices], dtype=float)
+    def _check(tid, closes_list):
+        closes = np.array(closes_list, dtype=float)
         closes = closes[closes > 0]
         if len(closes) < 60:
-            continue
+            return None
         log_rets = np.diff(np.log(closes))
-        # Robust std: MAD * 1.4826 ≈ std for normal distributions
-        mad = np.median(np.abs(log_rets - np.median(log_rets)))
-        robust_std = mad * 1.4826
+        median = np.median(log_rets)
+        robust_std = np.median(np.abs(log_rets - median)) * MAD_TO_STD
         if robust_std == 0:
-            continue  # zero_variance check handles this
+            return None  # zero_variance check handles this
         extreme_count = np.sum(np.abs(log_rets) > 10 * robust_std)
         extreme_pct = extreme_count / len(log_rets)
         if extreme_pct > max_extreme_pct:
-            flagged.append((tr['id'],
-                            f"extreme_returns:{extreme_pct:.1%}_of_days"))
-    return flagged
+            return (tid, f"extreme_returns:{extreme_pct:.1%}_of_days")
+        return None
+
+    return _check_per_ticker(prices_by_ticker, 60, _check)
 
 
 # ─── Main validation entry point ─────────────────────────────────────────────
@@ -187,12 +202,15 @@ def validate_universe(conn, exchange='US', dry_run=False):
             (exchange_id,),
         )
 
+    # Batch-load prices once for the three checks that need per-ticker prices.
+    prices_by_ticker = _load_prices_by_ticker(conn, exchange_id)
+
     checks = [
         ('min_history', _check_min_history(conn, exchange_id, uc.MIN_HISTORY_DAYS)),
         ('stale', _check_stale_prices(conn, exchange_id, uc.MAX_STALENESS_DAYS)),
-        ('zero_variance', _check_zero_variance(conn, exchange_id, uc.MIN_ANNUAL_VOLATILITY)),
-        ('frozen_price', _check_frozen_prices(conn, exchange_id, uc.MAX_CONSECUTIVE_SAME_PRICE)),
-        ('extreme_returns', _check_extreme_returns(conn, exchange_id, uc.MAX_EXTREME_RETURN_PCT)),
+        ('zero_variance', _check_zero_variance(prices_by_ticker, uc.MIN_ANNUAL_VOLATILITY)),
+        ('frozen_price', _check_frozen_prices(prices_by_ticker, uc.MAX_CONSECUTIVE_SAME_PRICE)),
+        ('extreme_returns', _check_extreme_returns(prices_by_ticker, uc.MAX_EXTREME_RETURN_PCT)),
     ]
 
     # Deduplicate: first check to flag a ticker wins
@@ -245,10 +263,12 @@ def main():
     summary = validate_universe(conn, exchange=args.exchange, dry_run=args.dry_run)
     conn.close()
 
-    print(f"\nValidation summary ({args.exchange}):")
+    logger.info("Validation summary (%s):", args.exchange)
     for key, value in summary.items():
-        print(f"  {key}: {value}")
+        logger.info("  %s: %s", key, value)
 
 
 if __name__ == '__main__':
+    from src.logging_config import setup_logging
+    setup_logging()
     main()

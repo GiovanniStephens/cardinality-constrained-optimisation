@@ -66,8 +66,8 @@ class TestZeroVariance(_BaseQualityTest):
 
     def test_constant_price_flagged(self):
         self._save('FLAT', [100.0] * 300)
-        result = dq._check_zero_variance(self.conn, self.exchange_id,
-                                          min_annual_vol=0.001)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_zero_variance(pbt, min_annual_vol=0.001)
         self.assertTrue(len(result) > 0)
         self.assertIn('zero_variance', result[0][1])
 
@@ -75,8 +75,8 @@ class TestZeroVariance(_BaseQualityTest):
         np.random.seed(42)
         prices = 100.0 * np.exp(np.cumsum(np.random.normal(0, 0.02, 300)))
         self._save('VOLATILE', prices.tolist())
-        result = dq._check_zero_variance(self.conn, self.exchange_id,
-                                          min_annual_vol=0.001)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_zero_variance(pbt, min_annual_vol=0.001)
         flagged_ids = [r[0] for r in result]
         ticker_id = self.conn.execute(
             "SELECT id FROM tickers WHERE symbol='VOLATILE'").fetchone()[0]
@@ -90,16 +90,16 @@ class TestFrozenPrices(_BaseQualityTest):
         prices = [100.0 + i for i in range(100)]
         prices[40:65] = [150.0] * 25
         self._save('FROZEN', prices)
-        result = dq._check_frozen_prices(self.conn, self.exchange_id,
-                                          max_consecutive_same=20)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_frozen_prices(pbt, max_consecutive_same=20)
         self.assertTrue(len(result) > 0)
         self.assertIn('frozen_price', result[0][1])
 
     def test_normal_ticker_not_flagged(self):
         prices = [100.0 + i * 0.5 for i in range(100)]
         self._save('NORMAL', prices)
-        result = dq._check_frozen_prices(self.conn, self.exchange_id,
-                                          max_consecutive_same=20)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_frozen_prices(pbt, max_consecutive_same=20)
         flagged_ids = [r[0] for r in result]
         ticker_id = self.conn.execute(
             "SELECT id FROM tickers WHERE symbol='NORMAL'").fetchone()[0]
@@ -121,8 +121,8 @@ class TestExtremeReturns(_BaseQualityTest):
         for r in normal_rets:
             prices.append(prices[-1] * np.exp(r))
         self._save('SPIKY', prices)
-        result = dq._check_extreme_returns(self.conn, self.exchange_id,
-                                            max_extreme_pct=0.05)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_extreme_returns(pbt, max_extreme_pct=0.05)
         flagged_ids = [r[0] for r in result]
         ticker_id = self.conn.execute(
             "SELECT id FROM tickers WHERE symbol='SPIKY'").fetchone()[0]
@@ -132,8 +132,8 @@ class TestExtremeReturns(_BaseQualityTest):
         np.random.seed(42)
         prices = 100.0 * np.exp(np.cumsum(np.random.normal(0, 0.01, 500)))
         self._save('CALM', prices.tolist())
-        result = dq._check_extreme_returns(self.conn, self.exchange_id,
-                                            max_extreme_pct=0.05)
+        pbt = dq._load_prices_by_ticker(self.conn, self.exchange_id)
+        result = dq._check_extreme_returns(pbt, max_extreme_pct=0.05)
         flagged_ids = [r[0] for r in result]
         ticker_id = self.conn.execute(
             "SELECT id FROM tickers WHERE symbol='CALM'").fetchone()[0]
