@@ -188,6 +188,18 @@ def promote_staging(staging_db_path, conn_prod, exchange, chunk_size=200):
                 logger.info("Promoted %d/%d tickers (%s)",
                             total_promoted, len(symbols), asset_type)
 
+        # Promotion integrity check (P9)
+        exchange_id_prod = db._get_exchange_id(conn_prod, exchange)
+        prod_count = conn_prod.execute(
+            "SELECT COUNT(DISTINCT symbol) FROM tickers WHERE exchange_id = ?",
+            (exchange_id_prod,),
+        ).fetchone()[0]
+        if prod_count < len(symbols):
+            logger.warning(
+                "Promotion integrity: production has %d tickers but "
+                "staging had %d for exchange %s",
+                prod_count, len(symbols), exchange)
+
         logger.info("Promotion complete: %d tickers transferred", total_promoted)
         return total_promoted
     finally:
@@ -323,6 +335,11 @@ def run_pipeline(
         checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
         save_checkpoint(checkpoint_path, checkpoint)
 
+    def _on_batch_failed(failed_tickers_list, batch_num):
+        checkpoint['failed_tickers'].extend(failed_tickers_list)
+        checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
+        save_checkpoint(checkpoint_path, checkpoint)
+
     try:
         result = download_and_save(
             tickers, conn_staging, exchange=exchange, asset_type=asset_type,
@@ -330,6 +347,7 @@ def run_pipeline(
             null_threshold=null_threshold, names=names, countries=countries,
             max_retries=max_retries,
             on_batch_complete=_on_batch_complete,
+            on_batch_failed=_on_batch_failed,
             rate_limit_delay=rate_limit_delay,
         )
     except KeyboardInterrupt:
@@ -347,6 +365,17 @@ def run_pipeline(
     logger.info("Download complete: %d/%d saved, %d failed batches",
                 result['saved_tickers'], result['total_tickers'],
                 len(result['failed_batches']))
+
+    # ── Circuit breaker check ──────────────────────────────────────────────
+    if result.get('circuit_breaker_tripped'):
+        logger.error("Circuit breaker tripped. Checkpoint saved at %s. "
+                     "Use --resume to retry after the issue is resolved.",
+                     checkpoint_path)
+        conn_staging.close()
+        manifest['status'] = 'circuit_breaker_tripped'
+        manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
+        write_manifest(manifest_path, manifest)
+        return manifest
 
     # ── Validate ───────────────────────────────────────────────────────────
     if not skip_validation:

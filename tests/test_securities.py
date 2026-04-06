@@ -1,9 +1,13 @@
-import unittest
+import logging
 import os
 import tempfile
+import unittest
+from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
+from src import db
 from src import download_data as dd
 
 
@@ -156,6 +160,95 @@ class TestEndToEnd(unittest.TestCase):
             reloaded = dd.load_tickers(f.name, ticker_column='Tickers')
         os.unlink(f.name)
         self.assertEqual(list(reloaded['Tickers']), list(sample['Tickers']))
+
+
+class TestDownloadBatchValidation(unittest.TestCase):
+    """Test DataFrame structure validation in _download_batch."""
+
+    @patch('src.download_data.yf.download')
+    def test_handles_empty_dataframe(self, mock_yf):
+        mock_yf.return_value = pd.DataFrame()
+        result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
+        self.assertIsNone(result)
+
+    @patch('src.download_data.yf.download')
+    def test_handles_none_return(self, mock_yf):
+        mock_yf.return_value = None
+        result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
+        self.assertIsNone(result)
+
+    @patch('src.download_data.yf.download')
+    def test_handles_non_datetime_index(self, mock_yf):
+        # Return a DataFrame with integer index that can be coerced to datetime
+        dates = pd.date_range('2024-01-01', periods=3, freq='B')
+        df = pd.DataFrame({'Close': [100, 101, 102]}, index=dates.strftime('%Y-%m-%d'))
+        mock_yf.return_value = df
+        result = dd._download_batch(['SPY'], '2024-01-01', '2024-01-05')
+        # Should succeed after coercing index
+        self.assertIsNotNone(result)
+
+    @patch('src.download_data.yf.download')
+    def test_handles_unconvertible_index(self, mock_yf):
+        df = pd.DataFrame({'Close': [100, 101]}, index=['not-a-date', 'also-not'])
+        mock_yf.return_value = df
+        result = dd._download_batch(['SPY'], '2024-01-01', '2024-01-05')
+        self.assertIsNone(result)
+
+
+class TestDeduplication(unittest.TestCase):
+    """Test ticker deduplication in download_and_save."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, 'test.db')
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        for f in os.listdir(self.tmpdir):
+            os.remove(os.path.join(self.tmpdir, f))
+        os.rmdir(self.tmpdir)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_download_and_save_deduplicates_tickers(self, mock_dl):
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+        mock_dl.return_value = pd.DataFrame(
+            {'SPY': range(5), 'QQQ': range(5)}, index=dates)
+
+        # Pass duplicates
+        tickers = ['SPY', 'QQQ', 'SPY', 'QQQ', 'SPY']
+        result = dd.download_and_save(
+            tickers, self.conn, exchange='US', batch_size=5,
+            max_retries=1, circuit_breaker_threshold=100,
+            rate_limit_delay=0, batch_timeout=10,
+        )
+        # Should only process 2 unique tickers
+        self.assertEqual(result['total_tickers'], 2)
+
+
+class TestLogAggregation(unittest.TestCase):
+    """Test that skipped tickers are logged as a summary, not individually."""
+
+    @patch('src.download_data.yf.download')
+    def test_batch_skipped_tickers_logged_as_summary(self, mock_yf):
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+        # Return a DataFrame that only has data for one ticker out of many
+        df = pd.DataFrame(
+            {('SPY', 'Close'): range(5)},
+            index=dates,
+        )
+        df.columns = pd.MultiIndex.from_tuples([('SPY', 'Close')])
+        mock_yf.return_value = df
+
+        with self.assertLogs('src.download_data', level='INFO') as cm:
+            # Request many tickers but only SPY has data
+            tickers = ['SPY'] + [f'BAD{i}' for i in range(20)]
+            dd._download_batch(tickers, '2024-01-01', '2024-02-01')
+
+        # Should have exactly one log line about skipped tickers (not 20)
+        skipped_logs = [l for l in cm.output if 'had no data' in l]
+        self.assertEqual(len(skipped_logs), 1)
+        self.assertIn('20/21', skipped_logs[0])
 
 
 if __name__ == '__main__':
