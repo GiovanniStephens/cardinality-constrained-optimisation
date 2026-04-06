@@ -531,7 +531,7 @@ class CppGAAdapter(OptimiserAdapter):
                  num_generations=200, total_population_size=2000,
                  num_elites=50, migration_interval=10, migration_rate=0.1,
                  min_etfs=3, max_etfs=15, min_return=None,
-                 num_islands=4):
+                 num_islands=4, use_svd=False, svd_components=200):
         self.binary_path = binary_path
         self.num_generations = num_generations
         self.pop_size = total_population_size // num_islands
@@ -542,6 +542,8 @@ class CppGAAdapter(OptimiserAdapter):
         self.max_etfs = max_etfs
         self.min_return = min_return
         self.num_islands = num_islands
+        self.use_svd = use_svd
+        self.svd_components = svd_components
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
@@ -583,6 +585,8 @@ class CppGAAdapter(OptimiserAdapter):
             ]
             if self.min_return is not None:
                 cmd += ['--min-return', str(self.min_return)]
+            if self.use_svd:
+                cmd += ['--svd', '--svd-components', str(self.svd_components)]
 
             pattern = re.compile(
                 r'Island\s+(\d+):\s+Generation\s+(\d+):\s+'
