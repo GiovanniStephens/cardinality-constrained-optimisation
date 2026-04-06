@@ -1,10 +1,12 @@
 """Orchestrates benchmark runs across all adapters."""
 
+import concurrent.futures
 import json
 import logging
 import os
 import pickle
 import time
+from multiprocessing import cpu_count
 from typing import List, Optional
 
 import pandas as pd
@@ -14,6 +16,24 @@ from benchmark.results import BenchmarkSuite
 from src.portfolio_utils import warn_if_sharpe_suspicious
 
 logger = logging.getLogger(__name__)
+
+
+def _run_single_seed(adapter, data, time_budget, seed, run_id):
+    """Run a single adapter+seed combination. Top-level for pickling."""
+    return adapter.run(data, time_budget, seed, run_id)
+
+
+# Max parallel seed runs per adapter type, based on internal parallelism.
+# Adapters that already use all CPU cores should run 1-2 seeds at a time.
+_MAX_PARALLEL_SEEDS = {
+    'Island GA (Python)': 2,   # uses ~4 cores internally via mp.Pool
+    'Island GA (C++)': 1,      # uses all cores via std::thread
+    'Monte Carlo (C++)': 1,    # uses all cores via std::thread
+    'Pygad GA': 8,             # single-threaded
+    'Monte Carlo': 8,          # single-threaded
+    'MILP': 8,                 # single-threaded (CBC solver)
+}
+_DEFAULT_MAX_PARALLEL = 4
 
 
 class BenchmarkRunner:
@@ -37,7 +57,6 @@ class BenchmarkRunner:
         current = 0
 
         for adapter in self.adapters:
-            # Check which seeds are already done for this adapter
             done_seeds = set()
             if adapter.name in suite.results:
                 done_seeds = {r.seed for r in suite.results[adapter.name]}
@@ -46,31 +65,52 @@ class BenchmarkRunner:
             logger.info("Algorithm: %s", adapter.name)
             logger.info("=" * 60)
 
+            # Determine parallelism for this adapter
+            max_workers = _MAX_PARALLEL_SEEDS.get(
+                adapter.name, _DEFAULT_MAX_PARALLEL)
+
+            # Collect seeds to run
+            pending_seeds = []
             for i, seed in enumerate(self.seeds):
                 current += 1
                 if seed in done_seeds:
                     logger.info("  Run %d/%d (seed=%d) [%d/%d]... SKIPPED (already done)",
                                 i + 1, self.num_runs, seed, current, total_runs)
                     continue
+                pending_seeds.append((i, seed, current))
 
-                logger.info("  Run %d/%d (seed=%d) [%d/%d]...",
-                            i + 1, self.num_runs, seed, current, total_runs)
+            if not pending_seeds:
+                self._save(suite)
+                continue
 
-                t0 = time.time()
-                try:
-                    result = adapter.run(self.data, self.time_budget, seed, i)
-                    elapsed = time.time() - t0
-                    suite.add_result(result)
-                    logger.info("    OK | best=%.4f | time=%.1fs | convergence_pts=%d",
-                                result.best_fitness, elapsed, len(result.convergence))
-                    warn_if_sharpe_suspicious(
-                        result.best_fitness,
-                        f"{adapter.name} seed={seed} IS",
-                        logger,
+            # Run seeds in parallel
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                future_to_info = {}
+                for i, seed, cur in pending_seeds:
+                    logger.info("  Submitting run %d/%d (seed=%d) [%d/%d]...",
+                                i + 1, self.num_runs, seed, cur, total_runs)
+                    future = executor.submit(
+                        _run_single_seed, adapter, self.data,
+                        self.time_budget, seed, i,
                     )
-                except Exception as e:
-                    elapsed = time.time() - t0
-                    logger.error("    FAILED (%.1fs): %s", elapsed, e, exc_info=True)
+                    future_to_info[future] = (i, seed, cur)
+
+                for future in concurrent.futures.as_completed(future_to_info):
+                    i, seed, cur = future_to_info[future]
+                    try:
+                        result = future.result()
+                        suite.add_result(result)
+                        logger.info("    OK | seed=%d | best=%.4f | convergence_pts=%d",
+                                    seed, result.best_fitness, len(result.convergence))
+                        warn_if_sharpe_suspicious(
+                            result.best_fitness,
+                            f"{adapter.name} seed={seed} IS",
+                            logger,
+                        )
+                    except Exception as e:
+                        logger.error("    FAILED (seed=%d): %s", seed, e, exc_info=True)
 
             # Save incrementally after each algorithm
             self._save(suite)

@@ -15,6 +15,7 @@ import sys
 from benchmark.adapters import ALL_ADAPTERS, DEFAULT_ADAPTERS
 from benchmark.analysis import generate_full_report
 from benchmark.runner import BenchmarkRunner, load_suite
+from src.config import INVESTNOW_PRICES_CSV
 
 
 def parse_args():
@@ -36,7 +37,7 @@ def parse_args():
     parser.add_argument('--output-dir', type=str, default='benchmark_results',
                         help='Output directory (default: benchmark_results)')
     parser.add_argument('--data-file', type=str,
-                        default='data/time_series_20251016_113257.csv',
+                        default=INVESTNOW_PRICES_CSV,
                         help='Path to price data CSV')
     return parser.parse_args()
 
@@ -60,7 +61,7 @@ def main():
         return
 
     # Load data
-    from src.optimisers.pygad_ga import load_data
+    from src.portfolio_utils import load_data
     print(f"Loading data from {args.data_file}...")
     data = load_data(args.data_file)
     print(f"  {data.shape[1]} instruments, {data.shape[0]} days")
