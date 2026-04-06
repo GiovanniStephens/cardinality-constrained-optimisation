@@ -1,28 +1,28 @@
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cardinality-constrained-optimisation"
 version = "0.1.0"
 requires-python = ">=3.7"
 dependencies = [
-    "arch",
-    "beautifulsoup4",
-    "copulae",
-    "financedatabase",
-    "matplotlib",
-    "muarch",
-    "numpy",
-    "pandas",
-    "pmdarima",
-    "pulp",
-    "pygad",
-    "scikit-posthocs",
-    "scipy",
-    "seaborn",
-    "tqdm",
-    "yfinance",
+    "arch>=5.0,<7",
+    "beautifulsoup4>=4.9",
+    "copulae>=0.7,<1",
+    "financedatabase>=2.0",
+    "matplotlib>=3.3",
+    "muarch>=1.0",
+    "numpy>=1.21,<2",
+    "pandas>=1.1,<3",
+    "pmdarima>=2.0,<3",
+    "pulp>=2.7,<3",
+    "pygad>=3.0,<4",
+    "scikit-posthocs>=0.7",
+    "scipy>=1.7,<2",
+    "seaborn>=0.11",
+    "tqdm>=4.40",
+    "yfinance>=0.2",
 ]
 
 [tool.setuptools.packages.find]
