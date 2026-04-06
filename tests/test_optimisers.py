@@ -45,8 +45,8 @@ class TestMIPOptimiser(unittest.TestCase):
 
     def test_weights_sum_to_one(self):
         result = self._run()
-        if len(result.selected_tickers) >= 2:
-            self.assertAlmostEqual(sum(result.weights), 1.0, places=2)
+        self.assertGreaterEqual(len(result.selected_tickers), 1)
+        self.assertAlmostEqual(sum(result.weights), 1.0, places=4)
 
     def test_sharpe_is_finite(self):
         result = self._run()
@@ -96,8 +96,8 @@ class TestMonteCarloOptimiser(unittest.TestCase):
 
     def test_weights_sum_to_one(self):
         result = self._run()
-        if len(result.selected_tickers) >= 2:
-            self.assertAlmostEqual(sum(result.weights), 1.0, places=2)
+        self.assertGreaterEqual(len(result.selected_tickers), 2)
+        self.assertAlmostEqual(sum(result.weights), 1.0, places=4)
 
     def test_sharpe_is_finite(self):
         result = self._run()
@@ -187,18 +187,68 @@ class TestPygadOptimiser(unittest.TestCase):
         result = self._run()
         self.assertTrue(np.isfinite(result.sharpe_ratio))
 
-    def test_does_not_mutate_globals(self):
-        """PygadOptimiser should not change module-level globals."""
-        from src.optimisers import pygad_ga as op
-        saved_max = op.MAX_NUM_STOCKS
-        saved_min = op.MIN_NUM_STOCKS
-        self._run()
-        self.assertEqual(op.MAX_NUM_STOCKS, saved_max)
-        self.assertEqual(op.MIN_NUM_STOCKS, saved_min)
-
     def test_metadata_has_elapsed(self):
         result = self._run()
         self.assertIn('elapsed_seconds', result.metadata)
+
+
+class TestSeedDeterminism(unittest.TestCase):
+    """Verify that passing a seed produces reproducible results."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = _make_synthetic_prices(n_days=200, n_tickers=20)
+
+    def test_monte_carlo_same_seed_same_result(self):
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        r1 = MonteCarloOptimiser(
+            n_trials=500, min_securities=2, max_securities=5,
+            num_processes=1, seed=42).optimise(self.prices)
+        r2 = MonteCarloOptimiser(
+            n_trials=500, min_securities=2, max_securities=5,
+            num_processes=1, seed=42).optimise(self.prices)
+        self.assertEqual(r1.selected_tickers, r2.selected_tickers)
+        self.assertAlmostEqual(r1.sharpe_ratio, r2.sharpe_ratio)
+
+    def test_monte_carlo_different_seed_different_result(self):
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        r1 = MonteCarloOptimiser(
+            n_trials=500, min_securities=2, max_securities=5,
+            num_processes=1, seed=42).optimise(self.prices)
+        r2 = MonteCarloOptimiser(
+            n_trials=500, min_securities=2, max_securities=5,
+            num_processes=1, seed=99).optimise(self.prices)
+        # With different seeds on 20 tickers, selections should differ
+        self.assertNotEqual(r1.selected_tickers, r2.selected_tickers)
+
+    def test_pygad_same_seed_same_result(self):
+        from src.optimisers.pygad_ga import PygadOptimiser
+        kwargs = dict(num_children=20, num_generations=2,
+                      min_securities=2, max_securities=5,
+                      min_weight=0.0, max_weight=1.0,
+                      target_return=None, use_forecasts=False)
+        r1 = PygadOptimiser(seed=42, **kwargs).optimise(self.prices)
+        r2 = PygadOptimiser(seed=42, **kwargs).optimise(self.prices)
+        self.assertEqual(r1.selected_tickers, r2.selected_tickers)
+        self.assertAlmostEqual(r1.sharpe_ratio, r2.sharpe_ratio, places=4)
+
+
+class TestMIPMaxSecurities(unittest.TestCase):
+    """Verify MIP respects different max_securities values."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = _make_synthetic_prices()
+
+    def test_max_securities_3(self):
+        from src.optimisers.mip import MIPOptimiser
+        result = MIPOptimiser(max_securities=3).optimise(self.prices)
+        self.assertLessEqual(len(result.selected_tickers), 3)
+
+    def test_max_securities_8(self):
+        from src.optimisers.mip import MIPOptimiser
+        result = MIPOptimiser(max_securities=8).optimise(self.prices)
+        self.assertLessEqual(len(result.selected_tickers), 8)
 
 
 if __name__ == '__main__':

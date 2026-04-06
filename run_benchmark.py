@@ -60,9 +60,9 @@ def main():
         return
 
     # Load data
-    from src.optimisers.pygad_ga import load_data
+    from src.portfolio_utils import load_prices_csv
     print(f"Loading data from {args.data_file}...")
-    data = load_data(args.data_file)
+    data = load_prices_csv(args.data_file, min_coverage=0.10)
     print(f"  {data.shape[1]} instruments, {data.shape[0]} days")
 
     # Select adapters

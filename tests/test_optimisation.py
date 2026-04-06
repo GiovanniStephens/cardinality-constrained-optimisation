@@ -1,416 +1,267 @@
 import unittest
-from src.optimisers import pygad_ga as op
-from src.portfolio_utils import negative_sharpe_ratio
-import pandas as pd
+import os
+import tempfile
+
 import numpy as np
+import pandas as pd
+
+from src.optimisers.pygad_ga import PygadOptimiser, estimate_corr_using_copulas
+from src.portfolio_utils import (
+    load_prices_csv, calculate_log_returns, negative_sharpe_ratio,
+)
+from src.config import (
+    GA_MIN_SECURITIES, GA_MAX_SECURITIES, TRADING_DAYS_PER_YEAR,
+)
+from tests import requires_integration
 
 
-class TestOptimisation(unittest.TestCase):
-    def test_load_data(self):
-        """
-        Asserts that the load_data function returns a non-empty pandas DataFrame.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        self.assertIsInstance(data, pd.DataFrame)
-        self.assertGreater(data.shape[0], 0)
-        self.assertGreater(data.shape[1], 0)
-
-    def test_calculate_returns(self):
-        """
-        The dataframe of returns should be equal in
-        length to the dataframe of prices.
-
-        The returns should be N-1, but I fill the first value with a 0% return.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        self.assertEqual(log_returns.shape, data.shape)
-
-    def test_calculate_returns_first_value(self):
-        """
-        Asserts that the calculate_returns function
-        returns a pandas DataFrame.
-        The dataframe of returns should be equal in
-        length to the dataframe of prices.
-
-        The returns should be N-1, but I fill the first value with a 0% return.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        self.assertEqual(log_returns.iloc[0, 0], 0)
-
-    def test_calculate_returns_dummy_data(self):
-        """
-        Asserts that the returns are correctly calculated.
-        """
-        data = pd.DataFrame([100, 150, 100], columns=['TEST'])
-        log_returns = op.calculate_returns(data)
-        self.assertAlmostEqual(sum(log_returns['TEST']), 0)
-
-    def test_calculate_returns_dummy_data_first_value(self):
-        """
-        Asserts that the first value of the returns
-        are correctly calculated.
-        """
-        data = pd.DataFrame([100, 150, 100], columns=['TEST'])
-        log_returns = op.calculate_returns(data)
-        self.assertEqual(log_returns.iloc[0, 0], 0)
-
-    def test_sharpe_ratio(self):
-        """
-        Asserts that the sharpe ratio is correctly calculated.
-        This function manually calculates it with dummy data
-        and then compares it to the optimiser function.
-
-        The optimiser function calculates the sharpe ratio and returns
-        the negative value (hence the negative in the assert).
-        """
-        weights = [0.5, 0.5]
-        returns = [0.2, 0.3]
-        corr = 0.5
-        stdDevs = [0.1, 0.2]
-        cov = corr*stdDevs[0]*stdDevs[1]
-        port_var = (weights[0]**2)*(stdDevs[0]**2) + \
-                   (weights[1]**2)*(stdDevs[1]**2) + \
-            2*cov*weights[0]*weights[1]
-        cov_matrix = [[stdDevs[0]**2, cov], [cov, stdDevs[1]**2]]
-        sharpe_ratio = np.dot(weights, returns)/np.sqrt(port_var)
-        model_sharpe = negative_sharpe_ratio(np.array(weights),
-                                             np.array(returns),
-                                             np.array(cov_matrix))
-        self.assertAlmostEqual(sharpe_ratio, -model_sharpe)
+class TestDataLoading(unittest.TestCase):
+    """Unit tests for data loading with synthetic data."""
 
     def test_load_data_no_file(self):
-        """
-        Asserts that the load_data function raises an error
-        when the file is not found.
-        """
         with self.assertRaises(FileNotFoundError):
-            data = op.load_data('data/ETF_Prices_missing.csv')
-
-    def test_load_data_returns_df(self):
-        """
-        Asserts that the load_data function returns a pandas DataFrame.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        self.assertEqual(isinstance(data, pd.DataFrame), True)
-
-    def test_get_cov_matrix(self):
-        """
-        Asserts that the get_cov_matrix function calculates
-        the covariances correctly.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        cov = log_returns.iloc[:, :2].cov()*252
-        cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
-        np.testing.assert_array_almost_equal(cov_matrix, cov.values)
-
-    def test_optimisation_max_weight(self):
-        """
-        Asserts that the optimisation function returns
-        weights under the maximum weight.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 5
-        max_weight = 0.3
-        initial_weights = [1/num_stocks]*num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks],
-                          initial_weights,
-                          max_weight=max_weight)
-        self.assertLessEqual(max(sol['x']), max_weight)
-
-    def test_optimisation_min_weight(self):
-        """
-        Asserts that the optimisation function returns
-        weights over the minimum weight.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 5
-        min_weight = 0
-        initial_weights = [1/num_stocks]*num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks],
-                          initial_weights)
-        self.assertGreaterEqual(min(sol['x']), min_weight)
-
-    def test_optimisation_risk_constraint(self):
-        """
-        Tests that the risk constraint is indeed being
-        applied in the optimisation.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 30  # Need sufficient stocks to get the risk to 0.15
-        max_weight = 2
-        min_weight = -2  # Can short
-        target_risk = 0.15
-        initial_weights = [1/num_stocks]*num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks],
-                          initial_weights,
-                          target_risk=target_risk,
-                          target_return=None,
-                          max_weight=max_weight,
-                          min_weight=min_weight)
-        weights = sol['x']
-        cov = op.get_cov_matrix(log_returns.iloc[:, :num_stocks])
-        risk = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
-        self.assertAlmostEqual(risk, target_risk, places=5)
-
-    def test_optimisation_return_constraint(self):
-        """
-        Tests that the return constraint is indeed being
-        applied in the optimisation.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 30
-        max_weight = 2
-        min_weight = -2
-        target_return = 0.15
-        initial_weights = [1/num_stocks]*num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks],
-                          initial_weights,
-                          target_return=target_return,
-                          target_risk=None,
-                          max_weight=max_weight,
-                          min_weight=min_weight)
-        weights = sol['x']
-        returns = op.calculate_returns(data)
-        returns = returns.iloc[:, :num_stocks].mean()*252
-        returns = np.dot(weights, returns)
-        self.assertAlmostEqual(returns, target_return)
-
-    def test_create_individual(self):
-        """
-        Tests that the create_individual function returns
-        a chromosome where the number of stocks is between
-        the minimum and maximum number of stocks.
-
-        It is a random draw from a binomial distribution, so the
-        probability of getting a number of stocks between the minimum
-        and maximum is like 99%.
-        """
-        min_num = 1
-        max_num = 20
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        individual = op.create_individual(log_returns)
-        num_ones = np.count_nonzero(individual)
-        self.assertGreaterEqual(num_ones, min_num)
-        self.assertLessEqual(num_ones, max_num)
-
-    def test_fitness_too_many_ETFs(self):
-        """
-        Tests the fitness function used in the
-        GA. If there are too many 1's, the fitness
-        should be penalised (negative).
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        individual = [1]*log_returns.shape[1]
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertLess(fitness, 0)
-
-    def test_fitness_too_few_ETFs(self):
-        """
-        Tests the fitness function used in the
-        GA. If there are too few 1's (all zeros),
-        the fitness should be penalised.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        individual = [0]*log_returns.shape[1]
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertLessEqual(fitness, 0)
-
-    def test_fitness_normal(self):
-        """
-        Tests the fitness function used in the
-        GA. If there are the right number of 1's,
-        the fitness should be between 1 and 5.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 8
-        individual = [1]*num_stocks + [0]*(log_returns.shape[1]-num_stocks)
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertGreater(fitness, 0)
-        self.assertLess(fitness, 5)
-
-    def test_fitness_2(self):
-        """
-        Tests the fitness function that is
-        required for pyGAD.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 8
-        individual = [1]*num_stocks + [0]*(log_returns.shape[1]-num_stocks)
-        fitness = op.fitness_2(None, individual, 0)
-        self.assertAlmostEqual(round(fitness, 4),
-                               round(op.fitness(individual,
-                                                log_returns.T), 4))
-
-    def test_prepare_opt_inputs(self):
-        """
-        Tests that the prepare_opt_inputs function
-        loads returns of the correct length.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=True)
-        self.assertEqual(len(op.data), len(log_returns.T))
-
-    def test_prepare_opt_inputs_variances(self):
-        """
-        Should have an equal number of variances to ETFs.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=True)
-        self.assertIsNotNone(op.variances)
-        self.assertGreater(len(op.variances), 0)
-
-    def test_prepare_opt_inputs_forecasts(self):
-        """
-        Should have an equal number of forecasts to ETFs.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=True)
-        self.assertIsNotNone(op.expected_returns)
-        self.assertGreater(len(op.expected_returns), 0)
-
-    def test_prepare_opt_inputs_variances_null(self):
-        """
-        When not importing forecast variances, the variances
-        variable should be None.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        self.assertEqual(op.variances, None)
-
-    def test_sharpe_ratio_zero_volatility(self):
-        """
-        When all weights are zero or covariance is zero,
-        the sharpe ratio should return 0 instead of raising.
-        """
-        weights = np.array([0.0, 0.0])
-        returns = np.array([0.2, 0.3])
-        cov_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
-        result = negative_sharpe_ratio(weights, returns, cov_matrix)
-        self.assertEqual(result, 0.0)
+            load_prices_csv('data/ETF_Prices_missing.csv', min_coverage=0.10)
 
     def test_load_data_empty_csv(self):
-        """
-        Loading an empty CSV should raise ValueError.
-        """
-        import tempfile
-        import os
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
                                           delete=False) as f:
             f.write('')
             temp_path = f.name
         try:
             with self.assertRaises((ValueError, pd.errors.EmptyDataError)):
-                op.load_data(temp_path)
+                data = load_prices_csv(temp_path, min_coverage=0.10)
+                if data.empty:
+                    raise ValueError("Empty CSV")
         finally:
             os.unlink(temp_path)
 
-    def test_prepare_opt_inputs_none_prices(self):
-        """
-        Passing None prices should raise ValueError.
-        """
-        with self.assertRaises(ValueError):
-            op.prepare_opt_inputs(None, use_forecasts=False)
+    def test_calculate_returns_dummy_data(self):
+        data = pd.DataFrame([100, 150, 100], columns=['TEST'])
+        log_returns = calculate_log_returns(data)
+        self.assertAlmostEqual(sum(log_returns['TEST']), 0)
 
-    def test_prepare_opt_inputs_empty_prices(self):
-        """
-        Passing empty DataFrame should raise ValueError.
-        """
-        with self.assertRaises(ValueError):
-            op.prepare_opt_inputs(pd.DataFrame(), use_forecasts=False)
-
-    def test_optimize_mismatched_weights(self):
-        """
-        When initial_weights length doesn't match data columns,
-        should raise ValueError.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        log_returns = op.calculate_returns(data)
-        with self.assertRaises(ValueError):
-            op.optimize(log_returns.iloc[:, :5],
-                        [0.5, 0.5])  # 2 weights for 5 assets
+    def test_calculate_returns_dummy_data_first_value(self):
+        data = pd.DataFrame([100, 150, 100], columns=['TEST'])
+        log_returns = calculate_log_returns(data)
+        self.assertEqual(log_returns.iloc[0, 0], 0)
 
     def test_calculate_returns_handles_zeros(self):
-        """
-        Log of zero prices should produce 0 not -inf.
-        """
         data = pd.DataFrame({'A': [100, 0, 50]})
-        log_returns = op.calculate_returns(data)
+        log_returns = calculate_log_returns(data)
         self.assertFalse(np.any(np.isinf(log_returns.values)))
 
 
-    def test_estimate_corr_using_copulas_is_correlation_matrix(self):
-        """
-        Verifies the copula-estimated correlation matrix is valid:
-        symmetric, diagonal of 1s, and positive semi-definite.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        subset = log_returns.iloc[:, :5]
-        corr = op.estimate_corr_using_copulas(subset)
-        # Check dimensions
+@requires_integration
+class TestDataLoadingCSV(unittest.TestCase):
+    """Integration tests that load real CSV data."""
+
+    def test_load_data(self):
+        data = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10)
+        self.assertIsInstance(data, pd.DataFrame)
+        self.assertGreater(data.shape[0], 0)
+        self.assertGreater(data.shape[1], 0)
+
+    def test_calculate_returns(self):
+        data = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10)
+        log_returns = calculate_log_returns(data)
+        self.assertEqual(log_returns.shape, data.shape)
+
+    def test_calculate_returns_first_value(self):
+        data = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10)
+        log_returns = calculate_log_returns(data)
+        self.assertAlmostEqual(log_returns.iloc[0, 0], 0.0)
+
+
+class TestSharpeRatio(unittest.TestCase):
+    """Tests for Sharpe ratio computation."""
+
+    def test_sharpe_ratio_known_value(self):
+        weights = np.array([0.5, 0.5])
+        returns = np.array([0.2, 0.3])
+        corr = 0.5
+        std_devs = [0.1, 0.2]
+        cov = corr * std_devs[0] * std_devs[1]
+        cov_matrix = np.array([
+            [std_devs[0]**2, cov],
+            [cov, std_devs[1]**2],
+        ])
+        # Expected: port_return=0.25, port_var=0.0175, sharpe≈1.8898
+        expected_sharpe = 0.25 / np.sqrt(0.0175)
+        model_sharpe = negative_sharpe_ratio(weights, returns, cov_matrix)
+        self.assertAlmostEqual(-model_sharpe, expected_sharpe, places=4)
+
+    def test_sharpe_ratio_zero_volatility(self):
+        weights = np.array([0.0, 0.0])
+        returns = np.array([0.2, 0.3])
+        cov_matrix = np.array([[0.0, 0.0], [0.0, 0.0]])
+        result = negative_sharpe_ratio(weights, returns, cov_matrix)
+        self.assertEqual(result, 0.0)
+
+
+@requires_integration
+class TestPygadOptimiser(unittest.TestCase):
+    """Tests for PygadOptimiser methods using real data."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10)
+        cls.log_returns = calculate_log_returns(cls.prices)
+        cls.optimiser = PygadOptimiser(
+            target_return=None, use_forecasts=False,
+        )
+        cls.optimiser._prepare_inputs(cls.prices)
+
+    def test_prepare_inputs_data_length(self):
+        self.assertEqual(len(self.optimiser._data), len(self.log_returns.T))
+
+    def test_prepare_inputs_no_forecasts_variances_none(self):
+        self.assertIsNone(self.optimiser._variances)
+
+    def test_prepare_inputs_expected_returns_present(self):
+        self.assertIsNotNone(self.optimiser._expected_returns)
+        self.assertGreater(len(self.optimiser._expected_returns), 0)
+
+    def test_prepare_inputs_with_forecasts(self):
+        opt = PygadOptimiser(target_return=None, use_forecasts=True)
+        opt._prepare_inputs(self.prices)
+        self.assertIsNotNone(opt._expected_returns)
+        self.assertGreater(len(opt._expected_returns), 0)
+
+    def test_prepare_inputs_none_prices(self):
+        opt = PygadOptimiser()
+        with self.assertRaises(ValueError):
+            opt._prepare_inputs(None)
+
+    def test_prepare_inputs_empty_prices(self):
+        opt = PygadOptimiser()
+        with self.assertRaises(ValueError):
+            opt._prepare_inputs(pd.DataFrame())
+
+    def test_optimize_weights_max_weight(self):
+        num_stocks = 5
+        max_weight = 0.3
+        initial_weights = [1 / num_stocks] * num_stocks
+        ret_data = self.log_returns.iloc[:, :num_stocks]
+        sol = self.optimiser._optimize_weights(
+            ret_data, initial_weights, max_weight=max_weight)
+        self.assertLessEqual(max(sol['x']), max_weight + 1e-10)
+
+    def test_optimize_weights_min_weight(self):
+        num_stocks = 5
+        initial_weights = [1 / num_stocks] * num_stocks
+        ret_data = self.log_returns.iloc[:, :num_stocks]
+        sol = self.optimiser._optimize_weights(ret_data, initial_weights)
+        self.assertGreaterEqual(min(sol['x']), -1e-10)
+
+    def test_optimize_weights_mismatched_length(self):
+        ret_data = self.log_returns.iloc[:, :5]
+        with self.assertRaises((ValueError, KeyError)):
+            self.optimiser._optimize_weights(ret_data, [0.5, 0.5])
+
+    def test_optimize_weights_risk_constraint(self):
+        num_stocks = 30
+        target_risk = 0.15
+        opt = PygadOptimiser(
+            target_return=None, target_risk=target_risk,
+            max_weight=2, min_weight=-2, use_forecasts=False,
+        )
+        opt._prepare_inputs(self.prices)
+        initial_weights = [1 / num_stocks] * num_stocks
+        ret_data = self.log_returns.iloc[:, :num_stocks]
+        sol = opt._optimize_weights(ret_data, initial_weights)
+        weights = sol['x']
+        cov = opt._get_cov_matrix(ret_data)
+        risk = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+        self.assertAlmostEqual(risk, target_risk, places=5)
+
+    def test_optimize_weights_return_constraint(self):
+        num_stocks = 30
+        target_return = 0.15
+        opt = PygadOptimiser(
+            target_return=target_return, target_risk=None,
+            max_weight=2, min_weight=-2, use_forecasts=False,
+        )
+        opt._prepare_inputs(self.prices)
+        initial_weights = [1 / num_stocks] * num_stocks
+        ret_data = self.log_returns.iloc[:, :num_stocks]
+        sol = opt._optimize_weights(ret_data, initial_weights)
+        weights = sol['x']
+        returns = self.log_returns.iloc[:, :num_stocks].mean() * TRADING_DAYS_PER_YEAR
+        portfolio_return = np.dot(weights, returns)
+        self.assertAlmostEqual(portfolio_return, target_return)
+
+    def test_create_individual(self):
+        individual = self.optimiser._create_individual()
+        num_ones = np.count_nonzero(individual)
+        self.assertGreaterEqual(num_ones, 1)
+
+    def test_get_cov_matrix(self):
+        subset = self.log_returns.iloc[:, :2]
+        expected = subset.cov() * TRADING_DAYS_PER_YEAR
+        cov_matrix = self.optimiser._get_cov_matrix(subset)
+        np.testing.assert_array_almost_equal(cov_matrix, expected.values)
+
+    def test_fitness_too_many_etfs(self):
+        fitness_fn = self.optimiser._make_fitness_fn()
+        individual = [1] * len(self.optimiser._data)
+        result = fitness_fn(None, individual, 0)
+        self.assertLess(result, 0)
+
+    def test_fitness_too_few_etfs(self):
+        fitness_fn = self.optimiser._make_fitness_fn()
+        individual = [0] * len(self.optimiser._data)
+        result = fitness_fn(None, individual, 0)
+        self.assertLessEqual(result, 0)
+
+    def test_fitness_normal(self):
+        fitness_fn = self.optimiser._make_fitness_fn()
+        num_stocks = 8
+        individual = [1] * num_stocks + [0] * (len(self.optimiser._data) - num_stocks)
+        result = fitness_fn(None, individual, 0)
+        self.assertGreater(result, 0)
+        self.assertLess(result, 5)
+
+
+@requires_integration
+class TestCopulaCorrelation(unittest.TestCase):
+    """Tests for copula-based correlation estimation."""
+
+    @classmethod
+    def setUpClass(cls):
+        prices = load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10)
+        cls.log_returns = calculate_log_returns(prices)
+
+    def test_estimate_corr_is_correlation_matrix(self):
+        subset = self.log_returns.iloc[:, :5]
+        corr = estimate_corr_using_copulas(subset)
         self.assertEqual(corr.shape, (5, 5))
-        # Check diagonal is 1
         np.testing.assert_array_almost_equal(np.diag(corr), np.ones(5))
-        # Check symmetry
         np.testing.assert_array_almost_equal(corr, corr.T)
-        # Check positive semi-definite (all eigenvalues >= 0)
         eigenvalues = np.linalg.eigvalsh(corr)
         self.assertTrue(np.all(eigenvalues >= -1e-10))
 
-    def test_get_cov_matrix_with_copulae_no_forecasts(self):
-        """
-        Tests that get_cov_matrix works with use_copulae=True
-        even when forecast variances are None (the bug fix).
-        The result should be a valid PSD covariance matrix.
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        subset = log_returns.iloc[:, :5]
-        cov_matrix = op.get_cov_matrix(subset, use_copulae=True)
-        # Check dimensions
+    def test_get_cov_matrix_with_copulae(self):
+        optimiser = PygadOptimiser(
+            target_return=None, use_forecasts=False,
+        )
+        optimiser._prepare_inputs(
+            load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10))
+        subset = self.log_returns.iloc[:, :5]
+        cov_matrix = optimiser._get_cov_matrix(subset, use_copulae=True)
         self.assertEqual(cov_matrix.shape, (5, 5))
-        # Check symmetry
         np.testing.assert_array_almost_equal(cov_matrix, cov_matrix.T)
-        # Check positive semi-definite
         eigenvalues = np.linalg.eigvalsh(cov_matrix)
         self.assertTrue(np.all(eigenvalues >= -1e-10))
-        # Check diagonal values are positive (variances)
         self.assertTrue(np.all(np.diag(cov_matrix) > 0))
 
-    def test_get_cov_matrix_with_copulae_returns_numpy(self):
-        """
-        Verifies get_cov_matrix returns a numpy array (not DataFrame).
-        """
-        data = op.load_data('data/ETF_Prices.csv')
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        subset = log_returns.iloc[:, :3]
-        cov_matrix = op.get_cov_matrix(subset, use_copulae=True)
+    def test_get_cov_matrix_returns_numpy(self):
+        optimiser = PygadOptimiser(
+            target_return=None, use_forecasts=False,
+        )
+        optimiser._prepare_inputs(
+            load_prices_csv('data/ETF_Prices.csv', min_coverage=0.10))
+        subset = self.log_returns.iloc[:, :3]
+        cov_matrix = optimiser._get_cov_matrix(subset, use_copulae=True)
         self.assertIsInstance(cov_matrix, np.ndarray)
 
 

@@ -35,14 +35,14 @@ class SimpleGAAdapter(OptimiserAdapter):
 
     def __init__(self, num_generations=200, total_population_size=2000,
                  num_elites=50, migration_interval=10, migration_rate=0.1,
-                 min_etfs=3, max_etfs=15, min_return=None):
+                 min_securities=3, max_securities=15, min_return=None):
         self.num_generations = num_generations
         self.total_population_size = total_population_size
         self.num_elites = num_elites
         self.migration_interval = migration_interval
         self.migration_rate = migration_rate
-        self.min_etfs = min_etfs
-        self.max_etfs = max_etfs
+        self.min_securities = min_securities
+        self.max_securities = max_securities
         self.min_return = min_return
 
     def run(self, data: pd.DataFrame, time_budget: float,
@@ -67,7 +67,7 @@ class SimpleGAAdapter(OptimiserAdapter):
                  mutation_rate, self.num_elites, self.migration_interval,
                  self.migration_rate, return_dict,
                  convergence_log, start_time, time_budget,
-                 self.min_etfs, self.max_etfs, self.min_return)
+                 self.min_securities, self.max_securities, self.min_return)
                 for i in range(num_islands)
             ]
             results = pool.starmap(genetic_algorithm, args)
@@ -130,40 +130,46 @@ class SimpleGAAdapter(OptimiserAdapter):
 
 
 class PygadGAAdapter(OptimiserAdapter):
-    """Wraps optimisation.py (pygad-based GA with copula support)."""
+    """Wraps PygadOptimiser (pygad-based GA with copula support)."""
 
     name = "Pygad GA"
 
     def __init__(self, num_generations=200, population_size=50,
-                 min_etfs=3, max_etfs=15):
+                 min_securities=3, max_securities=15):
         self.num_generations = num_generations
         self.population_size = population_size
-        self.min_etfs = min_etfs
-        self.max_etfs = max_etfs
+        self.min_securities = min_securities
+        self.max_securities = max_securities
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pygad
-        from src.optimisers import pygad_ga as opt_mod
+        from src.optimisers.pygad_ga import PygadOptimiser
 
         np.random.seed(seed)
         start_time = time.time()
 
-        # Prepare global state in optimisation module
-        opt_mod.prepare_opt_inputs(data, use_forecasts=False)
-        saved_max = opt_mod.MAX_NUM_STOCKS
-        saved_min = opt_mod.MIN_NUM_STOCKS
-        opt_mod.MAX_NUM_STOCKS = self.max_etfs
-        opt_mod.MIN_NUM_STOCKS = self.min_etfs
+        # Create optimiser instance (no global mutation)
+        optimiser = PygadOptimiser(
+            num_children=self.population_size,
+            num_generations=self.num_generations,
+            min_securities=self.min_securities,
+            max_securities=self.max_securities,
+            target_return=None,
+            use_forecasts=False,
+        )
+        optimiser._prepare_inputs(data)
 
         convergence = []
         best_so_far = float('-inf')
 
-        # Wrap fitness to bail out early when time is up
+        # Get fitness function from optimiser, wrap with time limit
+        base_fitness_fn = optimiser._make_fitness_fn()
+
         def timed_fitness(ga_instance, solution, solution_idx):
             if (time.time() - start_time) > time_budget:
                 return -1e6
-            return opt_mod.fitness_2(ga_instance, solution, solution_idx)
+            return base_fitness_fn(ga_instance, solution, solution_idx)
 
         def on_gen_callback(ga_instance):
             nonlocal best_so_far
@@ -186,7 +192,7 @@ class PygadGAAdapter(OptimiserAdapter):
 
         try:
             initial_pop = np.array([
-                opt_mod.create_individual(opt_mod.data)
+                optimiser._create_individual()
                 for _ in range(self.population_size)
             ])
 
@@ -215,9 +221,9 @@ class PygadGAAdapter(OptimiserAdapter):
             )
             best_fitness = float(solution_fitness)
 
-            # Extract selected ETFs
+            # Extract selected ETFs using the original data columns
             indices = np.array(solution).astype(bool)
-            all_tickers = list(opt_mod.data.columns)
+            all_tickers = list(data.columns)
             selected_etfs = [all_tickers[i] for i in range(len(indices)) if indices[i]]
 
             # Try SLSQP weight optimisation
@@ -225,16 +231,11 @@ class PygadGAAdapter(OptimiserAdapter):
             remaining = time_budget - (time.time() - start_time)
             if remaining > 1.0 and len(selected_etfs) >= 2:
                 try:
-                    subset = opt_mod.data.iloc[indices, :]
-                    random_weights = np.random.random(np.count_nonzero(solution))
+                    log_rets = optimiser._data.loc[selected_etfs, :]
+                    random_weights = np.random.random(len(selected_etfs))
                     random_weights /= np.sum(random_weights)
-                    sol = opt_mod.optimize(
-                        subset.transpose(),
-                        random_weights,
-                        target_return=opt_mod.TARGET_RETURN,
-                        target_risk=opt_mod.TARGET_RISK,
-                        max_weight=opt_mod.MAX_WEIGHT,
-                        min_weight=opt_mod.MIN_WEIGHT,
+                    sol = optimiser._optimize_weights(
+                        log_rets.transpose(), random_weights,
                     )
                     if sol.success:
                         best_fitness = -sol.fun
@@ -242,13 +243,10 @@ class PygadGAAdapter(OptimiserAdapter):
                 except Exception:
                     pass
 
-        except Exception as e:
+        except Exception:
             best_fitness = float('-inf')
             selected_etfs = None
             optimised_weights = None
-        finally:
-            opt_mod.MAX_NUM_STOCKS = saved_max
-            opt_mod.MIN_NUM_STOCKS = saved_min
 
         elapsed = time.time() - start_time
         return BenchmarkResult(
@@ -268,9 +266,9 @@ class MonteCarloAdapter(OptimiserAdapter):
 
     name = "Monte Carlo"
 
-    def __init__(self, min_etfs=3, max_etfs=15, log_interval=5000):
-        self.min_etfs = min_etfs
-        self.max_etfs = max_etfs
+    def __init__(self, min_securities=3, max_securities=15, log_interval=5000):
+        self.min_securities = min_securities
+        self.max_securities = max_securities
         self.log_interval = log_interval
 
     def run(self, data: pd.DataFrame, time_budget: float,
@@ -300,7 +298,7 @@ class MonteCarloAdapter(OptimiserAdapter):
                 break
 
             # Generate random portfolio
-            num_selected = np.random.randint(self.min_etfs, self.max_etfs + 1)
+            num_selected = np.random.randint(self.min_securities, self.max_securities + 1)
             portfolio = np.zeros(num_etfs, dtype=int)
             selected_indices = np.random.choice(num_etfs, num_selected, replace=False)
             portfolio[selected_indices] = 1
@@ -308,7 +306,7 @@ class MonteCarloAdapter(OptimiserAdapter):
             # Calculate fitness inline with our constraints
             sel = portfolio == 1
             n_sel = np.sum(sel)
-            if n_sel < self.min_etfs or n_sel > self.max_etfs:
+            if n_sel < self.min_securities or n_sel > self.max_securities:
                 trial += 1
                 continue
             filtered_returns = expected_returns[sel]
@@ -361,8 +359,8 @@ class MIPAdapter(OptimiserAdapter):
 
     name = "MILP"
 
-    def __init__(self, max_etfs=15, risk_aversion=0.8):
-        self.max_etfs = max_etfs
+    def __init__(self, max_securities=15, risk_aversion=0.8):
+        self.max_securities = max_securities
         self.risk_aversion = risk_aversion
 
     def run(self, data: pd.DataFrame, time_budget: float,
@@ -390,7 +388,7 @@ class MIPAdapter(OptimiserAdapter):
             - self.risk_aversion * volatilities[etf] * selection[etf]
             for etf in etfs
         ]), "Risk_Adjusted_Return"
-        problem += pulp.lpSum([selection[etf] for etf in etfs]) <= self.max_etfs, "Max_ETFs"
+        problem += pulp.lpSum([selection[etf] for etf in etfs]) <= self.max_securities, "Max_ETFs"
 
         # Solve with time limit
         solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=time_budget)
@@ -530,7 +528,7 @@ class CppGAAdapter(OptimiserAdapter):
     def __init__(self, binary_path='./cpp/optimisation',
                  num_generations=200, total_population_size=2000,
                  num_elites=50, migration_interval=10, migration_rate=0.1,
-                 min_etfs=3, max_etfs=15, min_return=None,
+                 min_securities=3, max_securities=15, min_return=None,
                  num_islands=4):
         self.binary_path = binary_path
         self.num_generations = num_generations
@@ -538,8 +536,8 @@ class CppGAAdapter(OptimiserAdapter):
         self.num_elites = num_elites
         self.migration_interval = migration_interval
         self.migration_rate = migration_rate
-        self.min_etfs = min_etfs
-        self.max_etfs = max_etfs
+        self.min_securities = min_securities
+        self.max_securities = max_securities
         self.min_return = min_return
         self.num_islands = num_islands
 
@@ -573,8 +571,8 @@ class CppGAAdapter(OptimiserAdapter):
                 '--time-budget', str(time_budget),
                 '--pop-size', str(self.pop_size),
                 '--generations', str(self.num_generations),
-                '--min-etfs', str(self.min_etfs),
-                '--max-etfs', str(self.max_etfs),
+                '--min-etfs', str(self.min_securities),
+                '--max-etfs', str(self.max_securities),
                 '--num-islands', str(self.num_islands),
                 '--num-elites', str(self.num_elites),
                 '--migration-interval', str(self.migration_interval),
@@ -640,11 +638,11 @@ class CppMonteCarloAdapter(OptimiserAdapter):
     name = "Monte Carlo (C++)"
 
     def __init__(self, binary_path='./cpp/optimisation',
-                 min_etfs=3, max_etfs=15, min_return=None,
+                 min_securities=3, max_securities=15, min_return=None,
                  num_threads=None, mc_log_interval=5000):
         self.binary_path = binary_path
-        self.min_etfs = min_etfs
-        self.max_etfs = max_etfs
+        self.min_securities = min_securities
+        self.max_securities = max_securities
         self.min_return = min_return
         self.num_threads = num_threads or min(os.cpu_count(), 8)
         self.mc_log_interval = mc_log_interval
@@ -676,8 +674,8 @@ class CppMonteCarloAdapter(OptimiserAdapter):
                 '--data', tmp.name,
                 '--seed', str(seed),
                 '--time-budget', str(time_budget),
-                '--min-etfs', str(self.min_etfs),
-                '--max-etfs', str(self.max_etfs),
+                '--min-etfs', str(self.min_securities),
+                '--max-etfs', str(self.max_securities),
                 '--num-islands', str(self.num_threads),
                 '--risk-free-rate', '0.0',
                 '--mc-log-interval', str(self.mc_log_interval),

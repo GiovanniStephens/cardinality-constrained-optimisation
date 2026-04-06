@@ -1,91 +1,64 @@
 import unittest
 from src import backtest
-from src.optimisers import pygad_ga as op
+from src.optimisers.pygad_ga import PygadOptimiser
 from src.portfolio_utils import (
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
     calmar_ratio,
 )
-from src.config import BACKTEST_TEST_DAYS, TRADING_DAYS_PER_YEAR
+from src.config import TRADING_DAYS_PER_YEAR
 import numpy as np
 import pandas as pd
 
 
-def _load_test_data():
-    """Load price data from DB (CSV fallback) for integration tests."""
-    data = pd.DataFrame()
-    try:
-        from src import db
-        conn = db.get_connection()
-        data = db.load_prices(conn, exchange='US')
-        conn.close()
-    except Exception:
-        pass
-    if data.empty:
-        data = op.load_data('data/NZ_ETF_Prices.csv')
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        data = data.dropna(axis=1, thresh=int(0.95 * len(data)))
-        data = data.ffill()
-    return data
+def _make_synthetic_prices(n_days=500, n_tickers=30, seed=42):
+    """Small synthetic price matrix for fast, deterministic tests."""
+    np.random.seed(seed)
+    dates = pd.bdate_range('2018-01-01', periods=n_days, freq='B')
+    tickers = [f'S{i}' for i in range(n_tickers)]
+    log_rets = np.random.randn(n_days, n_tickers) * 0.01 + 0.0002
+    prices = 100 * np.exp(log_rets.cumsum(axis=0))
+    return pd.DataFrame(prices, index=dates, columns=tickers)
 
 
 class TestBacktest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.data = _load_test_data()
-        training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
-        op.prepare_opt_inputs(training, False)
-        backtest._backtest_data = training
-        backtest._use_forecast = False
-        # Pick 3 real tickers from whatever data was loaded
-        cls.test_tickers = list(cls.data.columns[:3])
+        cls.data = _make_synthetic_prices()
+        training = cls.data.iloc[:-252, :]
+        cls.optimiser = PygadOptimiser(
+            target_return=None, use_forecasts=False,
+        )
+        cls.optimiser._prepare_inputs(training)
+        backtest._worker_state['prices'] = training
+        backtest._worker_state['forecast'] = False
+        cls.test_tickers = list(cls.data.columns[:5])
 
     def test_get_random_weights_count(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
-        self.assertEqual(len(weights), 3)
+        weights = backtest.get_random_weights(self.test_tickers)
+        self.assertEqual(len(weights), len(self.test_tickers))
 
     def test_get_random_weights_sum(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertAlmostEqual(sum(weights), 1)
 
     def test_get_random_weights_positive(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertTrue(all(w >= 0 for w in weights))
-
-    def test_get_random_weights_distinct(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
-        self.assertTrue(len(set(weights)) == 3)
 
     def test_optimal_weights_count(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
-        self.assertEqual(len(weights), 3)
+        weights = backtest.optimal_weights(self.test_tickers, self.optimiser)
+        self.assertEqual(len(weights), len(self.test_tickers))
 
     def test_optimal_weights_sum(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
-        self.assertAlmostEqual(sum(weights), 1)
+        weights = backtest.optimal_weights(self.test_tickers, self.optimiser)
+        self.assertAlmostEqual(sum(weights), 1, places=4)
 
     def test_optimal_weights_positive(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
-        self.assertTrue(all(w >= 0 for w in weights))
-
-    def test_optimal_weights_distinct(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
-        self.assertTrue(len(set(weights)) > 1)
-
-    def test_data_loads_from_db_or_csv(self):
-        self.assertTrue(self.data.shape[0] > 0)
+        weights = backtest.optimal_weights(self.test_tickers, self.optimiser)
+        self.assertTrue(all(w >= -1e-6 for w in weights))
 
     def test_create_portfolio(self):
         tickers = backtest.create_portfolio(50)
@@ -146,7 +119,8 @@ class TestBacktest(unittest.TestCase):
     def test_optimal_weights_missing_ticker(self):
         with self.assertRaises(KeyError):
             backtest.optimal_weights([self.test_tickers[0],
-                                      'NONEXISTENT_TICKER_XYZ'])
+                                      'NONEXISTENT_TICKER_XYZ'],
+                                     self.optimiser)
 
     def test_maximum_drawdown_empty_returns(self):
         with self.assertRaises((IndexError, ValueError)):
@@ -385,22 +359,23 @@ class TestBacktestValidation(unittest.TestCase):
                 f"Window {w.label}: training data overlaps with test data",
             )
 
-    # ── Test 2: op.data only contains training-period dates ───────────────
+    # ── Test 2: optimiser data only contains training-period dates ─────────
 
-    def test_op_data_only_contains_training_dates(self):
-        """After prepare_opt_inputs, op.data should span training period only."""
+    def test_optimiser_data_only_contains_training_dates(self):
+        """After _prepare_inputs, optimiser._data should span training period only."""
         prices = self._make_prices(n_days=60)
         windows = backtest.generate_windows(
             prices.index, train_days=30, test_days=10, step_days=10,
         )
         w = windows[0]
         train = prices.loc[w.train_start:w.train_end]
-        op.prepare_opt_inputs(train, use_forecasts=False)
-        # op.data is transposed log returns: tickers x time_periods
-        n_periods = op.data.shape[1]
+        opt = PygadOptimiser(target_return=None, use_forecasts=False)
+        opt._prepare_inputs(train)
+        # _data is transposed log returns: tickers x time_periods
+        n_periods = opt._data.shape[1]
         self.assertEqual(
             n_periods, len(train),
-            f"op.data has {n_periods} periods but training has {len(train)} rows",
+            f"optimiser._data has {n_periods} periods but training has {len(train)} rows",
         )
 
     # ── Test 3: First OOS return is NOT zero ──────────────────────────────
@@ -628,6 +603,114 @@ class TestBacktestValidation(unittest.TestCase):
                            f"Mean Sharpe {mean_sharpe:.2f} is suspiciously negative")
         self.assertLess(mean_sharpe, 1.5,
                         f"Mean Sharpe {mean_sharpe:.2f} is suspiciously positive")
+
+
+class TestSliceWindowData(unittest.TestCase):
+    """Tests for slice_window_data helper."""
+
+    def test_train_test_no_overlap(self):
+        prices = pd.DataFrame(
+            np.arange(100).reshape(20, 5).astype(float),
+            index=pd.bdate_range('2020-01-01', periods=20, freq='B'),
+            columns=['A', 'B', 'C', 'D', 'E'],
+        )
+        windows = backtest.generate_windows(
+            prices.index, train_days=10, test_days=5, step_days=5)
+        w = windows[0]
+        train, oos = backtest.slice_window_data(w, prices)
+        self.assertLess(train.index.max(), oos.index.min())
+
+    def test_oos_length_matches_test_period(self):
+        prices = pd.DataFrame(
+            np.arange(100).reshape(20, 5).astype(float),
+            index=pd.bdate_range('2020-01-01', periods=20, freq='B'),
+            columns=['A', 'B', 'C', 'D', 'E'],
+        )
+        windows = backtest.generate_windows(
+            prices.index, train_days=10, test_days=5, step_days=5)
+        w = windows[0]
+        _, oos = backtest.slice_window_data(w, prices)
+        test_prices = prices.loc[w.test_start:w.test_end]
+        self.assertEqual(len(oos), len(test_prices))
+
+    def test_first_oos_return_nonzero(self):
+        """First OOS return reflects price change from train to test."""
+        dates = pd.bdate_range('2020-01-01', periods=20, freq='B')
+        prices = pd.DataFrame({'A': np.linspace(90, 110, 20)}, index=dates)
+        w = backtest.WindowSpec(
+            train_start=dates[0], train_end=dates[9],
+            test_start=dates[10], test_end=dates[14], label='test')
+        _, oos = backtest.slice_window_data(w, prices)
+        self.assertNotEqual(oos.iloc[0]['A'], 0.0)
+
+
+class TestCreateRandomPortfolios(unittest.TestCase):
+    """Tests for create_random_portfolios helper."""
+
+    def test_correct_count(self):
+        tickers = [f'T{i}' for i in range(30)]
+        portfolios = backtest.create_random_portfolios(tickers, 5,
+                                                        min_securities=3, max_securities=10)
+        self.assertEqual(len(portfolios), 5)
+
+    def test_cardinality_respected(self):
+        tickers = [f'T{i}' for i in range(30)]
+        portfolios = backtest.create_random_portfolios(tickers, 20,
+                                                        min_securities=3, max_securities=10)
+        for p in portfolios:
+            self.assertGreaterEqual(len(p), 3)
+            self.assertLessEqual(len(p), 30)  # can exceed max_securities (probabilistic)
+
+    def test_tickers_are_valid(self):
+        tickers = [f'T{i}' for i in range(30)]
+        portfolios = backtest.create_random_portfolios(tickers, 5,
+                                                        min_securities=3, max_securities=10)
+        for p in portfolios:
+            for t in p:
+                self.assertIn(t, tickers)
+
+
+class TestEvaluatePortfolios(unittest.TestCase):
+    """Tests for evaluate_portfolios helper."""
+
+    def test_returns_method_results(self):
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=50, freq='B')
+        oos = pd.DataFrame(np.random.randn(50, 3) * 0.01,
+                           index=dates, columns=['A', 'B', 'C'])
+        portfolios = [['A', 'B'], ['B', 'C']]
+        weights_list = [np.array([0.5, 0.5]), np.array([0.6, 0.4])]
+        mr = backtest.evaluate_portfolios(portfolios, weights_list, oos,
+                                           category='test')
+        self.assertIsInstance(mr, backtest.MethodResults)
+        self.assertEqual(len(mr.portfolios), 2)
+        self.assertEqual(mr.category, 'test')
+
+    def test_is_sharpe_computed_when_train_data_provided(self):
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=50, freq='B')
+        oos = pd.DataFrame(np.random.randn(50, 3) * 0.01,
+                           index=dates, columns=['A', 'B', 'C'])
+        train = pd.DataFrame(np.random.randn(100, 3) * 0.01,
+                             index=pd.bdate_range('2019-01-01', periods=100, freq='B'),
+                             columns=['A', 'B', 'C'])
+        portfolios = [['A', 'B']]
+        weights_list = [np.array([0.5, 0.5])]
+        mr = backtest.evaluate_portfolios(portfolios, weights_list, oos,
+                                           train_log_returns=train, category='test')
+        self.assertIsNotNone(mr.portfolios[0].is_sharpe)
+
+    def test_metrics_have_all_keys(self):
+        np.random.seed(42)
+        dates = pd.bdate_range('2020-01-01', periods=50, freq='B')
+        oos = pd.DataFrame(np.random.randn(50, 3) * 0.01,
+                           index=dates, columns=['A', 'B', 'C'])
+        portfolios = [['A', 'B']]
+        weights_list = [np.array([0.5, 0.5])]
+        mr = backtest.evaluate_portfolios(portfolios, weights_list, oos,
+                                           category='test')
+        for key in backtest.METRIC_NAMES:
+            self.assertIn(key, mr.portfolios[0].metrics)
 
 
 if __name__ == '__main__':

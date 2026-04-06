@@ -7,8 +7,13 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
-from src.optimisers import pygad_ga as op
-from src.config import BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE
+from src.portfolio_utils import load_prices_csv, calculate_log_returns
+from src.config import (
+    BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE,
+    FORECAST_EXPECTED_RETURNS_PATH, FORECAST_VARIANCES_PATH,
+    ARIMA_START_P, ARIMA_START_Q, ARIMA_MAX_P, ARIMA_MAX_Q,
+    GARCH_SCALE, MIN_TRAINING_DAYS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,23 +23,18 @@ def main():
     setup_logging()
     start_time = time.time()
 
-    from src import db
-    conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    conn.close()
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = op.load_data('data/ETF_Prices.csv')
-    data = data.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(data))
+    from src.portfolio_utils import load_prices
+    data = load_prices(exchange='US', csv_fallback='data/ETF_Prices.csv')
     logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
     training_data = data.iloc[:-BACKTEST_NUM_DAYS_OOS, :]
 
-    if len(training_data) < 30:
+    if len(training_data) < MIN_TRAINING_DAYS:
         raise ValueError(
-            f"Insufficient training data: {len(training_data)} rows (need at least 30)."
+            f"Insufficient training data: {len(training_data)} rows "
+            f"(need at least {MIN_TRAINING_DAYS})."
         )
 
-    log_returns = op.calculate_returns(training_data)
+    log_returns = calculate_log_returns(training_data)
 
     # Forecast returns
     n_periods = TRADING_DAYS_PER_YEAR
@@ -45,10 +45,10 @@ def main():
     for ticker in tqdm.tqdm(data.columns):
         try:
             autoarima_model = pmd.auto_arima(training_data[ticker].dropna(),
-                                             start_p=1,
-                                             start_q=1,
-                                             max_p=5,
-                                             max_q=5,
+                                             start_p=ARIMA_START_P,
+                                             start_q=ARIMA_START_Q,
+                                             max_p=ARIMA_MAX_P,
+                                             max_q=ARIMA_MAX_Q,
                                              seasonal=False,
                                              trace=False,
                                              error_action='ignore',
@@ -74,7 +74,7 @@ def main():
 
     expected_returns = pd.DataFrame.from_dict(expected_returns,
                                               orient='index')
-    expected_returns.to_csv('data/expected_returns.csv')
+    expected_returns.to_csv(FORECAST_EXPECTED_RETURNS_PATH)
     logger.info("Return forecasting completed in %.1fs", time.time() - forecast_start)
 
     # Forecast volatility
@@ -84,7 +84,10 @@ def main():
     failed_vol_tickers = []
     for ticker in tqdm.tqdm(data.columns):
         try:
-            am = arch_model(100*log_returns[ticker],
+            # Scale returns by GARCH_SCALE for numerical conditioning:
+            # GARCH estimation is more stable with values around 1-10
+            # rather than the ~0.001 magnitude of daily log returns.
+            am = arch_model(GARCH_SCALE * log_returns[ticker],
                             vol="Garch",
                             p=1,
                             o=1,
@@ -94,8 +97,9 @@ def main():
             res = am.fit(disp='off')
             forecast = res.forecast(horizon=n_periods,
                                     reindex=False)
+            # Reverse the scaling: variance scales with GARCH_SCALE^2.
             vol = forecast.residual_variance.iloc[-1].mean() \
-                / np.power(100, 2) * TRADING_DAYS_PER_YEAR
+                / (GARCH_SCALE ** 2) * TRADING_DAYS_PER_YEAR
             if np.isnan(vol) or vol <= 0:
                 logger.warning("Ticker %s: GARCH forecast produced invalid variance (%.6f); using sample variance.", ticker, vol)
                 volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
@@ -112,7 +116,7 @@ def main():
 
     volatilities = pd.DataFrame.from_dict(volatilities,
                                           orient='index')
-    volatilities.to_csv('data/variances.csv')
+    volatilities.to_csv(FORECAST_VARIANCES_PATH)
     logger.info("Volatility forecasting completed in %.1fs", time.time() - vol_start)
 
     elapsed = time.time() - start_time
