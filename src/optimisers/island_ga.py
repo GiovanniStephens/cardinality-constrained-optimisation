@@ -11,6 +11,7 @@ from src.portfolio_utils import (
     calculate_log_returns,
     calculate_expected_returns,
     calculate_covariance_matrix,
+    equal_weight_fitness,
     OptimisationResult,
 )
 from src.optimisers.base import BaseOptimiser
@@ -19,12 +20,14 @@ from src.config import (
     ISLAND_GA_NUM_GENERATIONS, ISLAND_GA_POPULATION_SIZE,
     ISLAND_GA_NUM_ELITES, ISLAND_GA_MIGRATION_INTERVAL,
     ISLAND_GA_MIGRATION_RATE,
+    ISLAND_GA_MIN_SECURITIES, ISLAND_GA_MAX_SECURITIES, ISLAND_GA_MIN_RETURN,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def initialise_population(size, num_etfs, max_num_etfs):
+    """Create a random binary population matrix with expected cardinality ~ max_num_etfs."""
     if max_num_etfs > num_etfs:
         raise ValueError("max_num_etfs cannot be greater than num_etfs")
     if max_num_etfs <= 0:
@@ -35,54 +38,81 @@ def initialise_population(size, num_etfs, max_num_etfs):
     return np.random.binomial(1, p, size=(size, num_etfs))
 
 
-def calculate_fitness(individual, expected_returns, log_returns, min_etfs=8, max_etfs=20,
-                      min_return=0.12):
-    selected_indices = individual == 1
-    num_selected_etfs = np.sum(selected_indices)
-    if num_selected_etfs < min_etfs or num_selected_etfs > max_etfs:
-        return -1e4
-    if not selected_indices.any():
-        return 0
-    filtered_log_returns = log_returns.loc[:, selected_indices]
-    cov_matrix_subset = calculate_covariance_matrix(filtered_log_returns)
-    filtered_returns = expected_returns[selected_indices]
-    weights = np.ones(num_selected_etfs) / num_selected_etfs
-    portfolio_return = np.dot(weights, filtered_returns)
-    if min_return is not None and portfolio_return < min_return:
-        return -1e4
-    portfolio_variance = np.dot(weights.T, np.dot(cov_matrix_subset, weights))
-    return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
+def calculate_fitness(individual, expected_returns, cov_matrix, min_etfs=ISLAND_GA_MIN_SECURITIES,
+                      max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
+    """Equal-weight Sharpe ratio with cardinality and return constraints."""
+    return equal_weight_fitness(individual, expected_returns, cov_matrix,
+                                min_count=min_etfs, max_count=max_etfs,
+                                min_return=min_return)
+
+
+def batch_fitness(population, expected_returns, cov_matrix, min_etfs=ISLAND_GA_MIN_SECURITIES,
+                  max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
+    """Vectorised equal-weight Sharpe ratio for the entire population at once.
+
+    Uses matrix operations instead of per-individual loops. On Apple Silicon,
+    numpy delegates to Accelerate BLAS for the matrix multiply.
+    """
+    pop = population.astype(np.float64)
+    counts = pop.sum(axis=1)
+
+    # Cardinality constraint mask
+    valid = (counts >= min_etfs) & (counts <= max_etfs)
+
+    with np.errstate(over='ignore', divide='ignore', invalid='ignore'):
+        # Portfolio return: (pop @ expected_returns) / counts
+        raw_ret = pop @ expected_returns
+
+        # Portfolio variance: diag(pop @ cov_matrix @ pop.T) / counts^2
+        # Efficient: element-wise multiply then sum rows instead of full matrix multiply
+        raw_var = np.sum((pop @ cov_matrix) * pop, axis=1)
+
+        # Avoid division by zero
+        safe_counts = np.where(counts > 0, counts, 1.0)
+        port_ret = raw_ret / safe_counts
+        port_var = raw_var / (safe_counts ** 2)
+
+        # Min return constraint
+        if min_return is not None:
+            valid = valid & (port_ret >= min_return)
+
+        # Sharpe ratio
+        fitness = np.where(
+            valid & (port_var > 0),
+            port_ret / np.sqrt(port_var),
+            -1e4
+        )
+
+    return fitness
 
 
 def select_parents(population, fitness, num_parents):
+    """Select the top num_parents individuals by fitness (rank selection)."""
     ranked_indices = np.argsort(fitness)[::-1]
     top_indices = ranked_indices[:num_parents]
     return population[top_indices]
 
 
 def crossover(parents, offspring_size):
-    offspring = np.empty(offspring_size)
-    num_genes = offspring_size[1]
-    for k in range(offspring_size[0]):
-        parent1_idx = np.random.randint(0, len(parents))
-        parent2_idx = np.random.randint(0, len(parents))
-        for gene in range(num_genes):
-            if np.random.rand() > 0.5:
-                offspring[k, gene] = parents[parent1_idx, gene]
-            else:
-                offspring[k, gene] = parents[parent2_idx, gene]
+    """Uniform crossover: each gene randomly inherited from one of two parents."""
+    num_offspring, num_genes = offspring_size
+    num_parents = len(parents)
+    parent1_indices = np.random.randint(0, num_parents, size=num_offspring)
+    parent2_indices = np.random.randint(0, num_parents, size=num_offspring)
+    mask = np.random.random((num_offspring, num_genes)) > 0.5
+    offspring = np.where(mask, parents[parent1_indices], parents[parent2_indices])
     return offspring
 
 
 def mutate(offspring, mutation_rate):
-    for idx in range(offspring.shape[0]):
-        for gene in range(offspring.shape[1]):
-            if np.random.rand() < mutation_rate:
-                offspring[idx, gene] = 1 - offspring[idx, gene]
+    """Flip each gene with probability mutation_rate."""
+    mutation_mask = np.random.random(offspring.shape) < mutation_rate
+    offspring[mutation_mask] = 1 - offspring[mutation_mask]
     return offspring
 
 
 def elitism(population, fitness, num_elites):
+    """Return the top num_elites individuals and their indices."""
     elite_indices = np.argsort(-fitness)[:num_elites]
     return population[elite_indices], elite_indices
 
@@ -91,11 +121,14 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                       population_size, mutation_rate, num_elites,
                       migration_interval, migration_rate, return_dict,
                       convergence_log=None, start_time=None, time_budget=None,
-                      min_etfs=8, max_etfs=20, min_return=0.12):
+                      min_etfs=ISLAND_GA_MIN_SECURITIES, max_etfs=ISLAND_GA_MAX_SECURITIES,
+                      min_return=ISLAND_GA_MIN_RETURN):
+    """Run a single island GA: evolve population with migration between islands."""
     num_etfs = data.shape[1]
     population = initialise_population(population_size, num_etfs, max_num_etfs=max_etfs)
     log_returns = calculate_log_returns(data)
-    expected_returns = calculate_expected_returns(log_returns)
+    expected_returns = calculate_expected_returns(log_returns).values
+    cov_matrix = calculate_covariance_matrix(log_returns).values
     best_overall_fitness = float('-inf')
     best_overall_individual = None
     for generation in range(num_generations):
@@ -109,12 +142,9 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                         population_size, size=num_received, replace=False
                     )
                     population[replace_indices] = migrants
-        fitness = []
-        for ind in population:
-            fitness.append(calculate_fitness(ind, expected_returns, log_returns,
-                                            min_etfs=min_etfs, max_etfs=max_etfs,
-                                            min_return=min_return))
-        fitness = np.array(fitness)
+        fitness = batch_fitness(population, expected_returns, cov_matrix,
+                                min_etfs=min_etfs, max_etfs=max_etfs,
+                                min_return=min_return)
         elites, elite_indices = elitism(population, fitness, num_elites)
         current_best_fitness = np.max(fitness)
         logger.debug("Island %d, Generation %d, Best Fitness: %.6f", island_id, generation, current_best_fitness)
@@ -140,23 +170,26 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
     return best_overall_individual, best_overall_fitness
 
 
+def _init_random_state():
+    """Pool initializer — reseed numpy RNG in each worker (top-level for spawn)."""
+    np.random.seed(None)
+
+
 def run_parallel_ga(data, num_generations, total_population_size,
                     mutation_rate, num_elites, migration_interval,
-                    migration_rate, min_etfs=8, max_etfs=20,
-                    min_return=0.12):
+                    migration_rate, min_etfs=ISLAND_GA_MIN_SECURITIES,
+                    max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
+    """Distribute island GAs across CPU cores and return the best solution."""
     num_islands = os.cpu_count()
     manager = Manager()
     return_dict = manager.dict()
-
-    def init_random_state():
-        np.random.seed(None)
 
     logger.info(
         "Starting island GA: %d islands, %d generations, population=%d",
         num_islands, num_generations, total_population_size,
     )
     start = time.time()
-    with Pool(num_islands, initializer=init_random_state) as pool:
+    with Pool(num_islands, initializer=_init_random_state) as pool:
         island_pop_size = total_population_size // num_islands
         args = [(i, num_islands, data, num_generations, island_pop_size,
                  mutation_rate, num_elites, migration_interval,
@@ -177,7 +210,8 @@ def run_parallel_ga(data, num_generations, total_population_size,
     return best_solution, best_fitness
 
 
-def optimise_weights(best_solution, data, min_return=0.12):
+def optimise_weights(best_solution, data, min_return=ISLAND_GA_MIN_RETURN):
+    """SLSQP weight refinement for a binary selection vector."""
     from src.portfolio_utils import optimise_weights as _optimise_weights
     return _optimise_weights(best_solution, data, min_return=min_return)
 
@@ -190,8 +224,9 @@ class IslandGAOptimiser(BaseOptimiser):
                  num_elites=ISLAND_GA_NUM_ELITES,
                  migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
                  migration_rate=ISLAND_GA_MIGRATION_RATE,
-                 min_securities=8, max_securities=20,
-                 min_return=0.12):
+                 min_securities=ISLAND_GA_MIN_SECURITIES,
+                 max_securities=ISLAND_GA_MAX_SECURITIES,
+                 min_return=ISLAND_GA_MIN_RETURN):
         self.num_generations = num_generations
         self.population_size = population_size
         self.num_elites = num_elites
@@ -247,6 +282,7 @@ class IslandGAOptimiser(BaseOptimiser):
 
 
 def print_results(tickers, optimal_weights, amount_to_allocate=5000):
+    """Log the portfolio allocation with dollar amounts."""
     logger.info("Optimised Portfolio Allocation:")
     for ticker, weight in zip(tickers, optimal_weights):
         if weight > 1e-4:

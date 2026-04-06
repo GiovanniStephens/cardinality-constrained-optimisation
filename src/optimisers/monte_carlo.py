@@ -10,6 +10,7 @@ from src.portfolio_utils import (
     calculate_log_returns,
     calculate_expected_returns,
     calculate_covariance_matrix,
+    equal_weight_fitness,
     optimise_weights,
     OptimisationResult,
 )
@@ -17,6 +18,7 @@ from src.optimisers.base import BaseOptimiser
 from src.config import (
     DATA_MIN_COVERAGE, DATA_FFILL_LIMIT, DATA_LOOKBACK_DAYS,
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+    ETF_PRICES_CSV,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,20 +36,8 @@ def random_portfolio(num_etfs, min_num_etfs, max_num_etfs):
 def calculate_fitness(portfolio, expected_returns, cov_matrix,
                       min_num_etfs, max_num_etfs):
     """Sharpe ratio for an equal-weight portfolio (used during search)."""
-    selected_indices = portfolio == 1
-    num_selected = np.sum(selected_indices)
-    if num_selected < min_num_etfs or num_selected > max_num_etfs:
-        return -1e4
-    if not np.any(selected_indices):
-        return 0
-
-    filtered_returns = expected_returns[selected_indices]
-    filtered_cov_matrix = cov_matrix[np.ix_(selected_indices, selected_indices)]
-    weights = np.ones(num_selected) / num_selected
-    portfolio_return = np.dot(weights, filtered_returns)
-    portfolio_variance = np.dot(weights, np.dot(filtered_cov_matrix, weights))
-
-    return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
+    return equal_weight_fitness(portfolio, expected_returns, cov_matrix,
+                                min_count=min_num_etfs, max_count=max_num_etfs)
 
 
 def monte_carlo_search(data, trials, min_num_etfs, max_num_etfs):
@@ -152,7 +142,7 @@ if __name__ == '__main__':
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
         from src.portfolio_utils import load_prices_csv
-        data = load_prices_csv('data/ETF_Prices.csv', last_n_days=730)
+        data = load_prices_csv(ETF_PRICES_CSV, last_n_days=730)
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()

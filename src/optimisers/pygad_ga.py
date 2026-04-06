@@ -1,6 +1,7 @@
 import logging
 import time
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,7 @@ from muarch import MUArch
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
 from src.portfolio_utils import (
-    load_prices_csv, calculate_log_returns, negative_sharpe_ratio,
+    load_prices_csv, load_data, calculate_log_returns, negative_sharpe_ratio,
     OptimisationResult,
 )
 from src.optimisers.base import BaseOptimiser
@@ -19,7 +20,9 @@ from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
     GA_MIN_WEIGHT, GA_MAX_WEIGHT,
     GA_TARGET_RETURN, GA_NUM_GENERATIONS, GA_POPULATION_SIZE,
+    GA_CROSSOVER_PROBABILITY, GA_THREAD_POOL_SIZE,
     TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE,
+    NZ_ETF_PRICES_CSV, VARIANCES_CSV, EXPECTED_RETURNS_CSV,
 )
 
 # Suppress known noisy warnings from dependencies, not all warnings globally.
@@ -29,30 +32,40 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*invalid va
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class _OptContext:
+    """Mutable optimisation state set by prepare_opt_inputs()."""
+    data: pd.DataFrame = None
+    variances: pd.Series = None
+    expected_returns: pd.Series = None
+    last_fitness: float = 0
+
+
+_ctx = _OptContext()
+
+# Module-level aliases for backwards compatibility.
+# These are mutable — benchmark/adapters.py overwrites them before runs.
 MAX_NUM_STOCKS = GA_MAX_SECURITIES
 MIN_NUM_STOCKS = GA_MIN_SECURITIES
 TARGET_RETURN = GA_TARGET_RETURN
 TARGET_RISK = None
 MAX_WEIGHT = GA_MAX_WEIGHT
 MIN_WEIGHT = GA_MIN_WEIGHT
-last_fitness = 0
-data = None
-variances = None
-expected_returns = None
+
+# Backwards-compatible accessors for mutable state now in _ctx.
+# External code (backtest.py, adapters.py, tests) reads op.data / op.variances /
+# op.expected_returns. Route those through _ctx via module __getattr__.
+_COMPAT_ATTRS = {'data', 'variances', 'expected_returns', 'last_fitness'}
 
 
+def __getattr__(name):
+    if name in _COMPAT_ATTRS:
+        return getattr(_ctx, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-def load_data(filename: str) -> pd.DataFrame:
-    """
-    Loads the data from a CSV file in the local directory.
 
-    :filename: string of the filename.
-    :return: pandas dataframe of the data.
-    """
-    prices_df = load_prices_csv(filename, min_coverage=0.10)
-    if prices_df.empty:
-        raise ValueError(f"Loaded CSV '{filename}' is empty.")
-    return prices_df
+# load_data is re-exported from portfolio_utils for backwards compatibility.
 
 
 def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
@@ -80,8 +93,8 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
     :return: numpy array of the covariance matrix.
     """
     # If variances are available, check for missing columns
-    if variances is not None:
-        missing_cols = set(data.columns) - set(variances.index)
+    if _ctx.variances is not None:
+        missing_cols = set(data.columns) - set(_ctx.variances.index)
         if missing_cols:
             logger.warning("Columns missing from variances: %s. Falling back to historical cov.", missing_cols)
             return data.cov() * TRADING_DAYS_PER_YEAR
@@ -94,8 +107,8 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
 
     # Diagonal volatility matrix D
     D = np.zeros((data.shape[1], data.shape[1]))
-    if variances is not None:
-        var_values = variances.loc[data.columns].values.flatten()
+    if _ctx.variances is not None:
+        var_values = _ctx.variances.loc[data.columns].values.flatten()
         # Guard against negative variances before taking sqrt
         if np.any(var_values < 0):
             logger.warning("Negative forecast variances found; clipping to 0.")
@@ -224,7 +237,7 @@ def optimize(data: pd.DataFrame,
     :use_copulae: boolean of whether to use copulae or not.
     :return: pcipy optimization result.
     """
-    if expected_returns is None:
+    if _ctx.expected_returns is None:
         raise ValueError("expected_returns is not set. Call prepare_opt_inputs() first.")
     if len(initial_weights) != data.shape[1]:
         raise ValueError(
@@ -232,10 +245,10 @@ def optimize(data: pd.DataFrame,
             f"number of assets ({data.shape[1]})."
         )
     cov_matrix = get_cov_matrix(data, use_copulae)
-    missing = set(data.columns) - set(expected_returns.index)
+    missing = set(data.columns) - set(_ctx.expected_returns.index)
     if missing:
         raise KeyError(f"Expected returns missing for columns: {missing}")
-    rets = expected_returns.loc[data.columns].values
+    rets = _ctx.expected_returns.loc[data.columns].values
     cons = [{'type': 'eq',
              'fun': lambda x: 1 - np.sum(x)}]
     if target_risk is not None and target_return is None:
@@ -271,15 +284,8 @@ def optimize(data: pd.DataFrame,
     return sol
 
 
-def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculates the log returns of the data.
-    (Note that it replaces inf returns with 0.)
-
-    :data: pandas dataframe of the data.
-    :return: pandas dataframe of the log returns.
-    """
-    return calculate_log_returns(data)
+calculate_returns = calculate_log_returns  # backwards compat alias
+optimise = optimize  # British English alias, matches BaseOptimiser.optimise()
 
 
 def fitness(individual, data):
@@ -295,7 +301,8 @@ def fitness(individual, data):
     :return: float of the fitness (i.e. Sharpe Ratio)
     """
     num_stocks = np.count_nonzero(individual)
-    random_weights = np.random.random(num_stocks)
+    rng = np.random.default_rng()
+    random_weights = rng.random(num_stocks)
     random_weights /= np.sum(random_weights)  # Normalize the weights
     subset = data.iloc[np.array(individual).astype(bool), :]
 
@@ -331,7 +338,7 @@ def fitness_2(ga_instance, solution: np.array, solution_idx: int) -> float:
     :solution: binary array.
     :solution_idx: int of the solution index.
     """
-    fit = fitness(solution, data)
+    fit = fitness(solution, _ctx.data)
     return fit
 
 
@@ -367,53 +374,61 @@ def on_generation(ga_instance: pygad.GA) -> None:
 
     :ga_instance: the GA instance.
     """
-    global last_fitness
     current_fitness = ga_instance.best_solution(pop_fitness=ga_instance.last_generation_fitness)[1]
     logger.debug(
         "Generation %d: fitness=%.6f, change=%.6f",
         ga_instance.generations_completed,
         current_fitness,
-        current_fitness - last_fitness,
+        current_fitness - _ctx.last_fitness,
     )
-    last_fitness = current_fitness
+    _ctx.last_fitness = current_fitness
 
 
-def prepare_opt_inputs(prices, use_forecasts: bool, conn=None) -> None:
+def prepare_opt_inputs(prices, use_forecasts: bool, conn=None, max_date=None) -> None:
     """
     Prepares the inputs for the optimisation.
 
     :prices: pandas dataframe of the prices.
     :use_forecasts: bool of whether to use forecasts.
     :conn: optional sqlite3 connection for loading forecasts from DB.
+    :max_date: optional upper date boundary. If provided, asserts that all
+        price data is strictly before this date, preventing test-period data
+        from leaking into training.
     """
-    global variances, expected_returns, data
     if prices is None or prices.empty:
         raise ValueError("prices DataFrame is None or empty.")
-    data = calculate_returns(prices).transpose()
+    if max_date is not None:
+        prices_max = prices.index.max()
+        if prices_max >= pd.Timestamp(max_date):
+            raise ValueError(
+                f"prices contain data up to {prices_max}, which is at or beyond "
+                f"max_date={max_date}. This would leak test-period data into training."
+            )
+    _ctx.data = calculate_returns(prices).transpose()
     if use_forecasts:
-        variances = None
-        expected_returns = None
+        _ctx.variances = None
+        _ctx.expected_returns = None
         # Try DB first, then CSV fallback
         if conn is not None:
             from src import db
             er = db.load_expected_returns(conn)
             var = db.load_variances(conn)
             if not er.empty and not var.empty:
-                expected_returns = er
-                variances = var
-        if expected_returns is None:
+                _ctx.expected_returns = er
+                _ctx.variances = var
+        if _ctx.expected_returns is None:
             try:
-                variances = load_data('data/variances.csv')
-                expected_returns = load_data('data/expected_returns.csv')['0']
+                _ctx.variances = load_data(VARIANCES_CSV)
+                _ctx.expected_returns = load_data(EXPECTED_RETURNS_CSV)['0']
             except (FileNotFoundError, KeyError) as e:
                 logger.warning(
                     "Could not load forecast files (%s); falling back to historical estimates.", e
                 )
-                variances = None
-                expected_returns = data.T.mean() * TRADING_DAYS_PER_YEAR
+                _ctx.variances = None
+                _ctx.expected_returns = _ctx.data.T.mean() * TRADING_DAYS_PER_YEAR
     else:
-        variances = None
-        expected_returns = data.T.mean() * TRADING_DAYS_PER_YEAR
+        _ctx.variances = None
+        _ctx.expected_returns = _ctx.data.T.mean() * TRADING_DAYS_PER_YEAR
 
 
 def cardinality_constrained_optimisation(num_children: int = 1000,
@@ -429,8 +444,8 @@ def cardinality_constrained_optimisation(num_children: int = 1000,
         on_gen = on_generation
     else:
         on_gen = None
-    ga_instance = pygad.GA(num_generations=6,
-                           initial_population=np.array([create_individual(data)
+    ga_instance = pygad.GA(num_generations=GA_NUM_GENERATIONS,
+                           initial_population=np.array([create_individual(_ctx.data)
                                                         for _ in range(num_children)]),
                            num_parents_mating=num_children//10,
                            gene_type=int,
@@ -442,10 +457,11 @@ def cardinality_constrained_optimisation(num_children: int = 1000,
                            random_mutation_max_val=1,
                            mutation_type="random",
                            crossover_type="single_point",
-                           crossover_probability=0.85,
+                           crossover_probability=GA_CROSSOVER_PROBABILITY,
                            fitness_func=fitness_2,
                            on_generation=on_gen,
-                           stop_criteria='saturate_5')
+                           stop_criteria='saturate_5',
+                           parallel_processing=["thread", GA_THREAD_POOL_SIZE])
     start = time.time()
     ga_instance.run()
     elapsed = time.time() - start
@@ -472,7 +488,7 @@ def create_portfolio(num_children: int = 100, verbose: bool = True) -> list:
     individual = cardinality_constrained_optimisation(num_children=num_children,
                                                       verbose=verbose)
     indices = np.array(individual).astype(bool)
-    portfolio = data.transpose().iloc[:, indices].columns
+    portfolio = _ctx.data.transpose().iloc[:, indices].columns
     return list(portfolio)
 
 
@@ -523,8 +539,8 @@ class PygadOptimiser(BaseOptimiser):
                     self._variances = var
             if self._expected_returns is None:
                 try:
-                    self._variances = load_data('data/variances.csv')
-                    self._expected_returns = load_data('data/expected_returns.csv')['0']
+                    self._variances = load_data(VARIANCES_CSV)
+                    self._expected_returns = load_data(EXPECTED_RETURNS_CSV)['0']
                 except (FileNotFoundError, KeyError) as e:
                     logger.warning(
                         "Could not load forecast files (%s); "
@@ -601,7 +617,8 @@ class PygadOptimiser(BaseOptimiser):
             num_stocks = np.count_nonzero(solution)
             subset = inst_data.iloc[np.array(solution).astype(bool), :]
             if num_stocks >= 2:
-                random_w = np.random.random(num_stocks)
+                rng = np.random.default_rng()
+                random_w = rng.random(num_stocks)
                 random_w /= np.sum(random_w)
                 cov_matrix = subset.transpose().cov().values * TRADING_DAYS_PER_YEAR
                 rets = inst_er.loc[subset.index].values
@@ -657,9 +674,10 @@ class PygadOptimiser(BaseOptimiser):
             random_mutation_min_val=-1, random_mutation_max_val=1,
             mutation_type="random",
             crossover_type="single_point",
-            crossover_probability=0.85,
+            crossover_probability=GA_CROSSOVER_PROBABILITY,
             fitness_func=fitness_fn,
             stop_criteria='saturate_5',
+            parallel_processing=["thread", GA_THREAD_POOL_SIZE],
         )
         ga_instance.run()
         elapsed = time.time() - start
@@ -708,7 +726,7 @@ def main():
     _conn.close()
     if prices_df.empty:
         logger.info("No data in DB, falling back to CSV")
-        prices_df = load_data('data/NZ_ETF_Prices.csv')
+        prices_df = load_data(NZ_ETF_PRICES_CSV)
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     # Prepare the inputs for the optimisation
     use_forecasts = True
@@ -783,7 +801,7 @@ if __name__ == '__main__':
     prices_df = _db.load_prices(_conn, exchange='US')
     _conn.close()
     if prices_df.empty:
-        prices_df = load_data('data/NZ_ETF_Prices.csv')
+        prices_df = load_data(NZ_ETF_PRICES_CSV)
     prices_df = prices_df.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(prices_df))
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     prepare_opt_inputs(prices_df, use_forecasts=False)

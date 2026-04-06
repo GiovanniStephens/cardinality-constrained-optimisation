@@ -14,20 +14,23 @@ from src.portfolio_utils import (
     OptimisationResult,
 )
 from src.optimisers.base import BaseOptimiser
-from src.config import GA_MAX_SECURITIES
+from src.config import GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS
 
 logger = logging.getLogger(__name__)
 
 
 def calculate_portfolio_variance(weights, cov_matrix):
+    """Compute portfolio variance given weights and a covariance DataFrame."""
     return np.dot(weights, np.dot(cov_matrix.values, weights))
 
 
 def calculate_portfolio_return(weights, expected_returns):
+    """Compute expected portfolio return given weights and per-asset returns."""
     return np.dot(weights, expected_returns)
 
 
 def portfolio_sharpe_ratio(selection_vars, expected_returns, log_returns):
+    """Compute equal-weight Sharpe ratio for the MILP-selected portfolio."""
     selected_etfs = [etf for etf in selection_vars if pulp.value(selection_vars[etf]) > 0.5]
     if not selected_etfs:
         return 0
@@ -41,19 +44,21 @@ def portfolio_sharpe_ratio(selection_vars, expected_returns, log_returns):
     return sharpe_ratio
 
 
-def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk_aversion):
+def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk_aversion,
+                                      max_etfs=MIP_DEFAULT_MAX_ETFS):
+    """Build the MILP problem: maximise risk-adjusted return with cardinality constraint."""
     portfolio_problem = pulp.LpProblem("Portfolio_Selection", pulp.LpMaximize)
     selection = pulp.LpVariable.dicts("Select", etfs, 0, 1, pulp.LpBinary)
     portfolio_problem += pulp.lpSum([expected_returns[etf] * selection[etf] - risk_aversion
                                      * volatilities[etf] * selection[etf] for etf in etfs]), "Risk_Adjusted_Return"
-    portfolio_problem += pulp.lpSum([selection[etf] for etf in etfs]) <= 10, "Max_ETFs"
+    portfolio_problem += pulp.lpSum([selection[etf] for etf in etfs]) <= max_etfs, "Max_ETFs"
     return portfolio_problem, selection
 
 
 class MIPOptimiser(BaseOptimiser):
     """Mixed Integer Linear Programming portfolio selection."""
 
-    def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=0.8):
+    def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=MIP_DEFAULT_RISK_AVERSION):
         self.max_securities = max_securities
         self.risk_aversion = risk_aversion
 
@@ -101,7 +106,7 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
     # Load data
-    prices_df = load_prices_csv('data/ETF_Prices.csv')
+    prices_df = load_prices_csv(ETF_PRICES_CSV)
     prices_df = prices_df.iloc[:-213]
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     log_returns = calculate_log_returns(prices_df)
