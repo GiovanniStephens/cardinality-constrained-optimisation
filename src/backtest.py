@@ -11,9 +11,12 @@ import pandas as pd
 from scipy.stats import friedmanchisquare, ttest_rel
 from tqdm import tqdm
 
-from src.optimisers import pygad_ga as op
 from src.portfolio_utils import (
+    load_data,
     calculate_log_returns,
+    calculate_expected_returns,
+    calculate_covariance_matrix,
+    negative_sharpe_ratio,
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
@@ -29,17 +32,21 @@ from src.config import (
     BACKTEST_TEST_DAYS,
     BACKTEST_STEP_DAYS,
     BACKTEST_FORECAST_WINDOWS,
+    BACKTEST_MAX_WEIGHT_FLOOR,
     TRADING_DAYS_PER_YEAR,
     DATA_MIN_COVERAGE,
     DATA_FFILL_LIMIT,
+    GA_MIN_SECURITIES,
+    GA_MAX_SECURITIES,
+    GA_MIN_WEIGHT,
+    GA_MAX_WEIGHT,
+    GA_NUM_GENERATIONS,
+    NZ_ETF_PRICES_CSV,
 )
 
 logger = logging.getLogger(__name__)
 
-NUM_PORTFOLIOS = BACKTEST_NUM_PORTFOLIOS
-NUM_CHILDREN = BACKTEST_NUM_CHILDREN
 NUM_JOBS = cpu_count()
-MC_TRIALS_PER_PORTFOLIO = BACKTEST_MC_TRIALS
 
 METRIC_NAMES = [
     'annualised_return', 'annualised_volatility', 'sharpe_ratio',
@@ -49,6 +56,9 @@ METRIC_NAMES = [
 # Module-level state set before spawning worker pools.
 _backtest_data = None
 _use_forecast = False
+# Log returns (transposed: tickers×dates) and expected returns for weight optimisation.
+_backtest_log_returns = None
+_backtest_expected_returns = None
 
 
 # ─── Data Structures ──────────────────────────────────────────────────────────
@@ -172,14 +182,28 @@ def optimal_weights(portfolio, use_copulae=False):
     """
     if len(portfolio) < 2:
         raise ValueError("Portfolio must contain at least 2 assets.")
-    missing = set(portfolio) - set(op.data.index)
+    missing = set(portfolio) - set(_backtest_log_returns.index)
     if missing:
         raise KeyError(f"Tickers not found in data: {missing}")
     random_weights = get_random_weights(portfolio)
-    result = op.optimize(op.data.loc[portfolio, :].transpose(),
-                         random_weights,
-                         max_weight=max(1/(len(portfolio)-1), 0.3),
-                         use_copulae=use_copulae)
+    subset = _backtest_log_returns.loc[portfolio, :].transpose()
+    er = _backtest_expected_returns.loc[subset.columns].values
+    max_weight = max(1 / (len(portfolio) - 1), BACKTEST_MAX_WEIGHT_FLOOR)
+
+    if use_copulae:
+        from src.optimisers.pygad_ga import estimate_corr_using_copulas
+        corr = estimate_corr_using_copulas(subset)
+        D = np.diag(subset.std().values * np.sqrt(TRADING_DAYS_PER_YEAR))
+        cov_matrix = np.matmul(np.matmul(D, corr), D)
+    else:
+        cov_matrix = calculate_covariance_matrix(subset).values
+
+    cons = [{'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}]
+    from scipy.optimize import minimize
+    bounds = tuple((0.0, max_weight) for _ in range(len(portfolio)))
+    result = minimize(negative_sharpe_ratio, random_weights,
+                      args=(er, cov_matrix), method='SLSQP',
+                      bounds=bounds, constraints=cons)
     if not result.success:
         logger.warning("Weight optimization did not converge: %s", result.message)
     return result['x']
@@ -244,11 +268,39 @@ def fitness(portfolio_returns):
 # ─── GA Worker Helpers ────────────────────────────────────────────────────────
 
 
+def _random_selection(num_tickers, min_k, max_k, ticker_names):
+    """Generate a random portfolio by selecting min_k..max_k tickers."""
+    k = np.random.randint(min_k, max_k + 1)
+    chosen = np.random.choice(num_tickers, k, replace=False)
+    return [ticker_names[i] for i in chosen]
+
+
 def _init_worker(training_data, use_forecast):
     """Pool initializer — sets module globals in each worker process."""
     global _backtest_data, _use_forecast
     _backtest_data = training_data
     _use_forecast = use_forecast
+
+
+def _init_weight_worker(log_returns_T, expected_returns):
+    """Pool initializer for weight computation workers."""
+    global _backtest_log_returns, _backtest_expected_returns
+    _backtest_log_returns = log_returns_T
+    _backtest_expected_returns = expected_returns
+
+
+def _compute_weights_for_portfolio(args):
+    """Top-level function for Pool.map — computes weights for a single portfolio.
+
+    Must be top-level (not a lambda/closure) for macOS spawn-based multiprocessing.
+    """
+    portfolio, mode = args
+    if mode == 'random':
+        return get_random_weights(portfolio)
+    elif mode == 'copulae':
+        return optimal_weights(portfolio, use_copulae=True)
+    else:  # 'optimal'
+        return optimal_weights(portfolio, use_copulae=False)
 
 
 def create_portfolio(num_children):
@@ -259,10 +311,19 @@ def create_portfolio(num_children):
     :num_children: The number of children in the GA to create.
     :return: A list of tickers.
     """
-    op.prepare_opt_inputs(_backtest_data, _use_forecast)
-    op.TARGET_RETURN = None
-    portfolio = op.create_portfolio(num_children)
-    return portfolio
+    from src.optimisers.pygad_ga import PygadOptimiser
+    opt = PygadOptimiser(
+        num_children=num_children,
+        num_generations=GA_NUM_GENERATIONS,
+        min_securities=GA_MIN_SECURITIES,
+        max_securities=GA_MAX_SECURITIES,
+        min_weight=GA_MIN_WEIGHT,
+        max_weight=GA_MAX_WEIGHT,
+        target_return=None,
+        use_forecasts=_use_forecast,
+    )
+    result = opt.optimise(_backtest_data)
+    return result.selected_tickers
 
 
 # ─── Statistical Testing ─────────────────────────────────────────────────────
@@ -380,9 +441,9 @@ def evaluate_window(
     window: WindowSpec,
     full_prices: pd.DataFrame,
     conn,
-    num_portfolios: int = NUM_PORTFOLIOS,
-    num_children: int = NUM_CHILDREN,
-    mc_trials: int = MC_TRIALS_PER_PORTFOLIO,
+    num_portfolios: int = BACKTEST_NUM_PORTFOLIOS,
+    num_children: int = BACKTEST_NUM_CHILDREN,
+    mc_trials: int = BACKTEST_MC_TRIALS,
     use_forecast: bool = False,
 ) -> WindowResult:
     """
@@ -414,6 +475,12 @@ def evaluate_window(
     # ── Slice data ────────────────────────────────────────────────────────
     train_prices = full_prices.loc[window.train_start:window.train_end]
     test_prices = full_prices.loc[window.test_start:window.test_end]
+    # Runtime guard: training must end strictly before testing begins
+    assert train_prices.index.max() < test_prices.index.min(), (
+        f"Window {window.label}: train data ends at {train_prices.index.max()} "
+        f"but test data starts at {test_prices.index.min()}. "
+        f"This would leak test-period data into training."
+    )
     # Prepend last training price so the first test-day log return is
     # log(test_price[0] / train_price[-1]) rather than 0.
     boundary_price = train_prices.iloc[[-1]]
@@ -426,9 +493,12 @@ def evaluate_window(
         train_prices.shape[1],
     )
 
-    # ── Prepare optimisation inputs (sets op globals) ─────────────────────
-    op.prepare_opt_inputs(train_prices, use_forecasts=False, conn=conn)
-    op.TARGET_RETURN = None
+    # ── Prepare optimisation state for weight optimisation ──────────────
+    global _backtest_log_returns, _backtest_expected_returns
+    log_returns_train = calculate_log_returns(train_prices)
+    _backtest_log_returns = log_returns_train.transpose()
+    _backtest_expected_returns = calculate_expected_returns(
+        log_returns_train)
 
     # ── Create GA portfolios (no forecast) ────────────────────────────────
     logger.info("  Creating %d GA portfolios (no forecast)...", num_portfolios)
@@ -455,16 +525,13 @@ def evaluate_window(
                 create_portfolio, [num_children] * num_portfolios
             )
         logger.info("  GA (forecast) done in %.1fs", time.time() - start)
-        # Restore non-forecast state for weight optimisation
-        op.prepare_opt_inputs(train_prices, use_forecasts=False, conn=conn)
-        op.TARGET_RETURN = None
 
     # ── Create random portfolios ──────────────────────────────────────────
-    log_returns_train = op.calculate_returns(train_prices)
     random_portfolios = []
     for _ in range(num_portfolios):
-        indices = op.create_individual(op.data).astype(bool)
-        random_portfolios.append(list(log_returns_train.iloc[:, indices].columns))
+        random_portfolios.append(list(_random_selection(
+            train_prices.shape[1], GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+            train_prices.columns)))
 
     # ── Create MC portfolios ──────────────────────────────────────────────
     logger.info("  Creating %d MC portfolios (%d trials)...", num_portfolios, mc_trials)
@@ -473,14 +540,15 @@ def evaluate_window(
     for _ in tqdm(range(num_portfolios), desc="  MC portfolios", leave=False):
         solution, _ = mc.monte_carlo_search(
             train_prices, mc_trials,
-            min_num_etfs=op.MIN_NUM_STOCKS,
-            max_num_etfs=op.MAX_NUM_STOCKS,
+            min_num_etfs=GA_MIN_SECURITIES,
+            max_num_etfs=GA_MAX_SECURITIES,
         )
         if solution is not None:
             mc_portfolios.append(list(train_prices.columns[solution == 1]))
         else:
-            indices = op.create_individual(op.data).astype(bool)
-            mc_portfolios.append(list(log_returns_train.iloc[:, indices].columns))
+            mc_portfolios.append(list(_random_selection(
+                train_prices.shape[1], GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+                train_prices.columns)))
     logger.info("  MC done in %.1fs", time.time() - start)
 
     # ── Compute in-sample Sharpe for each portfolio (overfitting diagnostic) ──
@@ -507,30 +575,60 @@ def evaluate_window(
             category=category, portfolios=prs,
         )
 
-    # ── Compute weights and evaluate ──────────────────────────────────────
+    # ── Compute weights in parallel ──────────────────────────────────────
     logger.info("  Optimising weights and running OOS evaluation...")
+
+    # Build all (portfolio, mode) work items
+    weight_tasks = []
+    task_metadata = []  # (category_name, portfolio_index)
+
     categories = [
-        ('cc_optimised',     ga_portfolios,     lambda p: optimal_weights(p, use_copulae=False)),
-        ('cc_copulae',       ga_portfolios,     lambda p: optimal_weights(p, use_copulae=True)),
-        ('cc_random_weights', ga_portfolios,    get_random_weights),
-        ('mc_optimised',     mc_portfolios,     lambda p: optimal_weights(p)),
-        ('mc_random_weights', mc_portfolios,    get_random_weights),
-        ('random_optimised', random_portfolios, lambda p: optimal_weights(p)),
-        ('random_random',    random_portfolios, get_random_weights),
+        ('cc_optimised',      ga_portfolios,     'optimal'),
+        ('cc_copulae',        ga_portfolios,     'copulae'),
+        ('cc_random_weights', ga_portfolios,     'random'),
+        ('mc_optimised',      mc_portfolios,     'optimal'),
+        ('mc_random_weights', mc_portfolios,     'random'),
+        ('random_optimised',  random_portfolios, 'optimal'),
+        ('random_random',     random_portfolios, 'random'),
     ]
-    for cat_name, portfolios, weight_fn in tqdm(categories, desc="  Evaluating", leave=False):
-        weights_list = [weight_fn(p) for p in portfolios]
-        _evaluate(portfolios, weights_list, cat_name)
+
+    for cat_name, portfolios, mode in categories:
+        for i, p in enumerate(portfolios):
+            weight_tasks.append((p, mode))
+            task_metadata.append((cat_name, i))
+
+    # Parallel weight computation (SLSQP releases GIL during Fortran calls)
+    with mp.Pool(
+        processes=NUM_JOBS,
+        initializer=_init_weight_worker,
+        initargs=(_backtest_log_returns, _backtest_expected_returns),
+    ) as pool:
+        all_weights = pool.map(_compute_weights_for_portfolio, weight_tasks)
+
+    # Reassemble results by category
+    category_weights = {}
+    category_portfolios = {}
+    for (cat_name, portfolios, mode), _ in zip(categories, range(len(categories))):
+        category_weights[cat_name] = []
+        category_portfolios[cat_name] = portfolios
+
+    for (cat_name, idx), w in zip(task_metadata, all_weights):
+        category_weights[cat_name].append(w)
+
+    for cat_name, portfolios, mode in categories:
+        _evaluate(category_portfolios[cat_name], category_weights[cat_name], cat_name)
 
     if use_forecast and forecast_portfolios:
-        # Re-prepare with forecasts for weight optimisation
-        op.prepare_opt_inputs(train_prices, use_forecasts=True, conn=conn)
-        op.TARGET_RETURN = None
-        _evaluate(forecast_portfolios,
-                  [optimal_weights(p) for p in forecast_portfolios],
-                  'cc_forecast')
-        # Restore non-forecast state
-        op.prepare_opt_inputs(train_prices, use_forecasts=False, conn=conn)
+        with mp.Pool(
+            processes=NUM_JOBS,
+            initializer=_init_weight_worker,
+            initargs=(_backtest_log_returns, _backtest_expected_returns),
+        ) as pool:
+            forecast_weights = pool.map(
+                _compute_weights_for_portfolio,
+                [(p, 'optimal') for p in forecast_portfolios],
+            )
+        _evaluate(forecast_portfolios, forecast_weights, 'cc_forecast')
 
     result.elapsed_seconds = time.time() - window_start
 
@@ -567,7 +665,7 @@ def main():
     data = db.load_prices(conn, exchange='US')
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
-        data = op.load_data('data/NZ_ETF_Prices.csv')
+        data = load_data(NZ_ETF_PRICES_CSV)
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
@@ -606,12 +704,12 @@ def main():
         # Save per-window results to DB
         session_id = db.save_backtest_session(conn, {
             'data_source': 'yahoo_finance',
-            'num_portfolios': NUM_PORTFOLIOS,
+            'num_portfolios': BACKTEST_NUM_PORTFOLIOS,
             'num_days_oos': len(data.loc[window.test_start:window.test_end]),
             'use_forecast': use_forecast,
             'optimiser_params': {
-                'num_children': NUM_CHILDREN,
-                'mc_trials_per_portfolio': MC_TRIALS_PER_PORTFOLIO,
+                'num_children': BACKTEST_NUM_CHILDREN,
+                'mc_trials_per_portfolio': BACKTEST_MC_TRIALS,
             },
             'elapsed_seconds': wr.elapsed_seconds,
             'window_train_start': str(window.train_start.date()),

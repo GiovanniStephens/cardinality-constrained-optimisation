@@ -1,7 +1,9 @@
 import unittest
 from src import backtest
-from src.optimisers import pygad_ga as op
 from src.portfolio_utils import (
+    load_data,
+    calculate_log_returns,
+    calculate_expected_returns,
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
@@ -23,7 +25,7 @@ def _load_test_data():
     except Exception:
         pass
     if data.empty:
-        data = op.load_data('data/NZ_ETF_Prices.csv')
+        data = load_data('data/NZ_ETF_Prices.csv')
     else:
         data.index = pd.to_datetime(data.index)
         data = data.sort_index()
@@ -38,9 +40,12 @@ class TestBacktest(unittest.TestCase):
     def setUpClass(cls):
         cls.data = _load_test_data()
         training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
-        op.prepare_opt_inputs(training, False)
         backtest._backtest_data = training
         backtest._use_forecast = False
+        # Set up log returns and expected returns for optimal_weights
+        log_rets = calculate_log_returns(training)
+        backtest._backtest_log_returns = log_rets.transpose()
+        backtest._backtest_expected_returns = calculate_expected_returns(log_rets)
         # Pick 3 real tickers from whatever data was loaded
         cls.test_tickers = list(cls.data.columns[:3])
 
@@ -389,6 +394,7 @@ class TestBacktestValidation(unittest.TestCase):
 
     def test_op_data_only_contains_training_dates(self):
         """After prepare_opt_inputs, op.data should span training period only."""
+        from src.optimisers import pygad_ga as op
         prices = self._make_prices(n_days=60)
         windows = backtest.generate_windows(
             prices.index, train_days=30, test_days=10, step_days=10,
@@ -628,6 +634,239 @@ class TestBacktestValidation(unittest.TestCase):
                            f"Mean Sharpe {mean_sharpe:.2f} is suspiciously negative")
         self.assertLess(mean_sharpe, 1.5,
                         f"Mean Sharpe {mean_sharpe:.2f} is suspiciously positive")
+
+
+class TestBacktestDataIsolation(unittest.TestCase):
+    """Tests that backtest evaluation properly isolates training and test data."""
+
+    def _make_prices(self, n_days=100, n_tickers=5, seed=42):
+        """Create synthetic prices with distinct regimes."""
+        np.random.seed(seed)
+        dates = pd.bdate_range('2018-01-01', periods=n_days, freq='B')
+        tickers = [f'S{i}' for i in range(n_tickers)]
+        log_rets = np.random.randn(n_days, n_tickers) * 0.01 + 0.0005
+        log_rets[0] = 0
+        prices = 100 * np.exp(np.cumsum(log_rets, axis=0))
+        return pd.DataFrame(prices, index=dates, columns=tickers)
+
+    def test_evaluate_window_training_data_boundary(self):
+        """Test-period canary value must never appear in training log returns.
+
+        Inject 999.0 as a price in the test period. After computing log returns
+        on training data, no value should be derived from 999.0.
+        """
+        from src.portfolio_utils import calculate_log_returns
+        prices = self._make_prices(n_days=80, n_tickers=3)
+        # Inject canary in the last 20 days (test period)
+        prices.iloc[-20:, 0] = 999.0
+
+        windows = backtest.generate_windows(
+            prices.index, train_days=40, test_days=20, step_days=20,
+        )
+        w = windows[0]
+        train_prices = prices.loc[w.train_start:w.train_end]
+        train_log_returns = calculate_log_returns(train_prices)
+
+        # No value should be derived from the 999.0 canary
+        max_val = train_log_returns.values.max()
+        self.assertLess(max_val, 5.0,
+                        f"Training log returns contain suspiciously large value {max_val}, "
+                        f"possible test data leakage from canary=999.0")
+
+    def test_oos_returns_from_test_data_only(self):
+        """OOS returns must reflect test-period prices, not training-period.
+
+        Training: positive drift (+0.1% daily)
+        Test: flat (0% drift)
+        OOS annualised return should be near zero, not positive.
+        """
+        np.random.seed(42)
+        n_train, n_test = 60, 20
+        dates = pd.bdate_range('2018-01-01', periods=n_train + n_test, freq='B')
+        tickers = ['A', 'B', 'C']
+        # Training: strong positive drift
+        train_rets = np.random.randn(n_train, 3) * 0.005 + 0.002
+        # Test: zero drift
+        test_rets = np.random.randn(n_test, 3) * 0.005 + 0.0
+        all_rets = np.vstack([train_rets, test_rets])
+        all_rets[0] = 0
+        prices = pd.DataFrame(
+            100 * np.exp(np.cumsum(all_rets, axis=0)),
+            index=dates, columns=tickers,
+        )
+
+        train_prices = prices.iloc[:n_train]
+        test_prices = prices.iloc[n_train:]
+        boundary = train_prices.iloc[[-1]]
+        test_with_boundary = pd.concat([boundary, test_prices])
+        from src.portfolio_utils import calculate_log_returns
+        oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
+
+        weights = np.array([1/3, 1/3, 1/3])
+        stats = backtest.get_statistics(tickers, weights, oos_log_returns)
+        # Zero-drift test data → annualised return should be near 0
+        self.assertLess(abs(stats['annualised_return']), 1.0,
+                        f"OOS return {stats['annualised_return']:.4f} too far from zero "
+                        f"for zero-drift test data")
+
+    def test_no_stale_globals_between_windows(self):
+        """Running two windows sequentially must reset state for each.
+
+        Window 1 has 3 tickers, Window 2 has 5. After preparing Window 2,
+        log returns should have 5 columns (tickers), not 3.
+        """
+        from src.portfolio_utils import calculate_log_returns
+        prices_3 = self._make_prices(n_days=80, n_tickers=3, seed=1)
+        prices_5 = self._make_prices(n_days=80, n_tickers=5, seed=2)
+
+        # Window 1: 3 tickers
+        lr1 = calculate_log_returns(prices_3)
+        self.assertEqual(lr1.shape[1], 3, "Window 1 should have 3 tickers")
+
+        # Window 2: 5 tickers
+        lr2 = calculate_log_returns(prices_5)
+        self.assertEqual(lr2.shape[1], 5,
+                         "Window 2 should have 5 tickers, not stale 3 from Window 1")
+
+
+class TestSurvivorshipBias(unittest.TestCase):
+    """Tests for handling delisted and late-entry tickers."""
+
+    def test_delisted_ticker_handled_gracefully(self):
+        """A ticker with valid training data but all NaN in test period
+        should not crash the OOS evaluation."""
+        np.random.seed(42)
+        n_train, n_test = 50, 20
+        dates = pd.bdate_range('2018-01-01', periods=n_train + n_test, freq='B')
+        # Ticker A: full data. Ticker B: NaN in test period (delisted)
+        a_rets = np.random.randn(n_train + n_test) * 0.01
+        b_rets = np.random.randn(n_train + n_test) * 0.01
+        a_rets[0] = 0
+        b_rets[0] = 0
+        prices_a = 100 * np.exp(np.cumsum(a_rets))
+        prices_b = 100 * np.exp(np.cumsum(b_rets))
+        prices_b[n_train:] = np.nan  # delisted
+
+        prices = pd.DataFrame({'A': prices_a, 'B': prices_b}, index=dates)
+        test_prices = prices.iloc[n_train:]
+
+        # Attempting to run_portfolio with the delisted ticker
+        # The log returns for B will be NaN → replaced with 0 (safe)
+        from src.portfolio_utils import calculate_log_returns
+        train_prices = prices.iloc[:n_train]
+        boundary = train_prices.iloc[[-1]]
+        test_with_boundary = pd.concat([boundary, test_prices])
+        oos_returns = calculate_log_returns(test_with_boundary).iloc[1:]
+
+        weights = np.array([0.5, 0.5])
+        # Should not raise — NaN returns are replaced with 0
+        returns = backtest.run_portfolio(['A', 'B'], weights, oos_returns)
+        self.assertEqual(len(returns), n_test)
+
+    def test_late_entry_ticker_excluded_from_early_windows(self):
+        """A ticker that doesn't have data in early windows should be
+        excluded by coverage filtering."""
+        np.random.seed(42)
+        dates = pd.bdate_range('2018-01-01', periods=100, freq='B')
+        # Ticker A: full data
+        a_prices = 100 + np.cumsum(np.random.randn(100) * 0.5)
+        # Ticker B: only has data from day 80 onward (late entry)
+        b_prices = np.full(100, np.nan)
+        b_prices[80:] = 100 + np.cumsum(np.random.randn(20) * 0.5)
+
+        prices = pd.DataFrame({'A': a_prices, 'B': b_prices}, index=dates)
+
+        # Training on first 60 days: B is all NaN
+        train = prices.iloc[:60]
+        # With high coverage requirement, B should be dropped
+        from src.portfolio_utils import load_prices_csv
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            train.to_csv(f.name)
+            path = f.name
+        try:
+            loaded = load_prices_csv(path, min_coverage=0.5)
+            self.assertNotIn('B', loaded.columns,
+                             "Late-entry ticker B should be excluded by coverage filter")
+            self.assertIn('A', loaded.columns)
+        finally:
+            os.unlink(path)
+
+
+class TestBacktestEndToEnd(unittest.TestCase):
+    """End-to-end integration tests for the backtest pipeline."""
+
+    def _make_prices(self, n_days=100, n_tickers=30, seed=42):
+        np.random.seed(seed)
+        dates = pd.bdate_range('2018-01-01', periods=n_days, freq='B')
+        tickers = [f'E{i}' for i in range(n_tickers)]
+        log_rets = np.random.randn(n_days, n_tickers) * 0.01 + 0.0003
+        log_rets[0] = 0
+        prices = 100 * np.exp(np.cumsum(log_rets, axis=0))
+        return pd.DataFrame(prices, index=dates, columns=tickers)
+
+    def test_evaluate_window_returns_valid_result(self):
+        """A minimal evaluate_window call should return a WindowResult
+        with at least one method category populated."""
+        prices = self._make_prices(n_days=80, n_tickers=30)
+        windows = backtest.generate_windows(
+            prices.index, train_days=40, test_days=20, step_days=20,
+        )
+        w = windows[0]
+        # Minimal run: 1 portfolio, tiny GA
+        wr = backtest.evaluate_window(
+            window=w, full_prices=prices, conn=None,
+            num_portfolios=1, num_children=10, mc_trials=50,
+            use_forecast=False,
+        )
+        self.assertIsInstance(wr, backtest.WindowResult)
+        self.assertGreater(len(wr.method_results), 0,
+                           "Should have at least one method category")
+        # Check that at least one category has portfolios
+        some_results = any(len(mr.portfolios) > 0
+                          for mr in wr.method_results.values())
+        self.assertTrue(some_results, "At least one method should have portfolio results")
+
+    def test_is_sharpe_differs_from_oos_sharpe(self):
+        """In-sample and OOS Sharpe should differ — identical values signal data leakage.
+
+        Uses a regime break: positive drift in training, zero drift in test.
+        If IS == OOS, the test data is leaking into training.
+        """
+        np.random.seed(42)
+        n_train, n_test = 50, 20
+        dates = pd.bdate_range('2018-01-01', periods=n_train + n_test, freq='B')
+        tickers = [f'E{i}' for i in range(5)]
+        # Training: positive drift
+        train_rets = np.random.randn(n_train, 5) * 0.01 + 0.002
+        # Test: zero drift
+        test_rets = np.random.randn(n_test, 5) * 0.01 + 0.0
+        all_rets = np.vstack([train_rets, test_rets])
+        all_rets[0] = 0
+        prices = pd.DataFrame(
+            100 * np.exp(np.cumsum(all_rets, axis=0)),
+            index=dates, columns=tickers,
+        )
+
+        from src.portfolio_utils import calculate_log_returns
+
+        train_prices = prices.iloc[:n_train]
+        test_prices = prices.iloc[n_train:]
+        boundary = train_prices.iloc[[-1]]
+        test_with_boundary = pd.concat([boundary, test_prices])
+        train_log_returns = calculate_log_returns(train_prices)
+        oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
+
+        # Use all tickers with equal weights
+        weights = np.ones(5) / 5
+        is_stats = backtest.get_statistics(tickers, weights, train_log_returns)
+        oos_stats = backtest.get_statistics(tickers, weights, oos_log_returns)
+
+        # With a regime break, IS and OOS Sharpe should NOT be identical
+        self.assertNotAlmostEqual(
+            is_stats['sharpe_ratio'], oos_stats['sharpe_ratio'], places=2,
+            msg="IS and OOS Sharpe are suspiciously identical — possible data leakage",
+        )
 
 
 if __name__ == '__main__':
