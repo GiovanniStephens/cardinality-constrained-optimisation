@@ -11,6 +11,9 @@ from src.portfolio_utils import (
     calculate_log_returns,
     calculate_expected_returns,
     calculate_covariance_matrix,
+    prepare_portfolio_inputs,
+    equal_weight_sharpe,
+    optimise_weights,
     OptimisationResult,
 )
 from src.optimisers.base import BaseOptimiser
@@ -24,34 +27,29 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
-def initialise_population(size, num_etfs, max_num_etfs):
-    if max_num_etfs > num_etfs:
-        raise ValueError("max_num_etfs cannot be greater than num_etfs")
-    if max_num_etfs <= 0:
-        raise ValueError("max_num_etfs must be a positive integer")
-    p = max_num_etfs / num_etfs
+def initialise_population(size, num_tickers, max_securities):
+    if max_securities > num_tickers:
+        raise ValueError("max_securities cannot be greater than num_tickers")
+    if max_securities <= 0:
+        raise ValueError("max_securities must be a positive integer")
+    p = max_securities / num_tickers
     if not (0 <= p <= 1):
         raise ValueError("Calculated probability is out of valid range [0,1]")
-    return np.random.binomial(1, p, size=(size, num_etfs))
+    return np.random.binomial(1, p, size=(size, num_tickers))
 
 
-def calculate_fitness(individual, expected_returns, log_returns, min_etfs=8, max_etfs=20,
+def calculate_fitness(individual, expected_returns, cov_matrix, min_securities=8, max_securities=20,
                       min_return=0.12):
-    selected_indices = individual == 1
-    num_selected_etfs = np.sum(selected_indices)
-    if num_selected_etfs < min_etfs or num_selected_etfs > max_etfs:
-        return -1e4
-    if not selected_indices.any():
-        return 0
-    filtered_log_returns = log_returns.loc[:, selected_indices]
-    cov_matrix_subset = calculate_covariance_matrix(filtered_log_returns)
-    filtered_returns = expected_returns[selected_indices]
-    weights = np.ones(num_selected_etfs) / num_selected_etfs
-    portfolio_return = np.dot(weights, filtered_returns)
-    if min_return is not None and portfolio_return < min_return:
-        return -1e4
-    portfolio_variance = np.dot(weights.T, np.dot(cov_matrix_subset, weights))
-    return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
+    """Equal-weight Sharpe with optional minimum return filter."""
+    sel = individual == 1
+    if min_return is not None and np.any(sel):
+        n = np.sum(sel)
+        if n > 0:
+            port_return = np.dot(np.ones(n) / n, expected_returns[sel])
+            if port_return < min_return:
+                return -1e4
+    return equal_weight_sharpe(sel, expected_returns, cov_matrix,
+                               min_securities, max_securities)
 
 
 def select_parents(population, fitness, num_parents):
@@ -91,11 +89,10 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                       population_size, mutation_rate, num_elites,
                       migration_interval, migration_rate, return_dict,
                       convergence_log=None, start_time=None, time_budget=None,
-                      min_etfs=8, max_etfs=20, min_return=0.12):
-    num_etfs = data.shape[1]
-    population = initialise_population(population_size, num_etfs, max_num_etfs=max_etfs)
-    log_returns = calculate_log_returns(data)
-    expected_returns = calculate_expected_returns(log_returns)
+                      min_securities=8, max_securities=20, min_return=0.12):
+    num_tickers = data.shape[1]
+    population = initialise_population(population_size, num_tickers, max_securities=max_securities)
+    log_returns, expected_returns, cov_matrix = prepare_portfolio_inputs(data)
     best_overall_fitness = float('-inf')
     best_overall_individual = None
     for generation in range(num_generations):
@@ -111,8 +108,8 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                     population[replace_indices] = migrants
         fitness = []
         for ind in population:
-            fitness.append(calculate_fitness(ind, expected_returns, log_returns,
-                                            min_etfs=min_etfs, max_etfs=max_etfs,
+            fitness.append(calculate_fitness(ind, expected_returns, cov_matrix,
+                                            min_securities=min_securities, max_securities=max_securities,
                                             min_return=min_return))
         fitness = np.array(fitness)
         elites, elite_indices = elitism(population, fitness, num_elites)
@@ -125,7 +122,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
             if (time.time() - start_time) > time_budget:
                 break
         parents = select_parents(population, fitness, num_elites)
-        offspring = crossover(parents, (population_size - num_elites, num_etfs))
+        offspring = crossover(parents, (population_size - num_elites, num_tickers))
         offspring = mutate(offspring, mutation_rate)
         population[:num_elites] = elites
         population[num_elites:] = offspring
@@ -142,14 +139,23 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
 
 def run_parallel_ga(data, num_generations, total_population_size,
                     mutation_rate, num_elites, migration_interval,
-                    migration_rate, min_etfs=8, max_etfs=20,
-                    min_return=0.12):
+                    migration_rate, min_securities=8, max_securities=20,
+                    min_return=0.12, seed=None):
     num_islands = os.cpu_count()
     manager = Manager()
     return_dict = manager.dict()
 
+    # Counter for deterministic per-island seeding
+    _island_counter = [0]
+    _base_seed = seed
+
     def init_random_state():
-        np.random.seed(None)
+        if _base_seed is not None:
+            island_seed = _base_seed + _island_counter[0]
+            _island_counter[0] += 1
+            np.random.seed(island_seed)
+        else:
+            np.random.seed(None)
 
     logger.info(
         "Starting island GA: %d islands, %d generations, population=%d",
@@ -162,7 +168,7 @@ def run_parallel_ga(data, num_generations, total_population_size,
                  mutation_rate, num_elites, migration_interval,
                  migration_rate, return_dict,
                  None, None, None,
-                 min_etfs, max_etfs, min_return) for i in range(num_islands)]
+                 min_securities, max_securities, min_return) for i in range(num_islands)]
         results = pool.starmap(genetic_algorithm, args)
     elapsed = time.time() - start
     best_fitness = float('-inf')
@@ -177,9 +183,6 @@ def run_parallel_ga(data, num_generations, total_population_size,
     return best_solution, best_fitness
 
 
-def optimise_weights(best_solution, data, min_return=0.12):
-    from src.portfolio_utils import optimise_weights as _optimise_weights
-    return _optimise_weights(best_solution, data, min_return=min_return)
 
 
 class IslandGAOptimiser(BaseOptimiser):
@@ -191,7 +194,7 @@ class IslandGAOptimiser(BaseOptimiser):
                  migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
                  migration_rate=ISLAND_GA_MIGRATION_RATE,
                  min_securities=8, max_securities=20,
-                 min_return=0.12):
+                 min_return=0.12, seed=None):
         self.num_generations = num_generations
         self.population_size = population_size
         self.num_elites = num_elites
@@ -200,8 +203,11 @@ class IslandGAOptimiser(BaseOptimiser):
         self.min_securities = min_securities
         self.max_securities = max_securities
         self.min_return = min_return
+        self.seed = seed
 
     def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        if self.seed is not None:
+            np.random.seed(self.seed)
         mutation_rate = 1 / prices.shape[1]
         start = time.time()
         best_solution, best_fitness = run_parallel_ga(
@@ -212,9 +218,10 @@ class IslandGAOptimiser(BaseOptimiser):
             num_elites=self.num_elites,
             migration_interval=self.migration_interval,
             migration_rate=self.migration_rate,
-            min_etfs=self.min_securities,
-            max_etfs=self.max_securities,
+            min_securities=self.min_securities,
+            max_securities=self.max_securities,
             min_return=self.min_return,
+            seed=self.seed,
         )
         elapsed = time.time() - start
 
@@ -257,22 +264,10 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging(
     )
-    # Load from database (falls back to CSV if DB is empty)
-    from src import db
-    conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    conn.close()
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_prices_csv('data/time_series_20251016_113257.csv', last_n_days=730)
-    else:
-        # Apply same filters: last 2 years, 95% coverage, ffill
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
-        data = data[data.index >= cutoff]
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
+    from src.portfolio_utils import load_prices
+    data = load_prices(exchange='US',
+                       csv_fallback='data/time_series_20251016_113257.csv',
+                       last_n_days=DATA_LOOKBACK_DAYS)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
     num_generations = ISLAND_GA_NUM_GENERATIONS
     total_population_size = ISLAND_GA_POPULATION_SIZE

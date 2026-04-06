@@ -8,8 +8,8 @@ from multiprocessing import Pool
 
 from src.portfolio_utils import (
     calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
+    prepare_portfolio_inputs,
+    equal_weight_sharpe,
     optimise_weights,
     OptimisationResult,
 )
@@ -22,48 +22,34 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 
-def random_portfolio(num_etfs, min_num_etfs, max_num_etfs):
+def random_portfolio(num_tickers, min_securities, max_securities):
     """Generate a random binary selection vector."""
-    num_selected = np.random.randint(min_num_etfs, max_num_etfs + 1)
-    portfolio = np.zeros(num_etfs, dtype=int)
-    selected_indices = np.random.choice(num_etfs, num_selected, replace=False)
+    num_selected = np.random.randint(min_securities, max_securities + 1)
+    portfolio = np.zeros(num_tickers, dtype=int)
+    selected_indices = np.random.choice(num_tickers, num_selected, replace=False)
     portfolio[selected_indices] = 1
     return portfolio
 
 
 def calculate_fitness(portfolio, expected_returns, cov_matrix,
-                      min_num_etfs, max_num_etfs):
+                      min_securities, max_securities):
     """Sharpe ratio for an equal-weight portfolio (used during search)."""
-    selected_indices = portfolio == 1
-    num_selected = np.sum(selected_indices)
-    if num_selected < min_num_etfs or num_selected > max_num_etfs:
-        return -1e4
-    if not np.any(selected_indices):
-        return 0
-
-    filtered_returns = expected_returns[selected_indices]
-    filtered_cov_matrix = cov_matrix[np.ix_(selected_indices, selected_indices)]
-    weights = np.ones(num_selected) / num_selected
-    portfolio_return = np.dot(weights, filtered_returns)
-    portfolio_variance = np.dot(weights, np.dot(filtered_cov_matrix, weights))
-
-    return portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
+    return equal_weight_sharpe(portfolio == 1, expected_returns, cov_matrix,
+                               min_securities, max_securities)
 
 
-def monte_carlo_search(data, trials, min_num_etfs, max_num_etfs):
+def monte_carlo_search(data, trials, min_securities, max_securities):
     """Run *trials* random portfolio evaluations, return the best."""
-    log_returns = calculate_log_returns(data)
-    expected_returns = calculate_expected_returns(log_returns).values
-    cov_matrix = calculate_covariance_matrix(log_returns).values
-    num_etfs = data.shape[1]
+    log_returns, expected_returns, cov_matrix = prepare_portfolio_inputs(data)
+    num_tickers = data.shape[1]
 
     best_fitness = float('-inf')
     best_portfolio = None
 
     for _ in range(trials):
-        portfolio = random_portfolio(num_etfs, min_num_etfs, max_num_etfs)
+        portfolio = random_portfolio(num_tickers, min_securities, max_securities)
         fitness = calculate_fitness(portfolio, expected_returns, cov_matrix,
-                                    min_num_etfs, max_num_etfs)
+                                    min_securities, max_securities)
         if fitness > best_fitness:
             best_fitness = fitness
             best_portfolio = portfolio
@@ -72,7 +58,7 @@ def monte_carlo_search(data, trials, min_num_etfs, max_num_etfs):
 
 
 def parallel_monte_carlo(data, num_trials, num_processes,
-                         min_num_etfs, max_num_etfs):
+                         min_securities, max_securities):
     """Distribute Monte Carlo search across CPU cores."""
     logger.info(
         "Starting Monte Carlo: %d trials across %d processes",
@@ -83,7 +69,7 @@ def parallel_monte_carlo(data, num_trials, num_processes,
     with Pool(num_processes) as pool:
         results = pool.starmap(
             monte_carlo_search,
-            [(data, trials_per_process, min_num_etfs, max_num_etfs)
+            [(data, trials_per_process, min_securities, max_securities)
              for _ in range(num_processes)],
         )
 
@@ -99,13 +85,16 @@ class MonteCarloOptimiser(BaseOptimiser):
     def __init__(self, n_trials=10_000_000,
                  min_securities=GA_MIN_SECURITIES,
                  max_securities=GA_MAX_SECURITIES,
-                 num_processes=None):
+                 num_processes=None, seed=None):
         self.n_trials = n_trials
         self.min_securities = min_securities
         self.max_securities = max_securities
         self.num_processes = num_processes or os.cpu_count()
+        self.seed = seed
 
     def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        if self.seed is not None:
+            np.random.seed(self.seed)
         start = time.time()
         best_solution, best_fitness = parallel_monte_carlo(
             prices, self.n_trials, self.num_processes,
@@ -145,34 +134,22 @@ if __name__ == '__main__':
     setup_logging()
 
     # ── Load prices from DB (CSV fallback) ────────────────────────────────
-    from src import db
-
-    conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        from src.portfolio_utils import load_prices_csv
-        data = load_prices_csv('data/ETF_Prices.csv', last_n_days=730)
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
-        data = data[data.index >= cutoff]
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
-
+    from src.portfolio_utils import load_prices
+    data = load_prices(exchange='US',
+                       csv_fallback='data/ETF_Prices.csv',
+                       last_n_days=DATA_LOOKBACK_DAYS)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 
     # ── Parameters ────────────────────────────────────────────────────────
     num_trials = 10_000_000
     num_processes = os.cpu_count()
-    min_num_etfs = 10
-    max_num_etfs = 20
+    min_securities = 10
+    max_securities = 20
 
     # ── Monte Carlo search ────────────────────────────────────────────────
     mc_start = time.time()
     best_solution, best_fitness = parallel_monte_carlo(
-        data, num_trials, num_processes, min_num_etfs, max_num_etfs,
+        data, num_trials, num_processes, min_securities, max_securities,
     )
     mc_elapsed = time.time() - mc_start
 
@@ -208,8 +185,8 @@ if __name__ == '__main__':
                     'data_source': 'yahoo_finance',
                     'num_trials': num_trials,
                     'num_processes': num_processes,
-                    'min_securities': min_num_etfs,
-                    'max_securities': max_num_etfs,
+                    'min_securities': min_securities,
+                    'max_securities': max_securities,
                 },
                 results={
                     'best_sharpe': final_sharpe,
