@@ -86,8 +86,8 @@ def log_timing(func):
                         time.time() - start)
             return result
         except Exception:
-            logger.info("Failed %s after %.1fs", func.__qualname__,
-                        time.time() - start)
+            logger.warning("Failed %s after %.1fs", func.__qualname__,
+                           time.time() - start, exc_info=True)
             raise
 
     return wrapper

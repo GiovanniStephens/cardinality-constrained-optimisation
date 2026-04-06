@@ -9,6 +9,7 @@ import pandas as pd
 
 from unittest.mock import MagicMock
 
+from tests import requires_integration
 from src.portfolio_utils import (
     load_prices_csv,
     calculate_log_returns,
@@ -30,7 +31,10 @@ from src.portfolio_utils import (
 )
 
 
-class TestLoadPricesCsv(unittest.TestCase):
+@requires_integration
+class TestLoadPricesCsvIntegration(unittest.TestCase):
+    """Integration tests that load real CSV price data."""
+
     def test_returns_dataframe(self):
         df = load_prices_csv('data/ETF_Prices.csv')
         self.assertIsInstance(df, pd.DataFrame)
@@ -47,6 +51,8 @@ class TestLoadPricesCsv(unittest.TestCase):
         recent = load_prices_csv('data/time_series_20251016_113257.csv', last_n_days=365)
         self.assertLess(recent.shape[0], full.shape[0])
 
+
+class TestLoadPricesCsv(unittest.TestCase):
     def test_headers_only_returns_empty_dataframe(self):
         """
         A CSV with column headers but no data rows returns an empty DataFrame
@@ -245,8 +251,8 @@ class TestOptimiseWeights(unittest.TestCase):
         )
         selection = np.array([1, 1, 1])
         result = optimise_weights(selection, prices)
-        if result.success:
-            self.assertAlmostEqual(sum(result.x), 1.0, places=3)
+        self.assertTrue(result.success, f"Optimisation failed: {result.message}")
+        self.assertAlmostEqual(sum(result.x), 1.0, places=4)
 
 
 class TestSharpeRatioVariance(unittest.TestCase):
@@ -309,6 +315,66 @@ class TestDeflatedSharpeRatio(unittest.TestCase):
         produce a low DSR since expected max under null exceeds observed."""
         dsr = deflated_sharpe_ratio(observed_sr=0.3, n=50, num_trials=100000)
         self.assertLess(dsr, 0.5)
+
+
+class TestEqualWeightSharpe(unittest.TestCase):
+    """Tests for the shared equal_weight_sharpe() fitness function."""
+
+    def setUp(self):
+        np.random.seed(42)
+        n = 10
+        # Synthetic: positive expected returns, diagonal covariance
+        self.expected_returns = np.array([0.05 + 0.02 * i for i in range(n)])
+        self.cov_matrix = np.diag([0.04] * n)  # 20% vol each, uncorrelated
+
+    def test_normal_selection(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        sel = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0], dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     self.cov_matrix, 3, 8)
+        self.assertGreater(result, 0)
+        self.assertTrue(np.isfinite(result))
+
+    def test_too_few_selected(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        sel = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     self.cov_matrix, 3, 8)
+        self.assertEqual(result, -1e4)
+
+    def test_too_many_selected(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        sel = np.ones(10, dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     self.cov_matrix, 3, 8)
+        self.assertEqual(result, -1e4)
+
+    def test_none_selected(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        sel = np.zeros(10, dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     self.cov_matrix, 0, 8)
+        self.assertEqual(result, 0.0)
+
+    def test_zero_variance_returns_zero(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        zero_cov = np.zeros((10, 10))
+        sel = np.array([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     zero_cov, 3, 8)
+        self.assertEqual(result, 0.0)
+
+    def test_matches_manual_sharpe(self):
+        from src.portfolio_utils import equal_weight_sharpe
+        sel = np.array([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
+        result = equal_weight_sharpe(sel, self.expected_returns,
+                                     self.cov_matrix, 2, 8)
+        # Manual: weights=[0.5, 0.5], returns=[0.05, 0.07], cov=diag(0.04)
+        w = np.array([0.5, 0.5])
+        ret = np.dot(w, [0.05, 0.07])  # 0.06
+        var = np.dot(w, np.dot(np.diag([0.04, 0.04]), w))  # 0.02
+        expected = ret / np.sqrt(var)
+        self.assertAlmostEqual(result, expected, places=10)
 
 
 class TestWarnIfSharpeSuspicious(unittest.TestCase):

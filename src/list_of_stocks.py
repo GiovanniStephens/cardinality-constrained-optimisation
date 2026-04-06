@@ -1,9 +1,12 @@
 import io
 import json
+import logging
 import re
 import urllib.request
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_nasdaq_traded() -> pd.DataFrame:
@@ -80,21 +83,23 @@ def fetch_sec_tickers_with_exchange() -> dict:
 
 
 def main():
-    print("Fetching NASDAQ traded symbols...")
+    logger.info("Fetching NASDAQ traded symbols...")
     df = fetch_nasdaq_traded()
-    print(f"Total symbols in NASDAQ file: {len(df)}")
+    logger.info("Total symbols in NASDAQ file: %d", len(df))
 
     stocks = filter_common_stocks(df)
-    print(f"Common stocks after filtering: {len(stocks)}")
+    logger.info("Common stocks after filtering: %d", len(stocks))
 
     tickers = stocks["Symbol"].sort_values().reset_index(drop=True)
     out = pd.DataFrame(tickers.values, columns=["Tickers"])
     out.to_csv("data/US_Stocks.csv", index=False)
-    print(f"Saved {len(out)} tickers to data/US_Stocks.csv")
+    logger.info("Saved %d tickers to data/US_Stocks.csv", len(out))
 
-    print(f"\nFirst 10: {tickers.head(10).tolist()}")
-    print(f"Last 10:  {tickers.tail(10).tolist()}")
+    logger.info("First 10: %s", tickers.head(10).tolist())
+    logger.info("Last 10:  %s", tickers.tail(10).tolist())
 
 
 if __name__ == "__main__":
+    from src.logging_config import setup_logging
+    setup_logging()
     main()

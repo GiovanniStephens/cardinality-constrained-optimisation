@@ -80,6 +80,26 @@ BACKTEST_TEST_DAYS = 252       # 1 year OOS per window
 BACKTEST_STEP_DAYS = 252       # non-overlapping yearly windows
 BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. ['2015-2019/2020']
 
+# ─── ARIMA forecast parameters ──────────────────────────────────────────────
+
+ARIMA_START_P = 1
+ARIMA_START_Q = 1
+ARIMA_MAX_P = 5
+ARIMA_MAX_Q = 5
+MIN_TRAINING_DAYS = 30
+
+# ─── GARCH forecast parameters ─────────────────────────────────────────────
+
+# Scale factor for GARCH input: daily log returns (~0.001) are multiplied by
+# this before fitting, then variance is divided by GARCH_SCALE^2 afterwards.
+# Improves numerical stability of the GARCH optimizer.
+GARCH_SCALE = 100
+
+# ─── Forecast paths ─────────────────────────────────────────────────────────
+
+FORECAST_EXPECTED_RETURNS_PATH = 'data/expected_returns.csv'
+FORECAST_VARIANCES_PATH = 'data/variances.csv'
+
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 500
@@ -87,3 +107,38 @@ PIPELINE_RATE_LIMIT_DELAY = 0.5    # seconds between batches
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space
 PIPELINE_MAX_RETRIES = 3
+
+
+# ─── Validation ─────────────────────────────────────────────────────────────
+
+
+def validate_config():
+    """Check that configuration values are internally consistent.
+
+    Raises ValueError on the first inconsistency found.
+    """
+    if GA_MIN_SECURITIES > GA_MAX_SECURITIES:
+        raise ValueError(
+            f"GA_MIN_SECURITIES ({GA_MIN_SECURITIES}) > "
+            f"GA_MAX_SECURITIES ({GA_MAX_SECURITIES})"
+        )
+    if not (0 < DATA_MIN_COVERAGE <= 1):
+        raise ValueError(
+            f"DATA_MIN_COVERAGE must be in (0, 1], got {DATA_MIN_COVERAGE}"
+        )
+    if MIN_HISTORY_YEARS <= 0:
+        raise ValueError(
+            f"MIN_HISTORY_YEARS must be > 0, got {MIN_HISTORY_YEARS}"
+        )
+    if GARCH_SCALE <= 0:
+        raise ValueError(
+            f"GARCH_SCALE must be > 0, got {GARCH_SCALE}"
+        )
+    if ARIMA_START_P > ARIMA_MAX_P:
+        raise ValueError(
+            f"ARIMA_START_P ({ARIMA_START_P}) > ARIMA_MAX_P ({ARIMA_MAX_P})"
+        )
+    if ARIMA_START_Q > ARIMA_MAX_Q:
+        raise ValueError(
+            f"ARIMA_START_Q ({ARIMA_START_Q}) > ARIMA_MAX_Q ({ARIMA_MAX_Q})"
+        )

@@ -1,5 +1,6 @@
 """Shared portfolio utility functions used across all optimisation methods."""
 
+import logging
 from dataclasses import dataclass, field
 from typing import List
 
@@ -7,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from src.config import TRADING_DAYS_PER_YEAR
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Common interface ────────────────────────────────────────────────────────
@@ -24,6 +27,54 @@ class OptimisationResult:
     weights: np.ndarray
     sharpe_ratio: float
     metadata: dict = field(default_factory=dict)
+
+
+def load_prices(exchange='US', csv_fallback=None, conn=None,
+                last_n_days=None, min_coverage=None, ffill_limit=None):
+    """Load price data from DB with CSV fallback, applying standard filters.
+
+    :param exchange: exchange code for DB query (default 'US').
+    :param csv_fallback: CSV path to use if DB is empty.
+    :param conn: sqlite3 connection. If None, opens and closes one automatically.
+    :param last_n_days: if set, keep only the most recent N calendar days.
+    :param min_coverage: minimum non-null fraction to keep a column (default from config).
+    :param ffill_limit: max consecutive NaN to forward-fill (default from config).
+    :return: cleaned DataFrame with dates as index, tickers as columns.
+    """
+    from src.config import DATA_MIN_COVERAGE, DATA_FFILL_LIMIT
+    if min_coverage is None:
+        min_coverage = DATA_MIN_COVERAGE
+    if ffill_limit is None:
+        ffill_limit = DATA_FFILL_LIMIT
+
+    own_conn = False
+    if conn is None:
+        from src import db
+        conn = db.get_connection()
+        own_conn = True
+
+    try:
+        from src import db as _db
+        data = _db.load_prices(conn, exchange=exchange)
+    finally:
+        if own_conn:
+            conn.close()
+
+    if data.empty and csv_fallback:
+        logger.info("No data in DB, falling back to CSV: %s", csv_fallback)
+        return load_prices_csv(csv_fallback, min_coverage=min_coverage,
+                               last_n_days=last_n_days)
+    if data.empty:
+        return data
+
+    data.index = pd.to_datetime(data.index)
+    data = data.sort_index()
+    if last_n_days is not None:
+        cutoff = data.index[-1] - pd.Timedelta(days=last_n_days)
+        data = data[data.index >= cutoff]
+    data = data.dropna(axis=1, thresh=int(min_coverage * len(data)))
+    data = data.ffill(limit=ffill_limit)
+    return data
 
 
 def load_prices_csv(filename, min_coverage=0.95, last_n_days=None):
@@ -97,6 +148,18 @@ def calculate_variances(log_returns, annualise=True):
     return var
 
 
+def prepare_portfolio_inputs(prices):
+    """Compute standard portfolio inputs from a price DataFrame.
+
+    :param prices: DataFrame with dates as index, tickers as columns.
+    :return: (log_returns, expected_returns, cov_matrix) as numpy arrays.
+    """
+    log_returns = calculate_log_returns(prices)
+    expected_returns = calculate_expected_returns(log_returns).values
+    cov_matrix = calculate_covariance_matrix(log_returns).values
+    return log_returns, expected_returns, cov_matrix
+
+
 def sharpe_ratio(weights, expected_returns, cov_matrix):
     """Portfolio Sharpe ratio (positive).
 
@@ -125,6 +188,32 @@ def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
     :return: negative Sharpe ratio as a float.
     """
     return -sharpe_ratio(weights, expected_returns, cov_matrix)
+
+
+def equal_weight_sharpe(selected_indices, expected_returns, cov_matrix,
+                        min_securities, max_securities):
+    """Equal-weight Sharpe ratio for a binary selection vector.
+
+    Shared fitness function for GA and Monte Carlo portfolio search.
+    Returns a large negative penalty if cardinality constraints are violated.
+
+    :param selected_indices: boolean or binary array (1 = selected).
+    :param expected_returns: array of annualised expected returns (all assets).
+    :param cov_matrix: annualised covariance matrix as numpy array (all assets).
+    :param min_securities: minimum number of selected assets.
+    :param max_securities: maximum number of selected assets.
+    :return: Sharpe ratio (float), or -1e4 on constraint violation.
+    """
+    sel = np.asarray(selected_indices, dtype=bool)
+    n_selected = np.sum(sel)
+    if n_selected < min_securities or n_selected > max_securities:
+        return -1e4
+    if n_selected == 0:
+        return 0.0
+    weights = np.ones(n_selected) / n_selected
+    ret = np.dot(weights, expected_returns[sel])
+    var = np.dot(weights, np.dot(cov_matrix[np.ix_(sel, sel)], weights))
+    return ret / np.sqrt(var) if var > 0 else 0.0
 
 
 # ─── Performance Metrics ──────────────────────────────────────────────────────
