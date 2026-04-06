@@ -12,4 +12,14 @@ include_directories(${CMAKE_SOURCE_DIR}/../eigen)
 include_directories(${CMAKE_SOURCE_DIR}/../csv-parser/single_include)
 
 add_executable(optimisation optimisation.cpp)
-target_link_libraries(optimisation PRIVATE pthread)
+
+# Platform-specific linking
+if(APPLE)
+    # Apple Accelerate framework provides optimised BLAS (cblas_dgemm) for ARM64/AMX.
+    # EIGEN_USE_BLAS makes Eigen delegate matrix ops to Accelerate transparently.
+    find_library(ACCELERATE_FRAMEWORK Accelerate)
+    target_link_libraries(optimisation PRIVATE ${ACCELERATE_FRAMEWORK})
+    target_compile_definitions(optimisation PRIVATE EIGEN_USE_BLAS)
+else()
+    target_link_libraries(optimisation PRIVATE pthread)
+endif()

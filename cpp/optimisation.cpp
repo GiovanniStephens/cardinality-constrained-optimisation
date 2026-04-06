@@ -1,7 +1,9 @@
 #include <Eigen/Dense>
+#include <Eigen/SVD>
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include <vector>
 #include <random>
@@ -11,6 +13,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <numeric>
 #include "csv.hpp"
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
@@ -34,6 +37,8 @@ struct Config {
     double missing_threshold = 0.02; // fraction of rows allowed to be NaN
     int mc_log_interval = 5000;      // MC: log every N trials per thread
     bool binary_input = false;       // if true, read binary format instead of CSV
+    bool use_svd = false;            // if true, use truncated SVD for fitness
+    int svd_components = 200;        // number of SVD components to keep
 };
 
 Config parse_args(int argc, char* argv[]) {
@@ -59,11 +64,14 @@ Config parse_args(int argc, char* argv[]) {
                 << "  --top-k N              Top K solutions to output (default: 5)\n"
                 << "  --missing-threshold R  Max fraction of NaN rows per column (default: 0.02)\n"
                 << "  --mc-log-interval N    MC: log every N trials per thread (default: 5000)\n"
-                << "  --binary               Read binary format instead of CSV\n";
+                << "  --binary               Read binary format instead of CSV\n"
+                << "  --svd                  Use truncated SVD for approximate fitness\n"
+                << "  --svd-components N     Number of SVD components (default: 200)\n";
             std::exit(0);
         }
         // Boolean flags (no value)
         if (arg == "--binary") { cfg.binary_input = true; continue; }
+        if (arg == "--svd") { cfg.use_svd = true; continue; }
         if (i + 1 >= argc) break;
         std::string val = argv[++i];
         if (arg == "--mode") cfg.mode = val;
@@ -83,6 +91,7 @@ Config parse_args(int argc, char* argv[]) {
         else if (arg == "--top-k") cfg.top_k = std::stoi(val);
         else if (arg == "--missing-threshold") cfg.missing_threshold = std::stod(val);
         else if (arg == "--mc-log-interval") cfg.mc_log_interval = std::stoi(val);
+        else if (arg == "--svd-components") cfg.svd_components = std::stoi(val);
     }
     if (cfg.num_islands < 0)
         cfg.num_islands = static_cast<int>(std::thread::hardware_concurrency());
@@ -95,6 +104,7 @@ Config parse_args(int argc, char* argv[]) {
 //   num_cols null-terminated ticker strings,
 //   num_rows * num_cols float64 values (row-major).
 // Returns the matrix directly as log returns (no further processing needed).
+// Phase 4: Uses Eigen::Map for bulk row-major → col-major transpose.
 Eigen::MatrixXd readBinaryData(const std::string& filename,
                                 std::vector<std::string>& tickers) {
     std::ifstream file(filename, std::ios::binary);
@@ -114,17 +124,15 @@ Eigen::MatrixXd readBinaryData(const std::string& filename,
         tickers.push_back(ticker);
     }
 
-    // Read row-major float64 data directly into Eigen (which is col-major)
-    std::vector<double> buf(numRows * numCols);
-    file.read(reinterpret_cast<char*>(buf.data()), numRows * numCols * sizeof(double));
+    // Read row-major float64 data into buffer
+    std::vector<double> buf(static_cast<size_t>(numRows) * numCols);
+    file.read(reinterpret_cast<char*>(buf.data()),
+              static_cast<std::streamsize>(numRows) * numCols * sizeof(double));
 
-    // Map row-major buffer into Eigen col-major matrix
-    Eigen::MatrixXd mat(numRows, numCols);
-    for (uint32_t r = 0; r < numRows; ++r)
-        for (uint32_t c = 0; c < numCols; ++c)
-            mat(r, c) = buf[r * numCols + c];
-
-    return mat;
+    // Map row-major buffer and convert to col-major Eigen matrix in one bulk op
+    Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>
+        rowMajor(buf.data(), numRows, numCols);
+    return Eigen::MatrixXd(rowMajor);
 }
 
 Eigen::MatrixXd readETFData(const std::string& filename, std::vector<std::string>& tickers) {
@@ -247,123 +255,185 @@ Eigen::VectorXd calculateExpectedReturn(const Eigen::MatrixXd& returns) {
     return meanReturns;
 }
 
+// Retained for SLSQP/weighted refinement on sub-covariance matrices (n ≤ 30).
+// NEVER call this on the full M×M matrix — see CLAUDE.md covariance rule.
 Eigen::MatrixXd calculateCovarianceMatrix(const Eigen::MatrixXd& returns) {
     int n = returns.rows();
     Eigen::MatrixXd centered = returns.rowwise() - returns.colwise().mean();
     return (centered.transpose() * centered) / (n - 1);
 }
 
-double calculatePortfolioReturn(const Eigen::VectorXd& expectedReturns, const Eigen::VectorXd& weights) {
-    return (expectedReturns.transpose() * weights).value();
+// ─── Bitwise individual representation (Phase 2) ──────────────────────────────
+
+using BitIndividual = std::vector<uint64_t>;
+static constexpr int BITS_PER_WORD = 64;
+
+inline int numWords(int numGenes) {
+    return (numGenes + BITS_PER_WORD - 1) / BITS_PER_WORD;
 }
 
-double calculatePortfolioRisk(const Eigen::MatrixXd& covarianceMatrix, const Eigen::VectorXd& weights) {
-    return std::sqrt((weights.transpose() * covarianceMatrix * weights).value()) * std::sqrt(252.0);
+inline bool getBit(const BitIndividual& ind, int pos) {
+    return (ind[pos / BITS_PER_WORD] >> (pos % BITS_PER_WORD)) & 1ULL;
 }
 
-// ─── GA operators ──────────────────────────────────────────────────────────────
+inline void setBit(BitIndividual& ind, int pos) {
+    ind[pos / BITS_PER_WORD] |= (1ULL << (pos % BITS_PER_WORD));
+}
 
-Eigen::MatrixXi initializePopulation(int size, int numETFs, int maxNumETFs, std::mt19937& rng) {
-    std::bernoulli_distribution dist(static_cast<double>(maxNumETFs) / numETFs);
-    Eigen::MatrixXi population(size, numETFs);
-    for (int i = 0; i < size; ++i)
-        for (int j = 0; j < numETFs; ++j)
-            population(i, j) = dist(rng) ? 1 : 0;
+inline void clearBit(BitIndividual& ind, int pos) {
+    ind[pos / BITS_PER_WORD] &= ~(1ULL << (pos % BITS_PER_WORD));
+}
+
+inline void flipBit(BitIndividual& ind, int pos) {
+    ind[pos / BITS_PER_WORD] ^= (1ULL << (pos % BITS_PER_WORD));
+}
+
+inline int popcount(const BitIndividual& ind) {
+    int count = 0;
+    for (auto w : ind) count += __builtin_popcountll(w);
+    return count;
+}
+
+// ─── GA operators (bitwise) ────────────────────────────────────────────────────
+
+std::vector<BitIndividual> initializePopulation(int size, int numGenes,
+                                                  int maxNumETFs, std::mt19937& rng) {
+    int nw = numWords(numGenes);
+    double prob = static_cast<double>(maxNumETFs) / numGenes;
+    std::bernoulli_distribution dist(prob);
+    std::vector<BitIndividual> population(size, BitIndividual(nw, 0));
+
+    for (int i = 0; i < size; ++i) {
+        for (int j = 0; j < numGenes; ++j) {
+            if (dist(rng)) setBit(population[i], j);
+        }
+    }
     return population;
 }
 
-Eigen::MatrixXi selectParents(const Eigen::MatrixXi& population,
-                               const Eigen::VectorXd& fitness, int numParents) {
-    std::vector<int> indices(population.rows());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(),
-              [&fitness](int a, int b) { return fitness(a) > fitness(b); });
-    Eigen::MatrixXi parents(numParents, population.cols());
-    for (int i = 0; i < numParents; ++i)
-        parents.row(i) = population.row(indices[i]);
-    return parents;
-}
-
-Eigen::MatrixXi crossover(const Eigen::MatrixXi& parents, int offspringSize, std::mt19937& rng) {
-    Eigen::MatrixXi offspring(offspringSize, parents.cols());
-    for (int i = 0; i < offspringSize; ++i) {
-        int parent1 = rng() % parents.rows();
-        int parent2 = rng() % parents.rows();
-        for (int j = 0; j < parents.cols(); ++j)
-            offspring(i, j) = rng() % 2 ? parents(parent1, j) : parents(parent2, j);
+// Uniform crossover: for each 64-bit word, generate a random mask and blend
+BitIndividual crossoverOne(const BitIndividual& p1, const BitIndividual& p2,
+                            std::mt19937& rng) {
+    BitIndividual child(p1.size());
+    for (size_t w = 0; w < p1.size(); ++w) {
+        // Generate full 64-bit random mask from two 32-bit rng calls
+        uint64_t mask = static_cast<uint64_t>(rng()) |
+                        (static_cast<uint64_t>(rng()) << 32);
+        child[w] = (p1[w] & mask) | (p2[w] & ~mask);
     }
-    return offspring;
+    return child;
 }
 
-void mutate(Eigen::MatrixXi& offspring, double mutationRate, std::mt19937& rng) {
-    std::bernoulli_distribution dist(mutationRate);
-    for (int i = 0; i < offspring.rows(); ++i)
-        for (int j = 0; j < offspring.cols(); ++j)
-            if (dist(rng))
-                offspring(i, j) = 1 - offspring(i, j);
+// Phase 3: Poisson mutation — O(1) expected per individual instead of O(numGenes)
+void mutateOne(BitIndividual& ind, double mutationRate, int numGenes,
+               std::mt19937& rng) {
+    double lambda = mutationRate * numGenes;  // ≈ 1.0
+    std::poisson_distribution<int> poissonDist(lambda);
+    std::uniform_int_distribution<int> posDist(0, numGenes - 1);
+    int k = poissonDist(rng);
+    for (int m = 0; m < k; ++m) {
+        flipBit(ind, posDist(rng));
+    }
 }
 
-Eigen::MatrixXi elitism(const Eigen::MatrixXi& population,
-                          const Eigen::VectorXd& fitness, int numElites) {
-    std::vector<int> indices(population.rows());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(),
-              [&fitness](int a, int b) { return fitness(a) > fitness(b); });
-    Eigen::MatrixXi elites(numElites, population.cols());
-    for (int i = 0; i < numElites; ++i)
-        elites.row(i) = population.row(indices[i]);
-    return elites;
-}
+// ─── Fitness (Phase 1+2: equal-weight column-sum with bit scanning) ───────────
 
-// ─── Fitness ───────────────────────────────────────────────────────────────────
-
-double calculateFitness(const Eigen::RowVectorXi& individual,
-                        const Eigen::MatrixXd& logReturns,
-                        const Eigen::VectorXd& expectedReturns,
-                        int minETFs, int maxETFs,
-                        double riskFreeRate, double minReturn) {
-    std::vector<int> selectedIndices;
-    for (int i = 0; i < individual.size(); ++i)
-        if (individual(i) == 1)
-            selectedIndices.push_back(i);
-
-    int n = static_cast<int>(selectedIndices.size());
+// Exact fitness via pre-centered returns: O(T × n) where n = selected count.
+// Mathematically: w^T Σ_sub w = ||Xc_sub @ w||² / (T-1).
+// For equal weights: = ||column_sum||² / (n² × (T-1)).
+double calculateFitnessExact(const BitIndividual& individual, int numGenes,
+                              const Eigen::MatrixXd& centeredReturns,
+                              const Eigen::VectorXd& expectedReturns,
+                              int T,
+                              int minETFs, int maxETFs,
+                              double riskFreeRate, double minReturn) {
+    int n = popcount(individual);
     if (n < minETFs || n > maxETFs) return -1e4;
 
-    Eigen::MatrixXd selectedLogReturns(logReturns.rows(), n);
-    Eigen::VectorXd selectedExpectedReturns(n);
-    for (int i = 0; i < n; ++i) {
-        selectedLogReturns.col(i) = logReturns.col(selectedIndices[i]);
-        selectedExpectedReturns(i) = expectedReturns(selectedIndices[i]);
+    double sumER = 0.0;
+    Eigen::VectorXd portSeries = Eigen::VectorXd::Zero(T);
+
+    // Bit-scanning: iterate only over set bits
+    for (size_t w = 0; w < individual.size(); ++w) {
+        uint64_t bits = individual[w];
+        while (bits) {
+            int bit = __builtin_ctzll(bits);
+            int idx = static_cast<int>(w) * BITS_PER_WORD + bit;
+            if (idx < numGenes) {
+                sumER += expectedReturns(idx);
+                portSeries += centeredReturns.col(idx);
+            }
+            bits &= bits - 1;  // clear lowest set bit
+        }
     }
 
-    Eigen::VectorXd weights = Eigen::VectorXd::Constant(n, 1.0 / n);
-    double portfolioReturn = calculatePortfolioReturn(selectedExpectedReturns, weights);
-
+    double portfolioReturn = sumER / n;
     if (minReturn >= 0 && portfolioReturn < minReturn) return -1e4;
 
-    Eigen::MatrixXd covMatrix = calculateCovarianceMatrix(selectedLogReturns);
-    double portfolioRisk = calculatePortfolioRisk(covMatrix, weights);
-    if (portfolioRisk <= 0) return -1e4;
+    // ||portSeries||² / (n² × (T-1)) = equal-weight portfolio variance
+    double portfolioVar = portSeries.squaredNorm() /
+        (static_cast<double>(n) * n * (T - 1));
+    if (portfolioVar <= 0) return -1e4;
+    double portfolioRisk = std::sqrt(portfolioVar) * std::sqrt(252.0);
 
     return (portfolioReturn - riskFreeRate) / portfolioRisk;
 }
 
-// ─── Migration ─────────────────────────────────────────────────────────────────
+// Phase 5: Approximate fitness via truncated SVD projection.
+// SV is k × numCols where k << T. Column accumulation in k-dim instead of T-dim.
+double calculateFitnessSVD(const BitIndividual& individual, int numGenes,
+                            const Eigen::MatrixXd& svMatrix,
+                            const Eigen::VectorXd& expectedReturns,
+                            int T,
+                            int minETFs, int maxETFs,
+                            double riskFreeRate, double minReturn) {
+    int n = popcount(individual);
+    if (n < minETFs || n > maxETFs) return -1e4;
+
+    int k = static_cast<int>(svMatrix.rows());
+    double sumER = 0.0;
+    Eigen::VectorXd projSum = Eigen::VectorXd::Zero(k);
+
+    for (size_t w = 0; w < individual.size(); ++w) {
+        uint64_t bits = individual[w];
+        while (bits) {
+            int bit = __builtin_ctzll(bits);
+            int idx = static_cast<int>(w) * BITS_PER_WORD + bit;
+            if (idx < numGenes) {
+                sumER += expectedReturns(idx);
+                projSum += svMatrix.col(idx);
+            }
+            bits &= bits - 1;
+        }
+    }
+
+    double portfolioReturn = sumER / n;
+    if (minReturn >= 0 && portfolioReturn < minReturn) return -1e4;
+
+    // ||projSum||² / (n² × (T-1)) ≈ equal-weight portfolio variance
+    double portfolioVar = projSum.squaredNorm() /
+        (static_cast<double>(n) * n * (T - 1));
+    if (portfolioVar <= 0) return -1e4;
+    double portfolioRisk = std::sqrt(portfolioVar) * std::sqrt(252.0);
+
+    return (portfolioReturn - riskFreeRate) / portfolioRisk;
+}
+
+// ─── Migration (bitwise) ──────────────────────────────────────────────────────
 
 struct MigrationBuffer {
-    std::vector<std::vector<Eigen::RowVectorXi>> buffers; // [island][individual]
+    std::vector<std::vector<BitIndividual>> buffers; // [island][individual]
     std::vector<std::mutex> locks;
     int num_islands;
 
     MigrationBuffer(int n) : num_islands(n), buffers(n), locks(n) {}
 
-    void deposit(int island_id, const std::vector<Eigen::RowVectorXi>& individuals) {
+    void deposit(int island_id, const std::vector<BitIndividual>& individuals) {
         std::lock_guard<std::mutex> lock(locks[island_id]);
         buffers[island_id] = individuals;
     }
 
-    std::vector<Eigen::RowVectorXi> withdraw(int source_island) {
+    std::vector<BitIndividual> withdraw(int source_island) {
         std::lock_guard<std::mutex> lock(locks[source_island]);
         return buffers[source_island];
     }
@@ -373,15 +443,36 @@ struct MigrationBuffer {
 
 struct IslandResult {
     double bestFitness = -std::numeric_limits<double>::infinity();
-    Eigen::RowVectorXi bestIndividual;
+    BitIndividual bestIndividual;
 };
 
-// ─── Island GA ─────────────────────────────────────────────────────────────────
+// ─── Helper: extract tickers from a BitIndividual ──────────────────────────────
+
+std::vector<std::string> extractTickers(const BitIndividual& individual,
+                                         int numGenes,
+                                         const std::vector<std::string>& tickers) {
+    std::vector<std::string> selected;
+    for (size_t w = 0; w < individual.size(); ++w) {
+        uint64_t bits = individual[w];
+        while (bits) {
+            int bit = __builtin_ctzll(bits);
+            int idx = static_cast<int>(w) * BITS_PER_WORD + bit;
+            if (idx < numGenes) {
+                selected.push_back(tickers[idx]);
+            }
+            bits &= bits - 1;
+        }
+    }
+    return selected;
+}
+
+// ─── Island GA (bitwise) ──────────────────────────────────────────────────────
 
 void run_island(int id, const Config& cfg,
-                const Eigen::MatrixXd& logReturns,
+                const Eigen::MatrixXd& centeredReturns,
                 const Eigen::VectorXd& expectedReturns,
-                int numETFs, const std::vector<std::string>& tickers,
+                const Eigen::MatrixXd* svMatrix,  // nullptr if not using SVD
+                int numGenes, int T,
                 MigrationBuffer& migration,
                 std::chrono::steady_clock::time_point deadline,
                 bool hasDeadline,
@@ -398,11 +489,11 @@ void run_island(int id, const Config& cfg,
     }
     std::mt19937 rng(islandSeed);
 
-    Eigen::MatrixXi population = initializePopulation(cfg.pop_size, numETFs, cfg.max_etfs, rng);
+    auto population = initializePopulation(cfg.pop_size, numGenes, cfg.max_etfs, rng);
     Eigen::VectorXd fitness = Eigen::VectorXd::Zero(cfg.pop_size);
-    Eigen::RowVectorXi bestIndividual(numETFs);
+    BitIndividual bestIndividual(numWords(numGenes), 0);
     double bestFitness = -std::numeric_limits<double>::infinity();
-    double mutationRate = 1.0 / numETFs;
+    double mutationRate = 1.0 / numGenes;
 
     int numElites = std::max(1, cfg.num_elites);
     int numParents = std::max(2, numElites);
@@ -413,14 +504,23 @@ void run_island(int id, const Config& cfg,
         if (hasDeadline && std::chrono::steady_clock::now() >= deadline) break;
 
         // Evaluate fitness
-        for (int i = 0; i < population.rows(); ++i) {
-            double f = calculateFitness(population.row(i), logReturns, expectedReturns,
-                                        cfg.min_etfs, cfg.max_etfs,
-                                        cfg.risk_free_rate, cfg.min_return);
+        for (int i = 0; i < cfg.pop_size; ++i) {
+            double f;
+            if (svMatrix != nullptr) {
+                f = calculateFitnessSVD(population[i], numGenes, *svMatrix,
+                                         expectedReturns, T,
+                                         cfg.min_etfs, cfg.max_etfs,
+                                         cfg.risk_free_rate, cfg.min_return);
+            } else {
+                f = calculateFitnessExact(population[i], numGenes, centeredReturns,
+                                           expectedReturns, T,
+                                           cfg.min_etfs, cfg.max_etfs,
+                                           cfg.risk_free_rate, cfg.min_return);
+            }
             fitness(i) = f;
             if (f > bestFitness) {
                 bestFitness = f;
-                bestIndividual = population.row(i);
+                bestIndividual = population[i];
             }
         }
 
@@ -436,57 +536,81 @@ void run_island(int id, const Config& cfg,
         // Migration (ring topology: read from island (id-1+N)%N)
         if (cfg.migration_interval > 0 && generation > 0
             && generation % cfg.migration_interval == 0) {
-            // Export top individuals
-            std::vector<int> sortedIdx(population.rows());
+            // Sort by fitness
+            std::vector<int> sortedIdx(cfg.pop_size);
             std::iota(sortedIdx.begin(), sortedIdx.end(), 0);
             std::sort(sortedIdx.begin(), sortedIdx.end(),
                       [&fitness](int a, int b) { return fitness(a) > fitness(b); });
 
-            std::vector<Eigen::RowVectorXi> emigrants;
-            for (int i = 0; i < migrationCount && i < static_cast<int>(sortedIdx.size()); ++i)
-                emigrants.push_back(population.row(sortedIdx[i]));
+            // Export top individuals
+            std::vector<BitIndividual> emigrants;
+            for (int i = 0; i < migrationCount && i < cfg.pop_size; ++i)
+                emigrants.push_back(population[sortedIdx[i]]);
             migration.deposit(id, emigrants);
 
             // Import from source island
             int source = (id - 1 + cfg.num_islands) % cfg.num_islands;
             auto immigrants = migration.withdraw(source);
             if (!immigrants.empty()) {
-                // Replace worst individuals
                 for (int i = 0; i < static_cast<int>(immigrants.size())
-                                 && i < population.rows(); ++i) {
-                    int worstIdx = sortedIdx[sortedIdx.size() - 1 - i];
-                    population.row(worstIdx) = immigrants[i];
+                                 && i < cfg.pop_size; ++i) {
+                    int worstIdx = sortedIdx[cfg.pop_size - 1 - i];
+                    population[worstIdx] = immigrants[i];
                 }
             }
         }
 
-        // Selection, Crossover, Mutation
-        Eigen::MatrixXi parents = selectParents(population, fitness, numParents);
-        Eigen::MatrixXi offspring = crossover(parents, cfg.pop_size - numElites, rng);
-        mutate(offspring, mutationRate, rng);
+        // Selection: pick top parents by fitness
+        std::vector<int> parentIdx(cfg.pop_size);
+        std::iota(parentIdx.begin(), parentIdx.end(), 0);
+        std::sort(parentIdx.begin(), parentIdx.end(),
+                  [&fitness](int a, int b) { return fitness(a) > fitness(b); });
 
-        // Elitism + new population
-        Eigen::MatrixXi elites = elitism(population, fitness, numElites);
-        population.topRows(numElites) = elites;
-        population.bottomRows(offspring.rows()) = offspring;
+        // Elitism: preserve top individuals
+        std::vector<BitIndividual> newPop;
+        newPop.reserve(cfg.pop_size);
+        for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
+            newPop.push_back(population[parentIdx[i]]);
+
+        // Crossover: fill remaining slots
+        int offspringCount = cfg.pop_size - numElites;
+        for (int i = 0; i < offspringCount; ++i) {
+            int p1 = rng() % numParents;
+            int p2 = rng() % numParents;
+            BitIndividual child = crossoverOne(
+                population[parentIdx[p1]], population[parentIdx[p2]], rng);
+            mutateOne(child, mutationRate, numGenes, rng);
+            newPop.push_back(std::move(child));
+        }
+
+        population = std::move(newPop);
+    }
+
+    // If SVD was used, re-evaluate best individual with exact method
+    if (svMatrix != nullptr) {
+        bestFitness = calculateFitnessExact(bestIndividual, numGenes,
+                                             centeredReturns, expectedReturns, T,
+                                             cfg.min_etfs, cfg.max_etfs,
+                                             cfg.risk_free_rate, cfg.min_return);
     }
 
     result.bestFitness = bestFitness;
     result.bestIndividual = bestIndividual;
 }
 
-// ─── Monte Carlo worker ────────────────────────────────────────────────────────
+// ─── Monte Carlo worker (bitwise) ─────────────────────────────────────────────
 
 struct MCResult {
     double bestFitness = -std::numeric_limits<double>::infinity();
-    Eigen::RowVectorXi bestIndividual;
+    BitIndividual bestIndividual;
     long long trials = 0;
 };
 
 void run_mc_worker(int id, const Config& cfg,
-                   const Eigen::MatrixXd& logReturns,
+                   const Eigen::MatrixXd& centeredReturns,
                    const Eigen::VectorXd& expectedReturns,
-                   int numETFs, const std::vector<std::string>& tickers,
+                   const Eigen::MatrixXd* svMatrix,
+                   int numGenes, int T,
                    std::chrono::steady_clock::time_point deadline,
                    bool hasDeadline,
                    std::mutex& outputMutex,
@@ -502,14 +626,13 @@ void run_mc_worker(int id, const Config& cfg,
     std::mt19937 rng(workerSeed);
     std::uniform_int_distribution<int> numDist(cfg.min_etfs, cfg.max_etfs);
 
-    Eigen::RowVectorXi individual(numETFs);
+    int nw = numWords(numGenes);
     double bestFitness = -std::numeric_limits<double>::infinity();
-    Eigen::RowVectorXi bestIndividual(numETFs);
-    bestIndividual.setZero();
+    BitIndividual bestIndividual(nw, 0);
     long long trials = 0;
 
     // Pre-build index array for sampling
-    std::vector<int> allIndices(numETFs);
+    std::vector<int> allIndices(numGenes);
     std::iota(allIndices.begin(), allIndices.end(), 0);
 
     while (true) {
@@ -519,17 +642,26 @@ void run_mc_worker(int id, const Config& cfg,
 
         // Generate random portfolio with exactly k instruments
         int k = numDist(rng);
-        individual.setZero();
+        BitIndividual individual(nw, 0);
         // Fisher-Yates partial shuffle to pick k indices
         for (int i = 0; i < k; ++i) {
-            std::uniform_int_distribution<int> pick(i, numETFs - 1);
+            std::uniform_int_distribution<int> pick(i, numGenes - 1);
             std::swap(allIndices[i], allIndices[pick(rng)]);
-            individual(allIndices[i]) = 1;
+            setBit(individual, allIndices[i]);
         }
 
-        double f = calculateFitness(individual, logReturns, expectedReturns,
-                                    cfg.min_etfs, cfg.max_etfs,
-                                    cfg.risk_free_rate, cfg.min_return);
+        double f;
+        if (svMatrix != nullptr) {
+            f = calculateFitnessSVD(individual, numGenes, *svMatrix,
+                                     expectedReturns, T,
+                                     cfg.min_etfs, cfg.max_etfs,
+                                     cfg.risk_free_rate, cfg.min_return);
+        } else {
+            f = calculateFitnessExact(individual, numGenes, centeredReturns,
+                                       expectedReturns, T,
+                                       cfg.min_etfs, cfg.max_etfs,
+                                       cfg.risk_free_rate, cfg.min_return);
+        }
         trials++;
 
         if (f > bestFitness) {
@@ -545,7 +677,14 @@ void run_mc_worker(int id, const Config& cfg,
                       << ": Best fitness = " << bestFitness
                       << std::endl;
         }
+    }
 
+    // If SVD was used, re-evaluate best with exact method
+    if (svMatrix != nullptr) {
+        bestFitness = calculateFitnessExact(bestIndividual, numGenes,
+                                             centeredReturns, expectedReturns, T,
+                                             cfg.min_etfs, cfg.max_etfs,
+                                             cfg.risk_free_rate, cfg.min_return);
     }
 
     result.bestFitness = bestFitness;
@@ -579,13 +718,11 @@ int main(int argc, char* argv[]) {
     int numETFs;
 
     if (cfg.binary_input) {
-        // Binary format: already contains log returns, no processing needed
         std::cerr << "Loading binary data from " << cfg.data_path << "..." << std::endl;
         logReturns = readBinaryData(cfg.data_path, tickers);
         numETFs = logReturns.cols();
         expectedReturns = calculateExpectedReturn(logReturns);
     } else {
-        // CSV format: raw prices, need full preprocessing
         std::cerr << "Loading CSV data from " << cfg.data_path << "..." << std::endl;
         Eigen::MatrixXd etfData = readETFData(cfg.data_path, tickers);
         Eigen::MatrixXd filteredData = filterETFsWithMissingData(etfData, tickers, cfg.missing_threshold);
@@ -595,10 +732,40 @@ int main(int argc, char* argv[]) {
         logReturns = calculateLogReturns(filteredData);
         expectedReturns = calculateExpectedReturn(logReturns);
     }
+    int T = static_cast<int>(logReturns.rows());
     std::cerr << "Loaded " << numETFs << " instruments, "
-              << logReturns.rows() << " return observations." << std::endl;
+              << T << " return observations." << std::endl;
 
-    // Time budget starts AFTER data loading
+    // Phase 1: Pre-center returns once (avoids redundant centering per fitness call)
+    Eigen::MatrixXd centeredReturns = logReturns.rowwise() - logReturns.colwise().mean();
+
+    // Phase 5: Optional truncated SVD approximation
+    Eigen::MatrixXd svMatrix;  // k × numCols
+    Eigen::MatrixXd* svMatrixPtr = nullptr;
+    if (cfg.use_svd && numETFs >= 5000) {
+        int k = std::min(cfg.svd_components,
+                         std::min(T, numETFs));
+        std::cerr << "Computing truncated SVD (k=" << k << ")..." << std::endl;
+        auto svdStart = std::chrono::steady_clock::now();
+        Eigen::BDCSVD<Eigen::MatrixXd> svd(centeredReturns,
+                                             Eigen::ComputeThinV);
+        // SV = diag(S_k) @ V_k^T  →  k × numCols matrix
+        svMatrix = svd.singularValues().head(k).asDiagonal()
+                 * svd.matrixV().leftCols(k).transpose();
+        auto svdElapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - svdStart).count();
+        std::cerr << "SVD computed in " << svdElapsed << "s ("
+                  << k << " components, captures "
+                  << svd.singularValues().head(k).squaredNorm() /
+                     svd.singularValues().squaredNorm() * 100.0
+                  << "% of variance)." << std::endl;
+        svMatrixPtr = &svMatrix;
+    } else if (cfg.use_svd) {
+        std::cerr << "SVD skipped: only " << numETFs
+                  << " instruments (threshold: 5000)." << std::endl;
+    }
+
+    // Time budget starts AFTER data loading and preprocessing
     bool hasDeadline = cfg.time_budget > 0;
     auto computeStart = std::chrono::steady_clock::now();
     auto deadline = computeStart + std::chrono::milliseconds(
@@ -613,7 +780,7 @@ int main(int argc, char* argv[]) {
     std::vector<Solution> allSolutions;
     long long totalTrials = 0;
 
-    int numThreads = cfg.num_islands; // num_islands doubles as thread count for MC
+    int numThreads = cfg.num_islands;
 
     if (cfg.mode == "mc") {
         // ── Monte Carlo mode ───────────────────────────────────────────────
@@ -623,8 +790,9 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < numThreads; ++i) {
             threads.emplace_back(run_mc_worker, i, std::cref(cfg),
-                                 std::cref(logReturns), std::cref(expectedReturns),
-                                 numETFs, std::cref(tickers),
+                                 std::cref(centeredReturns),
+                                 std::cref(expectedReturns),
+                                 svMatrixPtr, numETFs, T,
                                  deadline, hasDeadline,
                                  std::ref(outputMutex), std::ref(mcResults[i]));
         }
@@ -635,9 +803,8 @@ int main(int argc, char* argv[]) {
             if (mcResults[i].bestFitness <= -1e3) continue;
             Solution sol;
             sol.fitness = mcResults[i].bestFitness;
-            for (int j = 0; j < mcResults[i].bestIndividual.size(); ++j)
-                if (mcResults[i].bestIndividual(j) == 1)
-                    sol.selectedTickers.push_back(tickers[j]);
+            sol.selectedTickers = extractTickers(mcResults[i].bestIndividual,
+                                                  numETFs, tickers);
             allSolutions.push_back(sol);
         }
 
@@ -650,8 +817,9 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < numThreads; ++i) {
             threads.emplace_back(run_island, i, std::cref(cfg),
-                                 std::cref(logReturns), std::cref(expectedReturns),
-                                 numETFs, std::cref(tickers),
+                                 std::cref(centeredReturns),
+                                 std::cref(expectedReturns),
+                                 svMatrixPtr, numETFs, T,
                                  std::ref(migration), deadline, hasDeadline,
                                  std::ref(outputMutex), std::ref(gaResults[i]));
         }
@@ -661,9 +829,8 @@ int main(int argc, char* argv[]) {
             if (gaResults[i].bestFitness <= -1e3) continue;
             Solution sol;
             sol.fitness = gaResults[i].bestFitness;
-            for (int j = 0; j < gaResults[i].bestIndividual.size(); ++j)
-                if (gaResults[i].bestIndividual(j) == 1)
-                    sol.selectedTickers.push_back(tickers[j]);
+            sol.selectedTickers = extractTickers(gaResults[i].bestIndividual,
+                                                  numETFs, tickers);
             allSolutions.push_back(sol);
         }
     }
@@ -673,10 +840,11 @@ int main(int argc, char* argv[]) {
 
     int topK = std::min(cfg.top_k, static_cast<int>(allSolutions.size()));
 
-    // Output JSON to stdout
+    // Output JSON to stdout (full double precision)
     auto elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - globalStart).count();
 
+    std::cout << std::setprecision(15);
     std::cout << "{" << std::endl;
     std::cout << "  \"mode\": \"" << cfg.mode << "\"," << std::endl;
     std::cout << "  \"elapsed_seconds\": " << elapsed << "," << std::endl;
