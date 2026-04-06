@@ -42,6 +42,12 @@ data/*.csv
 data/portfolio.db
 data/portfolio.db-wal
 data/portfolio.db-shm
+data/*.backup_*
+
+# Pipeline artifacts (regenerable)
+data/*.log
+data/*.json
+data/staging_*
 
 # Compiled C++ binary (rebuild from cpp/optimisation.cpp)
 cpp/optimisation
