@@ -336,5 +336,70 @@ class TestWarnIfSharpeSuspicious(unittest.TestCase):
         warn_if_sharpe_suspicious(1.0, "test")
 
 
+class TestDateOrderingGuards(unittest.TestCase):
+    """Tests for date ordering enforcement in load_prices_csv and calculate_log_returns."""
+
+    def test_ffill_on_unsorted_data_sorts_first(self):
+        """Forward-fill must not propagate future prices backward when CSV is unsorted.
+
+        If dates are [Jan 3, Jan 1, Jan 2] with values [NaN, 100, NaN],
+        unsorted ffill would fill Jan 3's NaN with nothing (first row) and
+        Jan 2's NaN with 100. But sorted ffill should fill Jan 2 with 100
+        and Jan 3 with 100 as well.
+        """
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            f.write('Date,A\n')
+            f.write('2020-01-03,\n')    # NaN, should be filled from Jan 2
+            f.write('2020-01-01,100\n')  # known value
+            f.write('2020-01-02,\n')    # NaN, should be filled from Jan 1
+            path = f.name
+        try:
+            result = load_prices_csv(path, min_coverage=0.0)
+            # After sorting and ffill: Jan 1=100, Jan 2=100, Jan 3=100
+            self.assertTrue(result.index.is_monotonic_increasing,
+                            "load_prices_csv must return a sorted index")
+            self.assertAlmostEqual(result.loc['2020-01-02', 'A'], 100.0)
+            self.assertAlmostEqual(result.loc['2020-01-03', 'A'], 100.0)
+        finally:
+            os.unlink(path)
+
+    def test_log_returns_require_sorted_index(self):
+        """calculate_log_returns must raise on unsorted DatetimeIndex.
+
+        .shift(1) on unsorted data computes returns between wrong date pairs.
+        """
+        dates = pd.to_datetime(['2020-01-03', '2020-01-01', '2020-01-02'])
+        prices = pd.DataFrame({'A': [121, 100, 110]}, index=dates)
+        with self.assertRaises(ValueError, msg="Should reject unsorted index"):
+            calculate_log_returns(prices)
+
+    def test_ffill_limit_prevents_long_gap_fill(self):
+        """Stale prices should not be carried forward beyond the ffill limit (5 days)."""
+        # 10 rows: value on day 0, then 9 NaNs — only 5 should be filled
+        dates = pd.bdate_range('2020-01-01', periods=10, freq='B')
+        data = {'A': [100.0] + [float('nan')] * 9}
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            df = pd.DataFrame(data, index=dates)
+            df.index.name = 'Date'
+            df.to_csv(f.name)
+            path = f.name
+        try:
+            result = load_prices_csv(path, min_coverage=0.0)
+            # Days 1-5 should be filled (100), days 6-9 should remain NaN
+            self.assertAlmostEqual(result.iloc[5]['A'], 100.0)
+            self.assertTrue(pd.isna(result.iloc[6]['A']),
+                            "Day 7 should NOT be filled (beyond limit=5)")
+        finally:
+            os.unlink(path)
+
+    def test_log_returns_preserves_index_order(self):
+        """Log returns should preserve the DatetimeIndex order of the input."""
+        dates = pd.bdate_range('2020-01-01', periods=5, freq='B')
+        prices = pd.DataFrame({'A': [100, 101, 102, 103, 104]}, index=dates)
+        returns = calculate_log_returns(prices)
+        self.assertTrue(returns.index.equals(prices.index),
+                        "Log returns index should match input index exactly")
+
+
 if __name__ == '__main__':
     unittest.main()
