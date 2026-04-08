@@ -7,7 +7,14 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from src.config import TRADING_DAYS_PER_YEAR
+from src.config import (
+    TRADING_DAYS_PER_YEAR,
+    COV_SHRINKAGE_ENABLED,
+    COV_MIN_OBS_RATIO,
+    COV_MIN_OBS_RATIO_ERROR,
+)
+
+_cov_logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -129,14 +136,75 @@ def calculate_log_returns(prices):
     return log_returns
 
 
-def calculate_covariance_matrix(log_returns, annualise=True):
-    """Sample covariance matrix of log returns.
+def check_observation_ratio(T, N, context=""):
+    """Guard against ill-conditioned covariance estimation.
+
+    :param T: number of time-series observations.
+    :param N: number of assets (columns).
+    :param context: descriptive label for log messages.
+    :raises ValueError: if T/N < COV_MIN_OBS_RATIO_ERROR.
+    """
+    if N <= 0:
+        return
+    ratio = T / N
+    if ratio < COV_MIN_OBS_RATIO_ERROR:
+        raise ValueError(
+            f"T/N ratio ({T}/{N}={ratio:.1f}) is below {COV_MIN_OBS_RATIO_ERROR}. "
+            f"Covariance matrix will be singular. {context}"
+        )
+    if ratio < COV_MIN_OBS_RATIO:
+        _cov_logger.warning(
+            "T/N ratio (%d/%d=%.1f) is below %d — covariance estimate may be "
+            "noisy. %s", T, N, ratio, COV_MIN_OBS_RATIO, context,
+        )
+
+
+def _ledoit_wolf_covariance(log_returns):
+    """Ledoit-Wolf shrinkage covariance estimate.
+
+    :param log_returns: DataFrame of log returns.
+    :return: (cov_matrix as DataFrame, shrinkage_coefficient).
+    """
+    from sklearn.covariance import ledoit_wolf
+    cov_array, shrinkage = ledoit_wolf(log_returns.values)
+    return pd.DataFrame(cov_array, index=log_returns.columns,
+                        columns=log_returns.columns), shrinkage
+
+
+def shrink_correlation_matrix(corr_matrix, log_returns):
+    """Shrink a correlation matrix toward identity using Ledoit-Wolf alpha.
+
+    For CCC paths: estimates alpha from ledoit_wolf(), returns (1-a)*R + a*I.
+
+    :param corr_matrix: numpy array correlation matrix.
+    :param log_returns: DataFrame of log returns (used to estimate shrinkage intensity).
+    :return: shrunk correlation matrix as numpy array.
+    """
+    from sklearn.covariance import ledoit_wolf
+    _, alpha = ledoit_wolf(log_returns.values)
+    N = corr_matrix.shape[0]
+    return (1 - alpha) * corr_matrix + alpha * np.eye(N)
+
+
+def calculate_covariance_matrix(log_returns, annualise=True, shrinkage=None):
+    """Covariance matrix of log returns with optional Ledoit-Wolf shrinkage.
 
     :param log_returns: DataFrame of log returns.
     :param annualise: multiply by 252 trading days (default True).
+    :param shrinkage: True/False to force shrinkage on/off, or None to use
+        the COV_SHRINKAGE_ENABLED config default.
     :return: DataFrame covariance matrix.
     """
-    cov = log_returns.cov()
+    T, N = log_returns.shape
+    if N >= 2:
+        check_observation_ratio(T, N)
+
+    use_shrinkage = COV_SHRINKAGE_ENABLED if shrinkage is None else shrinkage
+    if use_shrinkage and N >= 2:
+        cov, _ = _ledoit_wolf_covariance(log_returns)
+    else:
+        cov = log_returns.cov()
+
     if annualise:
         cov = cov * TRADING_DAYS_PER_YEAR
     return cov
@@ -314,7 +382,6 @@ def calmar_ratio(r, downside_drawdown):
 
 # ─── Overfitting Detection ──────────────────────────────────────────────────
 
-import logging
 from scipy.stats import norm
 
 # In-sample Sharpe thresholds for annual equity portfolios.

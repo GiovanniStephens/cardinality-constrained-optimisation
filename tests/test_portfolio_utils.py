@@ -26,6 +26,8 @@ from src.portfolio_utils import (
     sharpe_ratio_variance,
     deflated_sharpe_ratio,
     warn_if_sharpe_suspicious,
+    check_observation_ratio,
+    shrink_correlation_matrix,
     SHARPE_WARN_THRESHOLD,
     SHARPE_CRITICAL_THRESHOLD,
 )
@@ -465,6 +467,80 @@ class TestDateOrderingGuards(unittest.TestCase):
         returns = calculate_log_returns(prices)
         self.assertTrue(returns.index.equals(prices.index),
                         "Log returns index should match input index exactly")
+
+
+class TestObservationRatioGuard(unittest.TestCase):
+    def test_raises_when_T_less_than_N(self):
+        with self.assertRaises(ValueError):
+            check_observation_ratio(5, 10)
+
+    def test_warns_when_ratio_low(self):
+        import logging
+        with self.assertLogs('src.portfolio_utils', level='WARNING') as cm:
+            check_observation_ratio(50, 10)
+        self.assertTrue(any('T/N ratio' in msg for msg in cm.output))
+
+    def test_no_warning_when_ratio_high(self):
+        # Should not raise or warn
+        check_observation_ratio(500, 10)
+
+    def test_zero_assets_no_error(self):
+        check_observation_ratio(100, 0)
+
+
+class TestLedoitWolfCovariance(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(42)
+        self.returns = pd.DataFrame(np.random.randn(200, 5),
+                                    columns=['A', 'B', 'C', 'D', 'E'])
+
+    def test_shrinkage_differs_from_sample(self):
+        shrunk = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=True)
+        sample = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=False)
+        # They should not be identical
+        self.assertFalse(np.allclose(shrunk.values, sample.values))
+
+    def test_shrinkage_preserves_symmetry(self):
+        cov = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=True)
+        np.testing.assert_array_almost_equal(cov.values, cov.values.T)
+
+    def test_shrinkage_positive_definite(self):
+        cov = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=True)
+        eigenvalues = np.linalg.eigvalsh(cov.values)
+        self.assertTrue(np.all(eigenvalues > 0))
+
+    def test_shrinkage_off_matches_sample(self):
+        raw = self.returns.cov()
+        cov = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=False)
+        np.testing.assert_array_almost_equal(cov.values, raw.values)
+
+    def test_annualisation_with_shrinkage(self):
+        ann = calculate_covariance_matrix(self.returns, annualise=True, shrinkage=True)
+        raw = calculate_covariance_matrix(self.returns, annualise=False, shrinkage=True)
+        np.testing.assert_array_almost_equal(ann.values, raw.values * 252)
+
+
+class TestShrinkCorrelationMatrix(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(42)
+        self.returns = pd.DataFrame(np.random.randn(200, 5))
+        self.corr = self.returns.corr().values
+
+    def test_off_diagonal_moves_toward_zero(self):
+        shrunk = shrink_correlation_matrix(self.corr, self.returns)
+        # Off-diagonal elements should be shrunk toward zero (closer to identity)
+        off_diag_orig = np.abs(self.corr[np.triu_indices(5, k=1)])
+        off_diag_shrunk = np.abs(shrunk[np.triu_indices(5, k=1)])
+        self.assertTrue(np.all(off_diag_shrunk <= off_diag_orig + 1e-10))
+
+    def test_diagonal_stays_one(self):
+        shrunk = shrink_correlation_matrix(self.corr, self.returns)
+        np.testing.assert_array_almost_equal(np.diag(shrunk), np.ones(5))
+
+    def test_positive_definite(self):
+        shrunk = shrink_correlation_matrix(self.corr, self.returns)
+        eigenvalues = np.linalg.eigvalsh(shrunk)
+        self.assertTrue(np.all(eigenvalues > 0))
 
 
 if __name__ == '__main__':

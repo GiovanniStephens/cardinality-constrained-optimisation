@@ -14,6 +14,7 @@ from src.portfolio_utils import (
     equal_weight_fitness,
     OptimisationResult,
 )
+from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
     DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE, DATA_FFILL_LIMIT,
@@ -38,20 +39,28 @@ def initialise_population(size, num_etfs, max_num_etfs):
     return np.random.binomial(1, p, size=(size, num_etfs))
 
 
-def calculate_fitness(individual, expected_returns, cov_matrix, min_etfs=ISLAND_GA_MIN_SECURITIES,
+def calculate_fitness(individual, expected_returns, centered_returns, T_obs,
+                      min_etfs=ISLAND_GA_MIN_SECURITIES,
                       max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
     """Equal-weight Sharpe ratio with cardinality and return constraints."""
-    return equal_weight_fitness(individual, expected_returns, cov_matrix,
-                                min_count=min_etfs, max_count=max_etfs,
-                                min_return=min_return)
+    return batch_fitness(individual[np.newaxis, :], expected_returns,
+                         centered_returns, T_obs,
+                         min_etfs=min_etfs, max_etfs=max_etfs,
+                         min_return=min_return)[0]
 
 
-def batch_fitness(population, expected_returns, cov_matrix, min_etfs=ISLAND_GA_MIN_SECURITIES,
+def batch_fitness(population, expected_returns, centered_returns, T_obs,
+                  min_etfs=ISLAND_GA_MIN_SECURITIES,
                   max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
     """Vectorised equal-weight Sharpe ratio for the entire population at once.
 
-    Uses matrix operations instead of per-individual loops. On Apple Silicon,
-    numpy delegates to Accelerate BLAS for the matrix multiply.
+    Computes portfolio variance directly from centered returns without
+    forming an N×N covariance matrix. For equal weights on a binary mask:
+      port_var = (1/(n²(T-1))) * Σ_t (Σ_{j∈selected} centered_tj)²
+
+    Vectorized across the population via a single matrix multiply:
+      S = centered_returns @ pop.T   (T × pop_size)
+      port_var = sum(S², axis=0) / ((T-1) * n²) * 252
     """
     pop = population.astype(np.float64)
     counts = pop.sum(axis=1)
@@ -63,14 +72,14 @@ def batch_fitness(population, expected_returns, cov_matrix, min_etfs=ISLAND_GA_M
         # Portfolio return: (pop @ expected_returns) / counts
         raw_ret = pop @ expected_returns
 
-        # Portfolio variance: diag(pop @ cov_matrix @ pop.T) / counts^2
-        # Efficient: element-wise multiply then sum rows instead of full matrix multiply
-        raw_var = np.sum((pop @ cov_matrix) * pop, axis=1)
+        # Portfolio variance via centered returns (no N×N intermediate)
+        S = centered_returns @ pop.T             # T × pop_size
+        raw_var = np.sum(S ** 2, axis=0)         # unnormalized sum of squared sums
 
         # Avoid division by zero
         safe_counts = np.where(counts > 0, counts, 1.0)
         port_ret = raw_ret / safe_counts
-        port_var = raw_var / (safe_counts ** 2)
+        port_var = raw_var / ((T_obs - 1) * safe_counts ** 2) * _TRADING_DAYS
 
         # Min return constraint
         if min_return is not None:
@@ -128,7 +137,8 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
     population = initialise_population(population_size, num_etfs, max_num_etfs=max_etfs)
     log_returns = calculate_log_returns(data)
     expected_returns = calculate_expected_returns(log_returns).values
-    cov_matrix = calculate_covariance_matrix(log_returns).values
+    centered_returns = (log_returns - log_returns.mean(axis=0)).values
+    T_obs = centered_returns.shape[0]
     best_overall_fitness = float('-inf')
     best_overall_individual = None
     for generation in range(num_generations):
@@ -142,8 +152,8 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
                         population_size, size=num_received, replace=False
                     )
                     population[replace_indices] = migrants
-        fitness = batch_fitness(population, expected_returns, cov_matrix,
-                                min_etfs=min_etfs, max_etfs=max_etfs,
+        fitness = batch_fitness(population, expected_returns, centered_returns,
+                                T_obs, min_etfs=min_etfs, max_etfs=max_etfs,
                                 min_return=min_return)
         elites, elite_indices = elitism(population, fitness, num_elites)
         current_best_fitness = np.max(fitness)

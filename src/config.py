@@ -43,6 +43,11 @@ MIN_ANNUAL_VOLATILITY = 0.001    # 0.1% annualised vol minimum
 MAX_CONSECUTIVE_SAME_PRICE = 20  # flag if 20+ identical consecutive closes
 MAX_EXTREME_RETURN_PCT = 0.05    # flag if >5% of days have >10 std dev returns
 
+# ─── Covariance estimation ─────────────────────────────────────────────────
+COV_SHRINKAGE_ENABLED = True        # Use Ledoit-Wolf shrinkage by default
+COV_MIN_OBS_RATIO = 10              # Warn if T/N < this
+COV_MIN_OBS_RATIO_ERROR = 1.0       # Error if T/N < this (singular matrix)
+
 # ─── Data processing ─────────────────────────────────────────────────────────
 
 TRADING_DAYS_PER_YEAR = 252
@@ -105,7 +110,7 @@ BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. 
 
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
-PIPELINE_BATCH_SIZE = 500
+PIPELINE_BATCH_SIZE = 200
 PIPELINE_RATE_LIMIT_DELAY = 2.0    # seconds between batches (Yahoo throttles below this)
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space

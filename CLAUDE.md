@@ -162,10 +162,10 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 - Hypothesis testing (paired t-tests, Friedman tests) across windows
 - Cardinality constraints (10-20 holdings) limiting parameter space
 - Weight bounds (5-45%) preventing extreme concentration
+- Ledoit-Wolf shrinkage covariance estimation (default for all covariance paths)
+- T >> N observation ratio guards (error if T/N < 1, warn if T/N < 10)
 
 ### Future Work
-
-- Ledoit-Wolf shrinkage estimators for the covariance matrix
 - Full Deflated Sharpe Ratio computation gating results
 - Combinatorially Purged Cross-Validation (CPCV) for more robust OOS evaluation
 - Transaction cost modelling to further deflate apparent performance

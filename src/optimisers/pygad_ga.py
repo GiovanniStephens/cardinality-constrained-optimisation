@@ -13,8 +13,10 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 
 from src.portfolio_utils import (
     load_prices_csv, load_data, calculate_log_returns, negative_sharpe_ratio,
-    OptimisationResult,
+    OptimisationResult, calculate_covariance_matrix, shrink_correlation_matrix,
+    check_observation_ratio,
 )
+from src.config import COV_SHRINKAGE_ENABLED
 from src.optimisers.base import BaseOptimiser
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
@@ -97,13 +99,15 @@ def get_cov_matrix(data: pd.DataFrame, use_copulae=False) -> np.ndarray:
         missing_cols = set(data.columns) - set(_ctx.variances.index)
         if missing_cols:
             logger.warning("Columns missing from variances: %s. Falling back to historical cov.", missing_cols)
-            return data.cov() * TRADING_DAYS_PER_YEAR
+            return calculate_covariance_matrix(data).values
 
     # Correlation matrix R
     if use_copulae:
         corr = estimate_corr_using_copulas(data)
     else:
         corr = data.corr().values
+        if COV_SHRINKAGE_ENABLED:
+            corr = shrink_correlation_matrix(corr, data)
 
     # Diagonal volatility matrix D
     D = np.zeros((data.shape[1], data.shape[1]))
@@ -180,7 +184,10 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
     except Exception as e:
         logger.warning("Copula estimation failed: %s; falling back to sample correlation.", e)
         logger.debug("Copula traceback:", exc_info=True)
-        return data.corr()
+        corr = data.corr().values if isinstance(data, pd.DataFrame) else np.corrcoef(data, rowvar=False)
+        if COV_SHRINKAGE_ENABLED:
+            corr = shrink_correlation_matrix(corr, data)
+        return corr
 
 
 # risk budgeting optimization
@@ -561,12 +568,14 @@ class PygadOptimiser(BaseOptimiser):
                 logger.warning(
                     "Columns missing from variances: %s. "
                     "Falling back to historical cov.", missing_cols)
-                return ret_data.cov() * TRADING_DAYS_PER_YEAR
+                return calculate_covariance_matrix(ret_data).values
 
         if use_copulae:
             corr = estimate_corr_using_copulas(ret_data)
         else:
             corr = ret_data.corr().values
+            if COV_SHRINKAGE_ENABLED:
+                corr = shrink_correlation_matrix(corr, ret_data)
 
         D = np.zeros((ret_data.shape[1], ret_data.shape[1]))
         if self._variances is not None:
@@ -620,7 +629,7 @@ class PygadOptimiser(BaseOptimiser):
                 rng = np.random.default_rng()
                 random_w = rng.random(num_stocks)
                 random_w /= np.sum(random_w)
-                cov_matrix = subset.transpose().cov().values * TRADING_DAYS_PER_YEAR
+                cov_matrix = calculate_covariance_matrix(subset.transpose()).values
                 rets = inst_er.loc[subset.index].values
                 cons = [{'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}]
                 if target_ret is not None and target_risk is None:
@@ -753,7 +762,7 @@ def main():
     if not sol.success:
         logger.warning("Weight optimisation did not converge: %s", sol.message)
     best_weights = sol['x']
-    cov = best_portfolio_returns.cov() * TRADING_DAYS_PER_YEAR
+    cov = calculate_covariance_matrix(best_portfolio_returns).values
     risk = float(np.sqrt(np.dot(best_weights.T, np.dot(cov, best_weights))))
     portfolio_ret = float(np.sum(best_weights*(best_portfolio_returns.mean() * TRADING_DAYS_PER_YEAR)))
     best_sharpe = float(fitness(best_individual, log_returns.T))

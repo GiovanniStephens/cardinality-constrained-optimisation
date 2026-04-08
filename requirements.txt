@@ -7,6 +7,7 @@ pandas
 pmdarima
 pulp
 pygad
+scikit-learn
 scikit-posthocs
 scipy
 seaborn

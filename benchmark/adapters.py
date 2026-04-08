@@ -278,15 +278,16 @@ class MonteCarloAdapter(OptimiserAdapter):
         from src.portfolio_utils import (
             calculate_log_returns as calculate_returns,
             calculate_expected_returns,
-            calculate_covariance_matrix,
         )
+        from src.config import TRADING_DAYS_PER_YEAR
 
         np.random.seed(seed)
         start_time = time.time()
 
         log_returns = calculate_returns(data)
         expected_returns = calculate_expected_returns(log_returns).values
-        cov_matrix = calculate_covariance_matrix(log_returns).values
+        centered = (log_returns - log_returns.mean(axis=0)).values
+        T_obs = centered.shape[0]
         num_etfs = data.shape[1]
 
         convergence = []
@@ -312,10 +313,9 @@ class MonteCarloAdapter(OptimiserAdapter):
                 trial += 1
                 continue
             filtered_returns = expected_returns[sel]
-            filtered_cov = cov_matrix[np.ix_(sel, sel)]
-            weights = np.ones(n_sel) / n_sel
-            p_return = np.dot(weights, filtered_returns)
-            p_variance = np.dot(weights, np.dot(filtered_cov, weights))
+            s = centered[:, sel].sum(axis=1)
+            p_variance = np.sum(s ** 2) / ((T_obs - 1) * n_sel ** 2) * TRADING_DAYS_PER_YEAR
+            p_return = np.dot(np.ones(n_sel) / n_sel, filtered_returns)
             fitness = p_return / np.sqrt(p_variance) if p_variance > 0 else 0
 
             if fitness > best_fitness:

@@ -359,10 +359,13 @@ class TestPygadFunctions(unittest.TestCase):
         return op, data
 
     def test_get_cov_matrix(self):
+        from unittest.mock import patch
         op, data = self._load()
         log_returns = op.calculate_returns(data)
         cov = log_returns.iloc[:, :2].cov() * 252
-        cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
+        # Disable shrinkage so CCC with no forecasts matches raw sample cov
+        with patch('src.optimisers.pygad_ga.COV_SHRINKAGE_ENABLED', False):
+            cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
         np.testing.assert_array_almost_equal(cov_matrix, cov.values)
 
     def test_optimisation_max_weight(self):
@@ -444,6 +447,50 @@ class TestPygadFunctions(unittest.TestCase):
         eigenvalues = np.linalg.eigvalsh(cov_matrix)
         self.assertTrue(np.all(eigenvalues >= -1e-10))
         self.assertTrue(np.all(np.diag(cov_matrix) > 0))
+
+
+class TestBatchFitnessSubsetCov(unittest.TestCase):
+    """Verify that batch_fitness using centered returns matches per-subset covariance."""
+
+    def test_matches_manual_computation(self):
+        from src.optimisers.island_ga import batch_fitness
+        from src.portfolio_utils import (
+            calculate_log_returns, calculate_expected_returns,
+        )
+        from src.config import TRADING_DAYS_PER_YEAR
+
+        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        log_returns = calculate_log_returns(prices)
+        expected_returns = calculate_expected_returns(log_returns).values
+        centered = (log_returns - log_returns.mean(axis=0)).values
+        T_obs = centered.shape[0]
+
+        # Create a few test individuals
+        np.random.seed(123)
+        population = np.zeros((5, 10), dtype=int)
+        for i in range(5):
+            idx = np.random.choice(10, np.random.randint(3, 6), replace=False)
+            population[i, idx] = 1
+
+        fitness_vec = batch_fitness(population, expected_returns, centered,
+                                    T_obs, min_etfs=2, max_etfs=8,
+                                    min_return=None)
+
+        # Manually compute Sharpe for each individual
+        for i in range(5):
+            sel = population[i] == 1
+            n = np.sum(sel)
+            if n < 2:
+                continue
+            sub_returns = log_returns.iloc[:, sel]
+            # Raw sample covariance (no shrinkage) for comparison
+            sub_cov = sub_returns.cov().values * TRADING_DAYS_PER_YEAR
+            w = np.ones(n) / n
+            port_ret = np.dot(w, expected_returns[sel])
+            port_var = np.dot(w, np.dot(sub_cov, w))
+            expected_sharpe = port_ret / np.sqrt(port_var) if port_var > 0 else -1e4
+            self.assertAlmostEqual(fitness_vec[i], expected_sharpe, places=6,
+                                   msg=f"Individual {i} fitness mismatch")
 
 
 class TestCopulaTemporalIntegrity(unittest.TestCase):

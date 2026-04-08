@@ -14,6 +14,7 @@ from src.portfolio_utils import (
     optimise_weights,
     OptimisationResult,
 )
+from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
     DATA_MIN_COVERAGE, DATA_FFILL_LIMIT, DATA_LOOKBACK_DAYS,
@@ -44,7 +45,8 @@ def monte_carlo_search(data, trials, min_num_etfs, max_num_etfs):
     """Run *trials* random portfolio evaluations, return the best."""
     log_returns = calculate_log_returns(data)
     expected_returns = calculate_expected_returns(log_returns).values
-    cov_matrix = calculate_covariance_matrix(log_returns).values
+    centered = (log_returns - log_returns.mean(axis=0)).values
+    T_obs = centered.shape[0]
     num_etfs = data.shape[1]
 
     best_fitness = float('-inf')
@@ -52,8 +54,14 @@ def monte_carlo_search(data, trials, min_num_etfs, max_num_etfs):
 
     for _ in range(trials):
         portfolio = random_portfolio(num_etfs, min_num_etfs, max_num_etfs)
-        fitness = calculate_fitness(portfolio, expected_returns, cov_matrix,
-                                    min_num_etfs, max_num_etfs)
+        selected = portfolio == 1
+        n = np.sum(selected)
+        if n < min_num_etfs or n > max_num_etfs:
+            continue
+        s = centered[:, selected].sum(axis=1)
+        port_var = np.sum(s ** 2) / ((T_obs - 1) * n ** 2) * _TRADING_DAYS
+        port_ret = expected_returns[selected].mean()
+        fitness = port_ret / np.sqrt(port_var) if port_var > 0 else 0.0
         if fitness > best_fitness:
             best_fitness = fitness
             best_portfolio = portfolio
