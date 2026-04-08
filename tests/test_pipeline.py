@@ -23,19 +23,15 @@ from src.pipeline import (
     save_checkpoint,
     write_manifest,
 )
+from tests.helpers import BaseTmpDirTest
 
 
-class TestCheckpoint(unittest.TestCase):
+class TestCheckpoint(BaseTmpDirTest):
     """Test checkpoint save/load round-trip."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.path = os.path.join(self.tmpdir, 'checkpoint.json')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_save_load_round_trip(self):
         state = {
@@ -89,17 +85,12 @@ class TestFilterCompleted(unittest.TestCase):
         self.assertEqual(result, ['C', 'A', 'D'])
 
 
-class TestPreflightCheck(unittest.TestCase):
+class TestPreflightCheck(BaseTmpDirTest):
     """Test disk space pre-flight check."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.staging_path = os.path.join(self.tmpdir, 'staging.db')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_returns_expected_keys(self):
         result = preflight_check(
@@ -128,18 +119,13 @@ class TestPreflightCheck(unittest.TestCase):
         self.assertGreater(result['available_gb'], 0)
 
 
-class TestBackupAndRollback(unittest.TestCase):
+class TestBackupAndRollback(BaseTmpDirTest):
     """Test database backup and rollback."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.db_path = os.path.join(self.tmpdir, 'test.db')
         self.backup_path = os.path.join(self.tmpdir, 'test.db.backup')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_backup_round_trip(self):
         conn = db.get_connection(self.db_path)
@@ -196,18 +182,13 @@ class TestBackupAndRollback(unittest.TestCase):
             rollback('/nonexistent/backup.db', self.db_path)
 
 
-class TestPromoteStaging(unittest.TestCase):
+class TestPromoteStaging(BaseTmpDirTest):
     """Test promotion from staging DB to production DB."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.staging_path = os.path.join(self.tmpdir, 'staging.db')
         self.prod_path = os.path.join(self.tmpdir, 'prod.db')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_promote_copies_prices(self):
         # Create staging DB with data
@@ -264,17 +245,12 @@ class TestPromoteStaging(unittest.TestCase):
         conn_prod.close()
 
 
-class TestManifest(unittest.TestCase):
+class TestManifest(BaseTmpDirTest):
     """Test manifest writing."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.path = os.path.join(self.tmpdir, 'manifest.json')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_write_and_read(self):
         manifest = {
@@ -308,19 +284,17 @@ class TestSubsetSlicing(unittest.TestCase):
         self.assertEqual(result, tickers)
 
 
-class TestCircuitBreaker(unittest.TestCase):
+class TestCircuitBreaker(BaseTmpDirTest):
     """Test circuit breaker in download_and_save."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.db_path = os.path.join(self.tmpdir, 'test.db')
         self.conn = db.get_connection(self.db_path)
 
     def tearDown(self):
         self.conn.close()
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
+        super().tearDown()
 
     @patch('src.download_data._download_batch_with_timeout', return_value=None)
     def test_circuit_breaker_trips_after_threshold(self, mock_dl):
@@ -329,6 +303,7 @@ class TestCircuitBreaker(unittest.TestCase):
             tickers, self.conn, exchange='US', batch_size=5,
             max_retries=1, circuit_breaker_threshold=3,
             rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
         )
         self.assertTrue(result['circuit_breaker_tripped'])
         # Should have stopped after 3 consecutive failures, not all 5
@@ -350,6 +325,7 @@ class TestCircuitBreaker(unittest.TestCase):
             tickers, self.conn, exchange='US', batch_size=5,
             max_retries=1, circuit_breaker_threshold=5,
             rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
         )
         # 4 failures then 1 success — should NOT trip (resets at batch 5)
         self.assertFalse(result['circuit_breaker_tripped'])
@@ -373,24 +349,23 @@ class TestCircuitBreaker(unittest.TestCase):
             max_retries=1, circuit_breaker_threshold=2,
             rate_limit_delay=0, batch_timeout=10,
             on_batch_failed=on_failed,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
         )
         saved = load_checkpoint(checkpoint_path)
         self.assertGreater(len(saved['failed_tickers']), 0)
 
 
-class TestFailedTickerRecording(unittest.TestCase):
+class TestFailedTickerRecording(BaseTmpDirTest):
     """Test that failed batches record ticker symbols."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.db_path = os.path.join(self.tmpdir, 'test.db')
         self.conn = db.get_connection(self.db_path)
 
     def tearDown(self):
         self.conn.close()
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
+        super().tearDown()
 
     @patch('src.download_data._download_batch_with_timeout', return_value=None)
     def test_failed_batches_contain_ticker_symbols(self, mock_dl):
@@ -432,19 +407,17 @@ class TestFailedTickerRecording(unittest.TestCase):
         self.assertIn('QQQ', saved['failed_tickers'])
 
 
-class TestAdaptiveRateLimit(unittest.TestCase):
+class TestAdaptiveRateLimit(BaseTmpDirTest):
     """Test adaptive rate limit escalation and decay."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.db_path = os.path.join(self.tmpdir, 'test.db')
         self.conn = db.get_connection(self.db_path)
 
     def tearDown(self):
         self.conn.close()
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
+        super().tearDown()
 
     @patch('src.download_data.time.sleep')
     @patch('src.download_data._download_batch_with_timeout')
@@ -496,19 +469,17 @@ class TestAdaptiveRateLimit(unittest.TestCase):
         self.assertEqual(result['saved_tickers'], 10)
 
 
-class TestBatchTimeout(unittest.TestCase):
+class TestBatchTimeout(BaseTmpDirTest):
     """Test batch download timeout."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.db_path = os.path.join(self.tmpdir, 'test.db')
         self.conn = db.get_connection(self.db_path)
 
     def tearDown(self):
         self.conn.close()
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
+        super().tearDown()
 
     @patch('src.download_data._download_batch')
     def test_batch_timeout_returns_none(self, mock_dl):
@@ -528,18 +499,13 @@ class TestBatchTimeout(unittest.TestCase):
         self.assertEqual(result['saved_tickers'], 0)
 
 
-class TestPromotionIntegrity(unittest.TestCase):
+class TestPromotionIntegrity(BaseTmpDirTest):
     """Test promotion integrity check."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        super().setUp()
         self.staging_path = os.path.join(self.tmpdir, 'staging.db')
         self.prod_path = os.path.join(self.tmpdir, 'prod.db')
-
-    def tearDown(self):
-        for f in os.listdir(self.tmpdir):
-            os.remove(os.path.join(self.tmpdir, f))
-        os.rmdir(self.tmpdir)
 
     def test_promote_staging_integrity_passes(self):
         conn_staging = db.get_connection(self.staging_path)
@@ -563,6 +529,189 @@ class TestPromotionIntegrity(unittest.TestCase):
         ).fetchone()[0]
         self.assertGreaterEqual(prod_count, 2)
         conn_prod.close()
+
+
+class TestSubBatchSplitting(BaseTmpDirTest):
+    """Test sub-batch splitting on failure."""
+
+    def setUp(self):
+        super().setUp()
+        self.db_path = os.path.join(self.tmpdir, 'test.db')
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        super().tearDown()
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_sub_batch_recovers_partial_data(self, mock_dl):
+        """Splitting should recover tickers from smaller sub-batches."""
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+
+        def side_effect(tickers, start, end, timeout):
+            # Fail batches >= 15 tickers, succeed with < 15
+            if len(tickers) >= 15:
+                return None
+            return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
+
+        mock_dl.side_effect = side_effect
+        # 20 tickers in one batch — will fail, then split to 10+10 which succeed
+        tickers = [f'T{i}' for i in range(20)]
+        result = download_and_save(
+            tickers, self.conn, exchange='US', batch_size=20,
+            max_retries=1, circuit_breaker_threshold=100,
+            rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
+        )
+        # All 20 should be saved via sub-batch splitting
+        self.assertEqual(result['saved_tickers'], 20)
+        self.assertEqual(len(result['failed_batches']), 0)
+
+    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    def test_sub_batch_respects_min_size(self, mock_dl):
+        """When everything fails, splitting stops at min batch size."""
+        tickers = [f'T{i}' for i in range(20)]
+        result = download_and_save(
+            tickers, self.conn, exchange='US', batch_size=20,
+            max_retries=1, circuit_breaker_threshold=100,
+            rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
+        )
+        # All tickers should still be recorded as failed
+        self.assertEqual(result['saved_tickers'], 0)
+        self.assertGreater(len(result['failed_batches']), 0)
+
+
+class TestCircuitBreakerCooldown(BaseTmpDirTest):
+    """Test circuit breaker cooldown-then-retry behavior."""
+
+    def setUp(self):
+        super().setUp()
+        self.db_path = os.path.join(self.tmpdir, 'test.db')
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        super().tearDown()
+
+    @patch('src.download_data.time.sleep')
+    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    def test_cooldown_resets_counter_and_continues(self, mock_dl, mock_sleep):
+        """After first trip, cooldown should reset counter and continue."""
+        tickers = [f'T{i}' for i in range(30)]  # 6 batches of 5
+        result = download_and_save(
+            tickers, self.conn, exchange='US', batch_size=5,
+            max_retries=1, circuit_breaker_threshold=2,
+            rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=2, circuit_breaker_cooldown=0,
+        )
+        # Should trip twice (2 failures each trip), then hard abort
+        self.assertTrue(result['circuit_breaker_tripped'])
+        self.assertEqual(result['circuit_breaker_trip_count'], 2)
+        # Should have processed more than just 2 batches (continued after first trip)
+        self.assertGreater(len(result['failed_batches']), 2)
+
+    @patch('src.download_data.time.sleep')
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_success_after_cooldown_prevents_abort(self, mock_dl, mock_sleep):
+        """If batches succeed after a cooldown, no hard abort."""
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+        call_count = [0]
+
+        def side_effect(tickers, start, end, timeout):
+            call_count[0] += 1
+            # First 3 calls fail (trips once at threshold=3), then succeed
+            if call_count[0] <= 3:
+                return None
+            return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
+
+        mock_dl.side_effect = side_effect
+        tickers = [f'T{i}' for i in range(25)]  # 5 batches of 5
+        result = download_and_save(
+            tickers, self.conn, exchange='US', batch_size=5,
+            max_retries=1, circuit_breaker_threshold=3,
+            rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=3, circuit_breaker_cooldown=0,
+        )
+        self.assertFalse(result['circuit_breaker_tripped'])
+        self.assertEqual(result['circuit_breaker_trip_count'], 1)
+        self.assertGreater(result['saved_tickers'], 0)
+
+    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    def test_trip_count_in_result(self, mock_dl):
+        """Result dict should include circuit_breaker_trip_count."""
+        tickers = [f'T{i}' for i in range(10)]
+        result = download_and_save(
+            tickers, self.conn, exchange='US', batch_size=5,
+            max_retries=1, circuit_breaker_threshold=2,
+            rate_limit_delay=0, batch_timeout=10,
+            circuit_breaker_max_trips=1, circuit_breaker_cooldown=0,
+        )
+        self.assertIn('circuit_breaker_trip_count', result)
+        self.assertEqual(result['circuit_breaker_trip_count'], 1)
+
+
+class TestDroppedCsvAutoSave(BaseTmpDirTest):
+    """Test auto-save of dropped tickers CSV in run_pipeline."""
+
+    def setUp(self):
+        super().setUp()
+        self.prod_db_path = os.path.join(self.tmpdir, 'prod.db')
+        self.staging_db_path = os.path.join(self.tmpdir, 'staging.db')
+
+    @patch('src.pipeline.validate_universe')
+    @patch('src.pipeline.download_and_save')
+    def test_dropped_csv_created_on_failures(self, mock_dl, mock_val):
+        from src.pipeline import run_pipeline
+        mock_dl.return_value = {
+            'total_tickers': 10,
+            'saved_tickers': 5,
+            'failed_batches': [
+                {'batch_num': 1, 'tickers': ['T0', 'T1', 'T2']},
+                {'batch_num': 2, 'tickers': ['T3', 'T4']},
+            ],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+        mock_val.return_value = {
+            'total_tickers': 5, 'total_excluded': 0, 'total_active': 5,
+        }
+        tickers = [f'T{i}' for i in range(10)]
+        manifest = run_pipeline(
+            tickers, exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            stage_only=True,
+        )
+        # Check that dropped CSV was created
+        self.assertIn('dropped_csv', manifest)
+        self.assertTrue(os.path.exists(manifest['dropped_csv']))
+        dropped_df = pd.read_csv(manifest['dropped_csv'])
+        self.assertEqual(list(dropped_df['Tickers']),
+                         ['T0', 'T1', 'T2', 'T3', 'T4'])
+
+    @patch('src.pipeline.validate_universe')
+    @patch('src.pipeline.download_and_save')
+    def test_no_dropped_csv_when_all_succeed(self, mock_dl, mock_val):
+        from src.pipeline import run_pipeline
+        mock_dl.return_value = {
+            'total_tickers': 5,
+            'saved_tickers': 5,
+            'failed_batches': [],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+        mock_val.return_value = {
+            'total_tickers': 5, 'total_excluded': 0, 'total_active': 5,
+        }
+        tickers = [f'T{i}' for i in range(5)]
+        manifest = run_pipeline(
+            tickers, exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            stage_only=True,
+        )
+        self.assertNotIn('dropped_csv', manifest)
 
 
 if __name__ == '__main__':

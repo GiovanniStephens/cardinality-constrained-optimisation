@@ -42,33 +42,37 @@ def summary_table(suite: BenchmarkSuite) -> pd.DataFrame:
 # Statistical tests
 # ---------------------------------------------------------------------------
 
-def friedman_test(suite: BenchmarkSuite) -> dict:
-    """Friedman rank-sum test across 3+ algorithms (paired by seed).
+def _build_seed_matrix(suite: BenchmarkSuite):
+    """Build seed -> {algo: fitness} mapping and find common seeds.
 
-    Returns dict with 'statistic', 'p_value', and 'rankings'.
+    :param suite: BenchmarkSuite with results.
+    :return: (seed_results dict, common_seeds list, algos list).
     """
     algos = suite.algorithms
-    if len(algos) < 3:
-        return {'error': 'Need at least 3 algorithms for Friedman test'}
-
-    # Build seed -> {algo: fitness} mapping
     seed_results = {}
     for algo in algos:
         for r in suite.results[algo]:
             if r.seed not in seed_results:
                 seed_results[r.seed] = {}
             seed_results[r.seed][algo] = r.best_fitness
-
-    # Only keep seeds where all algorithms have results
     common_seeds = [s for s in seed_results
                     if all(a in seed_results[s] for a in algos)]
+    return seed_results, common_seeds, algos
+
+
+def friedman_test(suite: BenchmarkSuite) -> dict:
+    """Friedman rank-sum test across 3+ algorithms (paired by seed).
+
+    Returns dict with 'statistic', 'p_value', and 'rankings'.
+    """
+    seed_results, common_seeds, algos = _build_seed_matrix(suite)
+
+    if len(algos) < 3:
+        return {'error': 'Need at least 3 algorithms for Friedman test'}
     if len(common_seeds) < 3:
         return {'error': f'Only {len(common_seeds)} common seeds (need >= 3)'}
 
-    groups = []
-    for algo in algos:
-        groups.append([seed_results[s][algo] for s in common_seeds])
-
+    groups = [[seed_results[s][algo] for s in common_seeds] for algo in algos]
     stat, p_value = stats.friedmanchisquare(*groups)
 
     # Mean ranks
@@ -94,20 +98,9 @@ def nemenyi_posthoc(suite: BenchmarkSuite) -> Optional[pd.DataFrame]:
         print("scikit-posthocs not installed. Skipping Nemenyi test.")
         return None
 
-    algos = suite.algorithms
-    if len(algos) < 3:
-        return None
+    seed_results, common_seeds, algos = _build_seed_matrix(suite)
 
-    seed_results = {}
-    for algo in algos:
-        for r in suite.results[algo]:
-            if r.seed not in seed_results:
-                seed_results[r.seed] = {}
-            seed_results[r.seed][algo] = r.best_fitness
-
-    common_seeds = [s for s in seed_results
-                    if all(a in seed_results[s] for a in algos)]
-    if len(common_seeds) < 3:
+    if len(algos) < 3 or len(common_seeds) < 3:
         return None
 
     # Build long-form DataFrame for scikit-posthocs

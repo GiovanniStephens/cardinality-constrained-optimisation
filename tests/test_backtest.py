@@ -1,3 +1,4 @@
+import os
 import unittest
 from src import backtest
 from src.portfolio_utils import (
@@ -12,6 +13,19 @@ from src.portfolio_utils import (
 from src.config import BACKTEST_TEST_DAYS, TRADING_DAYS_PER_YEAR
 import numpy as np
 import pandas as pd
+
+_SLOW = os.getenv('RUN_SLOW_TESTS')
+
+
+def _make_synthetic_prices(n_days=300, n_tickers=10, seed=42):
+    """Generate synthetic price data for fast tests."""
+    np.random.seed(seed)
+    dates = pd.bdate_range('2020-01-01', periods=n_days, freq='B')
+    tickers = [f'SYN{i}' for i in range(n_tickers)]
+    log_rets = np.random.randn(n_days, n_tickers) * 0.015 + 0.0003
+    log_rets[0] = 0
+    prices = 100 * np.exp(np.cumsum(log_rets, axis=0))
+    return pd.DataFrame(prices, index=dates, columns=tickers)
 
 
 def _load_test_data():
@@ -35,66 +49,51 @@ def _load_test_data():
 
 
 class TestBacktest(unittest.TestCase):
+    """Fast unit tests using small synthetic data."""
 
     @classmethod
     def setUpClass(cls):
-        cls.data = _load_test_data()
-        training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
+        cls.data = _make_synthetic_prices()
+        test_days = min(BACKTEST_TEST_DAYS, len(cls.data) // 3)
+        training = cls.data.iloc[:-test_days, :]
         backtest._backtest_data = training
         backtest._use_forecast = False
-        # Set up log returns and expected returns for optimal_weights
         log_rets = calculate_log_returns(training)
         backtest._backtest_log_returns = log_rets.transpose()
         backtest._backtest_expected_returns = calculate_expected_returns(log_rets)
-        # Pick 3 real tickers from whatever data was loaded
         cls.test_tickers = list(cls.data.columns[:3])
 
     def test_get_random_weights_count(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertEqual(len(weights), 3)
 
     def test_get_random_weights_sum(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertAlmostEqual(sum(weights), 1)
 
     def test_get_random_weights_positive(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertTrue(all(w >= 0 for w in weights))
 
     def test_get_random_weights_distinct(self):
-        tickers = self.test_tickers
-        weights = backtest.get_random_weights(tickers)
+        weights = backtest.get_random_weights(self.test_tickers)
         self.assertTrue(len(set(weights)) == 3)
 
     def test_optimal_weights_count(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
+        weights = backtest.optimal_weights(self.test_tickers)
         self.assertEqual(len(weights), 3)
 
     def test_optimal_weights_sum(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
+        weights = backtest.optimal_weights(self.test_tickers)
         self.assertAlmostEqual(sum(weights), 1)
 
     def test_optimal_weights_positive(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
+        weights = backtest.optimal_weights(self.test_tickers)
         self.assertTrue(all(w >= 0 for w in weights))
 
     def test_optimal_weights_distinct(self):
-        tickers = self.test_tickers
-        weights = backtest.optimal_weights(tickers)
+        weights = backtest.optimal_weights(self.test_tickers)
         self.assertTrue(len(set(weights)) > 1)
-
-    def test_data_loads_from_db_or_csv(self):
-        self.assertTrue(self.data.shape[0] > 0)
-
-    def test_create_portfolio(self):
-        tickers = backtest.create_portfolio(50)
-        self.assertGreater(len(tickers), 2)
 
     def test_difference_of_means_hypothesis_test(self):
         sample_1 = [1, 2, 3, 4, 5]
@@ -164,6 +163,28 @@ class TestBacktest(unittest.TestCase):
     def test_difference_of_means_hypothesis_test_identical_samples(self):
         with self.assertRaises(ValueError):
             backtest.difference_of_means_hypothesis_test([5, 5, 5], [5, 5, 5])
+
+
+@unittest.skipUnless(_SLOW, 'Slow: set RUN_SLOW_TESTS=1 to run')
+class TestBacktestWithRealData(unittest.TestCase):
+    """Integration tests that load the full price database."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data = _load_test_data()
+        training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
+        backtest._backtest_data = training
+        backtest._use_forecast = False
+        log_rets = calculate_log_returns(training)
+        backtest._backtest_log_returns = log_rets.transpose()
+        backtest._backtest_expected_returns = calculate_expected_returns(log_rets)
+
+    def test_data_loads_from_db_or_csv(self):
+        self.assertTrue(self.data.shape[0] > 0)
+
+    def test_create_portfolio(self):
+        tickers = backtest.create_portfolio(50)
+        self.assertGreater(len(tickers), 2)
 
 
 class TestGenerateWindows(unittest.TestCase):
@@ -393,20 +414,21 @@ class TestBacktestValidation(unittest.TestCase):
     # ── Test 2: op.data only contains training-period dates ───────────────
 
     def test_op_data_only_contains_training_dates(self):
-        """After prepare_opt_inputs, op.data should span training period only."""
-        from src.optimisers import pygad_ga as op
+        """After _prepare_inputs, optimiser data should span training period only."""
+        from src.optimisers.pygad_ga import PygadOptimiser
         prices = self._make_prices(n_days=60)
         windows = backtest.generate_windows(
             prices.index, train_days=30, test_days=10, step_days=10,
         )
         w = windows[0]
         train = prices.loc[w.train_start:w.train_end]
-        op.prepare_opt_inputs(train, use_forecasts=False)
-        # op.data is transposed log returns: tickers x time_periods
-        n_periods = op.data.shape[1]
+        opt = PygadOptimiser(use_forecasts=False)
+        opt._prepare_inputs(train)
+        # opt._data is log returns: dates x tickers (standard layout)
+        n_periods = opt._data.shape[0]
         self.assertEqual(
             n_periods, len(train),
-            f"op.data has {n_periods} periods but training has {len(train)} rows",
+            f"opt._data has {n_periods} periods but training has {len(train)} rows",
         )
 
     # ── Test 3: First OOS return is NOT zero ──────────────────────────────
@@ -793,6 +815,7 @@ class TestSurvivorshipBias(unittest.TestCase):
             os.unlink(path)
 
 
+@unittest.skipUnless(_SLOW, 'Slow: set RUN_SLOW_TESTS=1 to run')
 class TestBacktestEndToEnd(unittest.TestCase):
     """End-to-end integration tests for the backtest pipeline."""
 

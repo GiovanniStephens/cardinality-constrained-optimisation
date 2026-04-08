@@ -47,7 +47,8 @@ class TestCppEquivalence(unittest.TestCase):
     def setUpClass(cls):
         cls.prices_df, cls.log_returns, cls.tickers = _make_test_data()
         cls.expected_returns = calculate_expected_returns(cls.log_returns).values
-        cls.cov_matrix = calculate_covariance_matrix(cls.log_returns).values
+        # Use raw sample covariance (no shrinkage) to match C++ binary
+        cls.cov_matrix = calculate_covariance_matrix(cls.log_returns, shrinkage=False).values
 
     def _run_cpp(self, mode='ga', extra_args=None, seed=42, time_budget=5,
                  generations=2, pop_size=20, num_islands=1):

@@ -1,11 +1,18 @@
 """Tests for the Optimiser classes (MIP, Monte Carlo, Island GA, Pygad)."""
 
+import multiprocessing
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from src.portfolio_utils import OptimisationResult
+from src.portfolio_utils import OptimisationResult, calculate_log_returns
+from tests.helpers import (
+    OptimiserTestMixin,
+    make_small_divergent_prices,
+    brute_force_optimal,
+    assert_result_integrity,
+)
 
 
 def _make_synthetic_prices(n_days=200, n_tickers=10, seed=42):
@@ -18,7 +25,7 @@ def _make_synthetic_prices(n_days=200, n_tickers=10, seed=42):
     return pd.DataFrame(prices, index=dates, columns=tickers)
 
 
-class TestMIPOptimiser(unittest.TestCase):
+class TestMIPOptimiser(OptimiserTestMixin, unittest.TestCase):
     """Tests for MIPOptimiser."""
 
     @classmethod
@@ -30,27 +37,10 @@ class TestMIPOptimiser(unittest.TestCase):
         opt = MIPOptimiser(max_securities=5, **kwargs)
         return opt.optimise(self.prices)
 
-    def test_returns_optimisation_result(self):
-        result = self._run()
-        self.assertIsInstance(result, OptimisationResult)
-
-    def test_selected_tickers_subset(self):
-        result = self._run()
-        for t in result.selected_tickers:
-            self.assertIn(t, self.prices.columns)
-
-    def test_weights_length_matches_tickers(self):
-        result = self._run()
-        self.assertEqual(len(result.weights), len(result.selected_tickers))
-
     def test_weights_sum_to_one(self):
         result = self._run()
         self.assertGreaterEqual(len(result.selected_tickers), 1)
         self.assertAlmostEqual(sum(result.weights), 1.0, places=4)
-
-    def test_sharpe_is_finite(self):
-        result = self._run()
-        self.assertTrue(np.isfinite(result.sharpe_ratio))
 
     def test_respects_max_securities(self):
         result = self._run()
@@ -66,7 +56,7 @@ class TestMIPOptimiser(unittest.TestCase):
         self.assertIn('solver_status', result.metadata)
 
 
-class TestMonteCarloOptimiser(unittest.TestCase):
+class TestMonteCarloOptimiser(OptimiserTestMixin, unittest.TestCase):
     """Tests for MonteCarloOptimiser."""
 
     @classmethod
@@ -81,27 +71,10 @@ class TestMonteCarloOptimiser(unittest.TestCase):
         )
         return opt.optimise(self.prices)
 
-    def test_returns_optimisation_result(self):
-        result = self._run()
-        self.assertIsInstance(result, OptimisationResult)
-
-    def test_selected_tickers_subset(self):
-        result = self._run()
-        for t in result.selected_tickers:
-            self.assertIn(t, self.prices.columns)
-
-    def test_weights_length_matches_tickers(self):
-        result = self._run()
-        self.assertEqual(len(result.weights), len(result.selected_tickers))
-
     def test_weights_sum_to_one(self):
         result = self._run()
         self.assertGreaterEqual(len(result.selected_tickers), 2)
         self.assertAlmostEqual(sum(result.weights), 1.0, places=4)
-
-    def test_sharpe_is_finite(self):
-        result = self._run()
-        self.assertTrue(np.isfinite(result.sharpe_ratio))
 
     def test_respects_cardinality(self):
         result = self._run()
@@ -114,7 +87,7 @@ class TestMonteCarloOptimiser(unittest.TestCase):
         self.assertIn('elapsed_seconds', result.metadata)
 
 
-class TestIslandGAOptimiser(unittest.TestCase):
+class TestIslandGAOptimiser(OptimiserTestMixin, unittest.TestCase):
     """Tests for IslandGAOptimiser."""
 
     @classmethod
@@ -130,29 +103,12 @@ class TestIslandGAOptimiser(unittest.TestCase):
         )
         return opt.optimise(self.prices)
 
-    def test_returns_optimisation_result(self):
-        result = self._run()
-        self.assertIsInstance(result, OptimisationResult)
-
-    def test_selected_tickers_subset(self):
-        result = self._run()
-        for t in result.selected_tickers:
-            self.assertIn(t, self.prices.columns)
-
-    def test_weights_length_matches_tickers(self):
-        result = self._run()
-        self.assertEqual(len(result.weights), len(result.selected_tickers))
-
-    def test_sharpe_is_finite(self):
-        result = self._run()
-        self.assertTrue(np.isfinite(result.sharpe_ratio))
-
     def test_metadata_has_elapsed(self):
         result = self._run()
         self.assertIn('elapsed_seconds', result.metadata)
 
 
-class TestPygadOptimiser(unittest.TestCase):
+class TestPygadOptimiser(OptimiserTestMixin, unittest.TestCase):
     """Tests for PygadOptimiser."""
 
     @classmethod
@@ -169,23 +125,6 @@ class TestPygadOptimiser(unittest.TestCase):
             **kwargs,
         )
         return opt.optimise(self.prices)
-
-    def test_returns_optimisation_result(self):
-        result = self._run()
-        self.assertIsInstance(result, OptimisationResult)
-
-    def test_selected_tickers_subset(self):
-        result = self._run()
-        for t in result.selected_tickers:
-            self.assertIn(t, self.prices.columns)
-
-    def test_weights_length_matches_tickers(self):
-        result = self._run()
-        self.assertEqual(len(result.weights), len(result.selected_tickers))
-
-    def test_sharpe_is_finite(self):
-        result = self._run()
-        self.assertTrue(np.isfinite(result.sharpe_ratio))
 
     def test_metadata_has_elapsed(self):
         result = self._run()
@@ -280,8 +219,8 @@ class TestOptimiserDataBoundary(unittest.TestCase):
         for t in result.selected_tickers:
             self.assertIn(t, self.train_prices.columns)
         # Internal data should have 150-day shape (after log returns)
-        self.assertEqual(opt._data.shape[1], len(self.train_prices),
-                         "PygadOptimiser._data should have training-period columns only")
+        self.assertEqual(opt._data.shape[0], len(self.train_prices),
+                         "PygadOptimiser._data should have training-period rows only")
 
     def test_monte_carlo_only_sees_training_prices(self):
         """MonteCarloOptimiser should only use prices passed to optimise()."""
@@ -348,105 +287,14 @@ class TestOptimiserDataBoundary(unittest.TestCase):
 
 
 class TestPygadFunctions(unittest.TestCase):
-    """Tests for pygad_ga module-level functions (fitness, covariance, copulas).
+    """Legacy module-level function tests removed in Phase 5 cleanup.
 
-    These tests require data/ETF_Prices.csv to be present.
+    The module-level functions (prepare_opt_inputs, fitness, optimize,
+    get_cov_matrix, create_individual, etc.) have been removed.
+    Equivalent functionality is tested via TestPygadOptimiser and
+    TestCopulaTemporalIntegrity.
     """
-
-    def _load(self):
-        from src.optimisers import pygad_ga as op
-        data = op.load_data('data/ETF_Prices.csv')
-        return op, data
-
-    def test_get_cov_matrix(self):
-        from unittest.mock import patch
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        cov = log_returns.iloc[:, :2].cov() * 252
-        # Disable shrinkage so CCC with no forecasts matches raw sample cov
-        with patch('src.optimisers.pygad_ga.COV_SHRINKAGE_ENABLED', False):
-            cov_matrix = op.get_cov_matrix(log_returns.iloc[:, :2])
-        np.testing.assert_array_almost_equal(cov_matrix, cov.values)
-
-    def test_optimisation_max_weight(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 5
-        max_weight = 0.3
-        initial_weights = [1 / num_stocks] * num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks],
-                          initial_weights, max_weight=max_weight)
-        self.assertLessEqual(max(sol['x']), max_weight)
-
-    def test_optimisation_min_weight(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 5
-        initial_weights = [1 / num_stocks] * num_stocks
-        sol = op.optimize(log_returns.iloc[:, :num_stocks], initial_weights)
-        self.assertGreaterEqual(min(sol['x']), 0)
-
-    def test_fitness_too_many_ETFs(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        individual = [1] * log_returns.shape[1]
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertLess(fitness, 0)
-
-    def test_fitness_too_few_ETFs(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        individual = [0] * log_returns.shape[1]
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertLessEqual(fitness, 0)
-
-    def test_fitness_normal(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        num_stocks = 8
-        individual = [1] * num_stocks + [0] * (log_returns.shape[1] - num_stocks)
-        fitness = op.fitness(individual, log_returns.T)
-        self.assertGreater(fitness, 0)
-        self.assertLess(fitness, 5)
-
-    def test_prepare_opt_inputs(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=True)
-        self.assertEqual(len(op.data), len(log_returns.T))
-
-    def test_prepare_opt_inputs_variances_null(self):
-        op, data = self._load()
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        self.assertIsNone(op.variances)
-
-    def test_estimate_corr_using_copulas_is_correlation_matrix(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        subset = log_returns.iloc[:, :5]
-        corr = op.estimate_corr_using_copulas(subset)
-        self.assertEqual(corr.shape, (5, 5))
-        np.testing.assert_array_almost_equal(np.diag(corr), np.ones(5))
-        np.testing.assert_array_almost_equal(corr, corr.T)
-        eigenvalues = np.linalg.eigvalsh(corr)
-        self.assertTrue(np.all(eigenvalues >= -1e-10))
-
-    def test_get_cov_matrix_with_copulae_no_forecasts(self):
-        op, data = self._load()
-        log_returns = op.calculate_returns(data)
-        op.prepare_opt_inputs(data, use_forecasts=False)
-        subset = log_returns.iloc[:, :5]
-        cov_matrix = op.get_cov_matrix(subset, use_copulae=True)
-        self.assertEqual(cov_matrix.shape, (5, 5))
-        np.testing.assert_array_almost_equal(cov_matrix, cov_matrix.T)
-        eigenvalues = np.linalg.eigvalsh(cov_matrix)
-        self.assertTrue(np.all(eigenvalues >= -1e-10))
-        self.assertTrue(np.all(np.diag(cov_matrix) > 0))
+    pass
 
 
 class TestBatchFitnessSubsetCov(unittest.TestCase):
@@ -493,6 +341,39 @@ class TestBatchFitnessSubsetCov(unittest.TestCase):
                                    msg=f"Individual {i} fitness mismatch")
 
 
+class TestRepairCardinality(unittest.TestCase):
+    """Tests for the repair_cardinality function."""
+
+    def test_repairs_too_many(self):
+        from src.optimisers.island_ga import repair_cardinality
+        np.random.seed(42)
+        offspring = np.ones((5, 20), dtype=int)  # all 20 selected
+        repaired = repair_cardinality(offspring, min_etfs=3, max_etfs=10)
+        counts = repaired.sum(axis=1)
+        for c in counts:
+            self.assertLessEqual(c, 10)
+            self.assertGreaterEqual(c, 3)
+
+    def test_repairs_too_few(self):
+        from src.optimisers.island_ga import repair_cardinality
+        np.random.seed(42)
+        offspring = np.zeros((5, 20), dtype=int)  # none selected
+        repaired = repair_cardinality(offspring, min_etfs=3, max_etfs=10)
+        counts = repaired.sum(axis=1)
+        for c in counts:
+            self.assertGreaterEqual(c, 3)
+
+    def test_no_change_when_valid(self):
+        from src.optimisers.island_ga import repair_cardinality
+        np.random.seed(42)
+        offspring = np.zeros((3, 20), dtype=int)
+        for i in range(3):
+            offspring[i, :5] = 1  # exactly 5 selected
+        original = offspring.copy()
+        repaired = repair_cardinality(offspring, min_etfs=3, max_etfs=10)
+        np.testing.assert_array_equal(repaired, original)
+
+
 class TestCopulaTemporalIntegrity(unittest.TestCase):
     """Tests that copula estimation uses only the provided data, not stale globals."""
 
@@ -522,6 +403,211 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
         corr = estimate_corr_using_copulas(pos_data)
         off_diag = corr[0, 1] if isinstance(corr, np.ndarray) else corr.iloc[0, 1]
         self.assertGreater(off_diag, 0.0)
+
+
+class TestCrossOptimiserConvergence(unittest.TestCase):
+    """On a tiny 5-ticker problem, all optimisers should achieve near-optimal Sharpe."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = make_small_divergent_prices(n_days=300, seed=42)
+        cls.k = 3
+        cls.ref = brute_force_optimal(cls.prices, cls.k)
+
+    def test_brute_force_reference_valid(self):
+        self.assertEqual(len(self.ref.selected_tickers), self.k)
+        self.assertTrue(np.isfinite(self.ref.sharpe_ratio))
+
+    def test_monte_carlo_converges(self):
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        opt = MonteCarloOptimiser(
+            n_trials=200, min_securities=self.k, max_securities=self.k,
+            num_processes=1, seed=42,
+        )
+        result = opt.optimise(self.prices)
+        self.assertEqual(len(result.selected_tickers), self.k)
+        # MC uses equal-weight search so may pick different tickers,
+        # but SLSQP-refined Sharpe should be close to brute-force optimum
+        self.assertGreater(result.sharpe_ratio, self.ref.sharpe_ratio * 0.80)
+
+    def test_pygad_converges(self):
+        from src.optimisers.pygad_ga import PygadOptimiser
+        opt = PygadOptimiser(
+            num_children=50, num_generations=10,
+            min_securities=self.k, max_securities=self.k,
+            min_weight=0.0, max_weight=1.0,
+            target_return=None, use_forecasts=False, seed=42,
+        )
+        result = opt.optimise(self.prices)
+        self.assertEqual(len(result.selected_tickers), self.k)
+        self.assertGreater(result.sharpe_ratio, self.ref.sharpe_ratio * 0.80)
+
+    def test_island_ga_converges(self):
+        if multiprocessing.get_start_method() == 'spawn':
+            self.skipTest("IslandGA incompatible with 'spawn' start method")
+        from src.optimisers.island_ga import IslandGAOptimiser
+        opt = IslandGAOptimiser(
+            num_generations=10, population_size=200, num_elites=20,
+            min_securities=self.k, max_securities=self.k, min_return=None,
+        )
+        result = opt.optimise(self.prices)
+        self.assertEqual(len(result.selected_tickers), self.k)
+        self.assertGreater(result.sharpe_ratio, self.ref.sharpe_ratio * 0.80)
+
+
+class TestWeightBoundCompliance(unittest.TestCase):
+    """Verify SLSQP-refined weights respect [min_weight, max_weight] bounds."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = _make_synthetic_prices(n_days=300, n_tickers=15, seed=42)
+
+    def test_pygad_custom_bounds(self):
+        from src.optimisers.pygad_ga import PygadOptimiser
+        opt = PygadOptimiser(
+            num_children=30, num_generations=3,
+            min_securities=3, max_securities=8,
+            min_weight=0.05, max_weight=0.45,
+            target_return=None, use_forecasts=False, seed=42,
+        )
+        result = opt.optimise(self.prices)
+        tol = 1e-6
+        for i, w in enumerate(result.weights):
+            self.assertGreaterEqual(w, 0.05 - tol,
+                                    f"weight[{i}]={w} below min_weight=0.05")
+            self.assertLessEqual(w, 0.45 + tol,
+                                 f"weight[{i}]={w} above max_weight=0.45")
+
+    def test_monte_carlo_default_bounds(self):
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        opt = MonteCarloOptimiser(
+            n_trials=200, min_securities=3, max_securities=8,
+            num_processes=1, seed=42,
+        )
+        result = opt.optimise(self.prices)
+        tol = 1e-6
+        for i, w in enumerate(result.weights):
+            self.assertGreaterEqual(w, -tol, f"weight[{i}]={w} is negative")
+            self.assertLessEqual(w, 1.0 + tol, f"weight[{i}]={w} above 1.0")
+
+
+class TestDateAlignmentValidation(unittest.TestCase):
+    """Verify date alignment assumptions hold."""
+
+    def test_synthetic_prices_have_uniform_dates(self):
+        prices = _make_synthetic_prices(n_days=200, n_tickers=10)
+        for col in prices.columns:
+            self.assertEqual(prices[col].dropna().shape[0], 200)
+
+    def test_misaligned_concat_produces_nan(self):
+        p1 = _make_synthetic_prices(n_days=100, n_tickers=3, seed=1)
+        p2 = _make_synthetic_prices(n_days=80, n_tickers=3, seed=2)
+        p2.columns = ['X0', 'X1', 'X2']
+        # Shift p2 dates forward so they only partially overlap
+        p2.index = pd.bdate_range(p1.index[50], periods=80, freq='B')
+        merged = pd.concat([p1, p2], axis=1)
+        # Merged should have NaN in the non-overlapping regions
+        self.assertTrue(merged.isna().any().any(),
+                        "Misaligned concat should produce NaN")
+
+    def test_unsorted_index_raises(self):
+        prices = _make_synthetic_prices(n_days=100, n_tickers=5)
+        shuffled = prices.sample(frac=1)  # shuffle rows
+        with self.assertRaises(ValueError):
+            calculate_log_returns(shuffled)
+
+    def test_aligned_data_works(self):
+        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        opt = MonteCarloOptimiser(
+            n_trials=100, min_securities=2, max_securities=5,
+            num_processes=1, seed=42,
+        )
+        result = opt.optimise(prices)
+        self.assertIsInstance(result, OptimisationResult)
+        self.assertTrue(np.isfinite(result.sharpe_ratio))
+
+
+class TestNaNPropagation(unittest.TestCase):
+    """Verify NaN/inf handling in the pipeline."""
+
+    def test_nan_in_prices_gives_zero_log_return(self):
+        prices = _make_synthetic_prices(n_days=50, n_tickers=3, seed=42)
+        prices.iloc[10, 0] = np.nan
+        lr = calculate_log_returns(prices)
+        # The NaN should become 0 in log returns
+        self.assertEqual(lr.iloc[10, 0], 0.0)
+
+    def test_zero_price_gives_zero_log_return(self):
+        prices = _make_synthetic_prices(n_days=50, n_tickers=3, seed=42)
+        prices.iloc[10, 1] = 0.0  # will cause -inf in log
+        lr = calculate_log_returns(prices)
+        self.assertEqual(lr.iloc[10, 1], 0.0)
+
+    def test_partial_nan_column_doesnt_crash(self):
+        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        # Inject NaN in 10% of one column
+        prices.iloc[5:25, 3] = np.nan
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        opt = MonteCarloOptimiser(
+            n_trials=100, min_securities=2, max_securities=5,
+            num_processes=1, seed=42,
+        )
+        result = opt.optimise(prices)
+        self.assertIsInstance(result, OptimisationResult)
+
+    def test_no_nan_inf_in_output_weights(self):
+        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        prices.iloc[5:15, 2] = np.nan
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        opt = MonteCarloOptimiser(
+            n_trials=100, min_securities=2, max_securities=5,
+            num_processes=1, seed=42,
+        )
+        result = opt.optimise(prices)
+        self.assertTrue(np.all(np.isfinite(result.weights)),
+                        "output weights contain NaN or inf")
+
+
+class TestResultIntegrity(unittest.TestCase):
+    """Run assert_result_integrity on all 4 optimisers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+
+    def test_mip_integrity(self):
+        from src.optimisers.mip import MIPOptimiser
+        result = MIPOptimiser(max_securities=5).optimise(self.prices)
+        assert_result_integrity(self, result, self.prices)
+
+    def test_monte_carlo_integrity(self):
+        from src.optimisers.monte_carlo import MonteCarloOptimiser
+        result = MonteCarloOptimiser(
+            n_trials=200, min_securities=2, max_securities=5,
+            num_processes=1,
+        ).optimise(self.prices)
+        assert_result_integrity(self, result, self.prices)
+
+    def test_pygad_integrity(self):
+        from src.optimisers.pygad_ga import PygadOptimiser
+        result = PygadOptimiser(
+            num_children=30, num_generations=2,
+            min_securities=2, max_securities=5,
+            min_weight=0.0, max_weight=1.0,
+            target_return=None, use_forecasts=False,
+        ).optimise(self.prices)
+        assert_result_integrity(self, result, self.prices)
+
+    def test_island_ga_integrity(self):
+        if multiprocessing.get_start_method() == 'spawn':
+            self.skipTest("IslandGA incompatible with 'spawn' start method")
+        from src.optimisers.island_ga import IslandGAOptimiser
+        result = IslandGAOptimiser(
+            num_generations=3, population_size=100, num_elites=10,
+            min_securities=2, max_securities=5, min_return=None,
+        ).optimise(self.prices)
+        assert_result_integrity(self, result, self.prices)
 
 
 if __name__ == '__main__':
