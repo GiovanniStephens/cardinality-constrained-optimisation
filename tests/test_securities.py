@@ -9,8 +9,10 @@ import pandas as pd
 
 from src import db
 from src import download_data as dd
+from tests import requires_network
 
 
+@requires_network
 class TestSecurityUniverse(unittest.TestCase):
     """Tests for retrieving securities from FinanceDatabase."""
 
@@ -100,6 +102,7 @@ class TestLoadTickers(unittest.TestCase):
         self.assertEqual(list(result['Symbol']), ['AAPL', 'MSFT'])
 
 
+@requires_network
 class TestDownloadData(unittest.TestCase):
     """Tests for downloading price data from Yahoo Finance."""
 
@@ -133,6 +136,7 @@ class TestDownloadData(unittest.TestCase):
         self.assertTrue(prices['AAPL'].dtype in ['float64', 'float32'])
 
 
+@requires_network
 class TestEndToEnd(unittest.TestCase):
     """End-to-end: FinanceDatabase tickers -> Yahoo Finance prices."""
 
