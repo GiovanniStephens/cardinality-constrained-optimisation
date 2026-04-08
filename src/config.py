@@ -65,11 +65,6 @@ INVESTNOW_PRICES_CSV = os.path.join(DATA_DIR, 'time_series_20251016_113257.csv')
 EXPECTED_RETURNS_CSV = os.path.join(DATA_DIR, 'expected_returns.csv')
 VARIANCES_CSV = os.path.join(DATA_DIR, 'variances.csv')
 
-# ─── Portfolio constraints ───────────────────────────────────────────────────
-
-TARGET_POSITIONS = (10, 20)      # (min, max) cardinality constraint
-REBALANCE_FREQUENCY = 'quarterly'
-
 # ─── Pygad GA parameters ────────────────────────────────────────────────────
 
 GA_MIN_SECURITIES = 3
@@ -77,14 +72,19 @@ GA_MAX_SECURITIES = 15
 GA_MIN_WEIGHT = 0.05
 GA_MAX_WEIGHT = 0.45
 GA_TARGET_RETURN = 0.15
-GA_NUM_GENERATIONS = 6
+GA_NUM_GENERATIONS = 100           # Was 6; far too few for meaningful search
 GA_POPULATION_SIZE = 1000
 GA_CROSSOVER_PROBABILITY = 0.85
 GA_THREAD_POOL_SIZE = 10
+GA_ELITISM_FRACTION = 0.10         # 10% elitism (Eiben & Smith 2003 sweet spot)
+GA_EARLY_STOP_SATURATE = 15        # Stop after 15 gens without improvement
+GA_SELECTION_TYPE = 'tournament'   # Tournament selection (Jalota & Thakur 2018)
+GA_TOURNAMENT_SIZE = 5             # K=5 tournament size
+GA_PARENT_FRACTION = 0.30          # 30% of population eligible as parents
 
 # ─── Island GA parameters ───────────────────────────────────────────────────
 
-ISLAND_GA_NUM_GENERATIONS = 70
+ISLAND_GA_NUM_GENERATIONS = 150    # Was 70; more convergence time (cheap fitness)
 ISLAND_GA_POPULATION_SIZE = 8000
 ISLAND_GA_NUM_ELITES = 100
 ISLAND_GA_MIGRATION_INTERVAL = 10
@@ -92,6 +92,11 @@ ISLAND_GA_MIGRATION_RATE = 0.1
 ISLAND_GA_MIN_SECURITIES = 8
 ISLAND_GA_MAX_SECURITIES = 20
 ISLAND_GA_MIN_RETURN = 0.12
+ISLAND_GA_MUTATION_RATE = 0.005    # Floor: ~8 flips per individual for 1700 ETFs
+ISLAND_GA_ADAPTIVE_MUTATION = True # Linear decay from initial to final rate
+ISLAND_GA_MUTATION_RATE_INITIAL = 0.01   # High early exploration
+ISLAND_GA_MUTATION_RATE_FINAL = 0.002    # Low late exploitation
+ISLAND_GA_STAGNATION_LIMIT = 30   # Per-island early stopping on stagnation
 
 # ─── Backtest parameters ────────────────────────────────────────────────────
 
@@ -111,13 +116,17 @@ BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. 
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 200
-PIPELINE_RATE_LIMIT_DELAY = 2.0    # seconds between batches (Yahoo throttles below this)
+PIPELINE_RATE_LIMIT_DELAY = 4.0    # seconds between batches (Yahoo throttles below this)
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space
 PIPELINE_MAX_RETRIES = 5           # retries per batch (includes empty-result retries)
-PIPELINE_CIRCUIT_BREAKER_THRESHOLD = 5   # consecutive failed batches before abort
+PIPELINE_CIRCUIT_BREAKER_THRESHOLD = 10  # consecutive failed batches before trip
+PIPELINE_CIRCUIT_BREAKER_MAX_TRIPS = 3   # hard abort after this many trips
+PIPELINE_CIRCUIT_BREAKER_COOLDOWN = 300.0  # seconds to pause on trip before retry
 PIPELINE_MAX_RATE_LIMIT_DELAY = 60.0     # max adaptive inter-batch delay (seconds)
 PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
+PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
+PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
 
 # ─── Forecast parameters ──────────────────────────────────────────────────
 
@@ -131,6 +140,7 @@ FORECAST_GARCH_O = 1
 FORECAST_GARCH_Q = 1
 FORECAST_GARCH_DIST = 'skewt'
 FORECAST_GARCH_VOL = 'Garch'
+GARCH_SCALE = 100           # Multiplier for GARCH fitting (daily returns ~ 0.001)
 
 # ─── MIP parameters ──────────────────────────────────────────────────────
 
