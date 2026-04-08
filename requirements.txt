@@ -1,5 +1,6 @@
 arch
 copulae
+curl_cffi
 matplotlib
 muarch
 numpy

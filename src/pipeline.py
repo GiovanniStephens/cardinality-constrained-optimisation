@@ -14,6 +14,8 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from src import config, db
 from src.data_quality import validate_universe
 from src.download_data import download_and_save
@@ -221,6 +223,140 @@ def write_manifest(path, manifest):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
+def _run_preflight(prod_db_path, staging_db_path, tickers, start, end, manifest):
+    """Run disk-space preflight check. Returns True if OK, False to abort."""
+    from datetime import datetime as dt
+    start_dt = dt.strptime(start, '%Y-%m-%d')
+    end_dt = dt.strptime(end, '%Y-%m-%d')
+    est_trading_days = int((end_dt - start_dt).days * 252 / 365)
+
+    preflight = preflight_check(prod_db_path, staging_db_path,
+                                len(tickers), est_trading_days)
+    manifest['preflight'] = preflight
+    logger.info("Preflight: %.1f GB available, ~%.1f GB needed (staging + backup)",
+                preflight['available_gb'], preflight['estimated_total_gb'])
+
+    if not preflight['ok']:
+        for w in preflight['warnings']:
+            logger.error("PREFLIGHT FAILED: %s", w)
+        manifest['status'] = 'preflight_failed'
+    return preflight['ok']
+
+
+def _run_download(tickers, conn_staging, checkpoint, checkpoint_path,
+                  manifest, **download_kwargs):
+    """Download into staging DB with checkpointing. Returns download result or None on interrupt."""
+    def _on_batch_complete(saved_tickers_list, batch_num):
+        checkpoint['completed_tickers'].extend(saved_tickers_list)
+        checkpoint['last_batch'] = batch_num
+        checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
+        save_checkpoint(checkpoint_path, checkpoint)
+
+    def _on_batch_failed(failed_tickers_list, batch_num):
+        checkpoint['failed_tickers'].extend(failed_tickers_list)
+        checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
+        save_checkpoint(checkpoint_path, checkpoint)
+
+    try:
+        result = download_and_save(
+            tickers, conn_staging,
+            on_batch_complete=_on_batch_complete,
+            on_batch_failed=_on_batch_failed,
+            **download_kwargs,
+        )
+    except KeyboardInterrupt:
+        logger.warning("Download interrupted. Checkpoint saved at %s",
+                        checkpoint_path)
+        manifest['status'] = 'interrupted'
+        manifest['download_result'] = {
+            'completed_tickers': len(checkpoint.get('completed_tickers', [])),
+        }
+        return None
+
+    manifest['download_result'] = result
+    logger.info("Download complete: %d/%d saved, %d failed batches",
+                result['saved_tickers'], result['total_tickers'],
+                len(result['failed_batches']))
+    return result
+
+
+def _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest):
+    """Auto-save dropped tickers to CSV if there were failures."""
+    if not result['failed_batches']:
+        return
+    all_failed = []
+    for fb in result['failed_batches']:
+        all_failed.extend(fb['tickers'])
+    if all_failed:
+        dropped_path = os.path.join(data_dir,
+                                    f'dropped_{asset_type}_{run_id}.csv')
+        pd.DataFrame({'Tickers': all_failed}).to_csv(dropped_path,
+                                                     index=False)
+        manifest['dropped_csv'] = dropped_path
+        logger.info("Saved %d failed tickers to %s (use --retry-dropped)",
+                    len(all_failed), dropped_path)
+
+
+def _run_validation(conn_staging, exchange, manifest):
+    """Validate staging DB data quality. Returns True if OK."""
+    logger.info("Running data quality validation on staging DB...")
+    validation = validate_universe(conn_staging, exchange=exchange)
+    manifest['validation'] = validation
+
+    exclusion_rate = (validation['total_excluded'] / validation['total_tickers']
+                      if validation['total_tickers'] > 0 else 0)
+    logger.info("Validation: %d/%d excluded (%.0f%%), %d active",
+                 validation['total_excluded'], validation['total_tickers'],
+                 exclusion_rate * 100, validation['total_active'])
+
+    if validation['total_active'] == 0:
+        logger.error("Validation failed: no active tickers remain")
+        manifest['status'] = 'validation_failed'
+        return False
+    return True
+
+
+def _promote_and_cleanup(staging_db_path, prod_db_path, exchange, run_id,
+                         manifest, no_backup, keep_staging, checkpoint_path):
+    """Backup production, promote staging, and clean up."""
+    conn_prod = db.get_connection(prod_db_path)
+
+    backup_path = None
+    if not no_backup and os.path.exists(prod_db_path):
+        backup_path = f"{prod_db_path}.backup_{run_id}"
+        backup_database(conn_prod, backup_path)
+        manifest['backup_path'] = backup_path
+
+    try:
+        promoted = promote_staging(staging_db_path, conn_prod, exchange=exchange)
+        manifest['promoted_tickers'] = promoted
+        manifest['status'] = 'promoted'
+        logger.info("Promotion successful: %d tickers", promoted)
+    except Exception as e:
+        logger.error("Promotion failed: %s", e)
+        manifest['status'] = 'promotion_failed'
+        manifest['promotion_error'] = str(e)
+        if backup_path:
+            logger.info("Backup available at %s for rollback", backup_path)
+        conn_prod.close()
+        raise
+    finally:
+        conn_prod.close()
+
+    # Cleanup
+    if not keep_staging and os.path.exists(staging_db_path):
+        os.remove(staging_db_path)
+        for suffix in ('-wal', '-shm'):
+            p = staging_db_path + suffix
+            if os.path.exists(p):
+                os.remove(p)
+        logger.info("Staging DB removed: %s", staging_db_path)
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+
+    return promoted
+
+
 def run_pipeline(
     tickers,
     exchange,
@@ -260,14 +396,12 @@ def run_pipeline(
     if prod_db_path is None:
         prod_db_path = db.DB_PATH
 
-    # Derive default paths from data directory
     data_dir = os.path.dirname(prod_db_path)
     if staging_db_path is None:
         staging_db_path = os.path.join(data_dir, f'staging_{run_id}.db')
     if checkpoint_path is None:
         checkpoint_path = os.path.join(data_dir, f'checkpoint_{run_id}.json')
 
-    # Apply subset
     if subset is not None:
         tickers = tickers[:subset]
         logger.info("Subset mode: using first %d tickers", len(tickers))
@@ -285,28 +419,17 @@ def run_pipeline(
         'prod_db': prod_db_path,
     }
 
-    # ── Preflight ──────────────────────────────────────────────────────────
-    from datetime import datetime as dt
-    start_dt = dt.strptime(start, '%Y-%m-%d')
-    end_dt = dt.strptime(end, '%Y-%m-%d')
-    est_trading_days = int((end_dt - start_dt).days * 252 / 365)
-
-    preflight = preflight_check(prod_db_path, staging_db_path,
-                                len(tickers), est_trading_days)
-    manifest['preflight'] = preflight
-
-    logger.info("Preflight: %.1f GB available, ~%.1f GB needed (staging + backup)",
-                preflight['available_gb'], preflight['estimated_total_gb'])
-
-    if not preflight['ok']:
-        for w in preflight['warnings']:
-            logger.error("PREFLIGHT FAILED: %s", w)
-        manifest['status'] = 'preflight_failed'
+    def _write_and_return():
         manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
         write_manifest(manifest_path, manifest)
         return manifest
 
-    # ── Resume from checkpoint ─────────────────────────────────────────────
+    # ── Preflight ─────────────────────────────────────────────────────────
+    if not _run_preflight(prod_db_path, staging_db_path, tickers, start,
+                          end, manifest):
+        return _write_and_return()
+
+    # ── Resume from checkpoint ────────────────────────────────────────────
     checkpoint = load_checkpoint(checkpoint_path)
     if checkpoint:
         logger.info("Resuming from checkpoint: %d tickers already completed",
@@ -325,135 +448,54 @@ def run_pipeline(
             'failed_tickers': [],
         }
 
-    # ── Stage: download into staging DB ────────────────────────────────────
+    # ── Download into staging DB ──────────────────────────────────────────
     logger.info("Creating staging DB: %s", staging_db_path)
     conn_staging = db.get_connection(staging_db_path)
 
-    def _on_batch_complete(saved_tickers_list, batch_num):
-        checkpoint['completed_tickers'].extend(saved_tickers_list)
-        checkpoint['last_batch'] = batch_num
-        checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
-        save_checkpoint(checkpoint_path, checkpoint)
-
-    def _on_batch_failed(failed_tickers_list, batch_num):
-        checkpoint['failed_tickers'].extend(failed_tickers_list)
-        checkpoint['updated_at'] = datetime.now(timezone.utc).isoformat()
-        save_checkpoint(checkpoint_path, checkpoint)
-
-    try:
-        result = download_and_save(
-            tickers, conn_staging, exchange=exchange, asset_type=asset_type,
-            start=start, end=end, batch_size=batch_size,
-            null_threshold=null_threshold, names=names, countries=countries,
-            max_retries=max_retries,
-            on_batch_complete=_on_batch_complete,
-            on_batch_failed=_on_batch_failed,
-            rate_limit_delay=rate_limit_delay,
-        )
-    except KeyboardInterrupt:
-        logger.warning("Download interrupted. Checkpoint saved at %s", checkpoint_path)
+    result = _run_download(
+        tickers, conn_staging, checkpoint, checkpoint_path, manifest,
+        exchange=exchange, asset_type=asset_type,
+        start=start, end=end, batch_size=batch_size,
+        null_threshold=null_threshold, names=names, countries=countries,
+        max_retries=max_retries, rate_limit_delay=rate_limit_delay,
+    )
+    if result is None:
         conn_staging.close()
-        manifest['status'] = 'interrupted'
-        manifest['download_result'] = {
-            'completed_tickers': len(checkpoint.get('completed_tickers', [])),
-        }
-        manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-        write_manifest(manifest_path, manifest)
-        return manifest
+        return _write_and_return()
 
-    manifest['download_result'] = result
-    logger.info("Download complete: %d/%d saved, %d failed batches",
-                result['saved_tickers'], result['total_tickers'],
-                len(result['failed_batches']))
+    _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest)
 
-    # ── Circuit breaker check ──────────────────────────────────────────────
     if result.get('circuit_breaker_tripped'):
         logger.error("Circuit breaker tripped. Checkpoint saved at %s. "
                      "Use --resume to retry after the issue is resolved.",
                      checkpoint_path)
         conn_staging.close()
         manifest['status'] = 'circuit_breaker_tripped'
-        manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-        write_manifest(manifest_path, manifest)
-        return manifest
+        return _write_and_return()
 
-    # ── Validate ───────────────────────────────────────────────────────────
+    # ── Validate ──────────────────────────────────────────────────────────
     if not skip_validation:
-        logger.info("Running data quality validation on staging DB...")
-        validation = validate_universe(conn_staging, exchange=exchange)
-        manifest['validation'] = validation
-
-        exclusion_rate = (validation['total_excluded'] / validation['total_tickers']
-                          if validation['total_tickers'] > 0 else 0)
-        logger.info("Validation: %d/%d excluded (%.0f%%), %d active",
-                     validation['total_excluded'], validation['total_tickers'],
-                     exclusion_rate * 100, validation['total_active'])
-
-        if validation['total_active'] == 0:
-            logger.error("Validation failed: no active tickers remain")
+        if not _run_validation(conn_staging, exchange, manifest):
             conn_staging.close()
-            manifest['status'] = 'validation_failed'
-            manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-            write_manifest(manifest_path, manifest)
-            return manifest
+            return _write_and_return()
 
     conn_staging.close()
 
     if stage_only:
         logger.info("Stage-only mode: staging DB at %s", staging_db_path)
         manifest['status'] = 'staged'
-        manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-        write_manifest(manifest_path, manifest)
-        return manifest
+        return _write_and_return()
 
-    # ── Promote to production ──────────────────────────────────────────────
-    conn_prod = db.get_connection(prod_db_path)
-
-    # Backup production DB first
-    backup_path = None
-    if not no_backup and os.path.exists(prod_db_path):
-        backup_path = f"{prod_db_path}.backup_{run_id}"
-        backup_database(conn_prod, backup_path)
-        manifest['backup_path'] = backup_path
-
+    # ── Promote to production ─────────────────────────────────────────────
     try:
-        promoted = promote_staging(staging_db_path, conn_prod, exchange=exchange)
-        manifest['promoted_tickers'] = promoted
-        manifest['status'] = 'promoted'
-        logger.info("Promotion successful: %d tickers", promoted)
-    except Exception as e:
-        logger.error("Promotion failed: %s", e)
-        manifest['status'] = 'promotion_failed'
-        manifest['promotion_error'] = str(e)
-        if backup_path:
-            logger.info("Backup available at %s for rollback", backup_path)
-        conn_prod.close()
-        manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-        write_manifest(manifest_path, manifest)
-        raise
+        _promote_and_cleanup(staging_db_path, prod_db_path, exchange, run_id,
+                             manifest, no_backup, keep_staging,
+                             checkpoint_path)
+    except Exception:
+        return _write_and_return()
 
-    conn_prod.close()
-
-    # ── Cleanup ────────────────────────────────────────────────────────────
-    if not keep_staging and os.path.exists(staging_db_path):
-        os.remove(staging_db_path)
-        # Remove WAL/SHM files for staging DB
-        for suffix in ('-wal', '-shm'):
-            p = staging_db_path + suffix
-            if os.path.exists(p):
-                os.remove(p)
-        logger.info("Staging DB removed: %s", staging_db_path)
-
-    # Remove checkpoint on successful completion
-    if os.path.exists(checkpoint_path):
-        os.remove(checkpoint_path)
-
-    # ── Manifest ───────────────────────────────────────────────────────────
+    # ── Final manifest ────────────────────────────────────────────────────
     manifest['duration_seconds'] = round(time.time() - t_start, 1)
-
     disk_after = shutil.disk_usage(data_dir)
     manifest['disk_free_gb_after'] = round(disk_after.free / (1024**3), 2)
-
-    manifest_path = os.path.join(data_dir, f'manifest_{run_id}.json')
-    write_manifest(manifest_path, manifest)
-    return manifest
+    return _write_and_return()

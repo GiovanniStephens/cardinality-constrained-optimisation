@@ -17,7 +17,7 @@ dependencies = [
     "pmdarima>=2.0,<3",
     "pulp>=2.7,<3",
     "pygad>=3.0,<4",
-    "scikit-learn",
+    "scikit-learn>=1.0,<2",
     "scikit-posthocs>=0.7",
     "scipy>=1.7,<2",
     "seaborn>=0.11",

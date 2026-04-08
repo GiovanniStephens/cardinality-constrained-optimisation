@@ -7,18 +7,38 @@ for working with previously scraped lists.
 """
 
 import argparse
+import glob as _glob
 import logging
 import os
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
+from curl_cffi.requests import Session as CffiSession
 import financedatabase as fd
 import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+# Realistic browser User-Agent strings for rotation.  Yahoo fingerprints
+# by UA, so cycling across these makes batches look like distinct clients.
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
+]
+
+
+def _make_session():
+    """Create a curl_cffi Session with a random User-Agent header."""
+    session = CffiSession()
+    session.headers['User-Agent'] = random.choice(_USER_AGENTS)
+    return session
 
 # Maps FinanceDatabase asset type labels to DB-canonical names.
 # DB migration uses 'stock' for equities (see db._migrate_ticker_list).
@@ -208,11 +228,14 @@ def load_tickers(filename: str, ticker_column: str = 'Tickers') -> pd.DataFrame:
 # Price downloading
 # ---------------------------------------------------------------------------
 
-def _download_batch(tickers, start, end):
+def _download_batch(tickers, start, end, session=None):
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
     tickers_str = " ".join(tickers)
+    if session is None:
+        session = _make_session()
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
+        threads=2, timeout=30, session=session,
     )
     # Validate returned structure (P5)
     if prices is None or not isinstance(prices, pd.DataFrame) or prices.empty:
@@ -247,14 +270,48 @@ def _download_batch(tickers, start, end):
 
 def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
     """Wrap _download_batch with a timeout. Returns None on timeout."""
+    session = _make_session()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_download_batch, tickers, start, end)
+        future = executor.submit(_download_batch, tickers, start, end, session)
         try:
             return future.result(timeout=timeout_seconds)
         except FuturesTimeout:
             logger.warning("Batch download timed out after %ds (%d tickers)",
                            timeout_seconds, len(tickers))
             return None
+
+
+def _retry_with_splitting(tickers, start, end, timeout_seconds,
+                          min_batch_size, inter_batch_delay):
+    """Split a failed batch into halves and retry. Returns (df_or_None, failed_tickers)."""
+    # Try the full list with 2 quick retries
+    for attempt in range(1, 3):
+        df = _download_batch_with_timeout(tickers, start, end, timeout_seconds)
+        if df is not None and not df.empty:
+            return df, []
+        if attempt < 2:
+            time.sleep(inter_batch_delay)
+
+    # Can't split further — return as failed
+    if len(tickers) <= min_batch_size:
+        return None, list(tickers)
+
+    # Split in half and recurse
+    mid = len(tickers) // 2
+    left, right = tickers[:mid], tickers[mid:]
+
+    time.sleep(inter_batch_delay)
+    df_left, failed_left = _retry_with_splitting(
+        left, start, end, timeout_seconds, min_batch_size, inter_batch_delay)
+
+    time.sleep(inter_batch_delay)
+    df_right, failed_right = _retry_with_splitting(
+        right, start, end, timeout_seconds, min_batch_size, inter_batch_delay)
+
+    # Combine successful results
+    parts = [d for d in (df_left, df_right) if d is not None and not d.empty]
+    combined = pd.concat(parts, axis=1) if parts else None
+    return combined, failed_left + failed_right
 
 
 def download_data(
@@ -315,6 +372,7 @@ def download_and_save(
     on_batch_complete=None, on_batch_failed=None,
     rate_limit_delay=0.0, batch_timeout=None,
     circuit_breaker_threshold=None, max_rate_limit_delay=None,
+    circuit_breaker_max_trips=None, circuit_breaker_cooldown=None,
 ):
     """
     Download prices in batches and persist each batch to the database immediately.
@@ -339,10 +397,12 @@ def download_and_save(
         called when a batch exhausts all retries.
     :param rate_limit_delay: seconds to sleep between batches (default: 0).
     :param batch_timeout: seconds before a single batch download times out.
-    :param circuit_breaker_threshold: consecutive failed batches before aborting.
+    :param circuit_breaker_threshold: consecutive failed batches before tripping.
     :param max_rate_limit_delay: maximum adaptive inter-batch delay (seconds).
+    :param circuit_breaker_max_trips: hard abort after this many trips.
+    :param circuit_breaker_cooldown: seconds to pause on trip before retrying.
     :returns: dict with keys total_tickers, saved_tickers, failed_batches,
-        and circuit_breaker_tripped (bool).
+        circuit_breaker_tripped (bool), and circuit_breaker_trip_count (int).
     """
     from src import db, config
 
@@ -353,6 +413,10 @@ def download_and_save(
         circuit_breaker_threshold = config.PIPELINE_CIRCUIT_BREAKER_THRESHOLD
     if max_rate_limit_delay is None:
         max_rate_limit_delay = config.PIPELINE_MAX_RATE_LIMIT_DELAY
+    if circuit_breaker_max_trips is None:
+        circuit_breaker_max_trips = config.PIPELINE_CIRCUIT_BREAKER_MAX_TRIPS
+    if circuit_breaker_cooldown is None:
+        circuit_breaker_cooldown = config.PIPELINE_CIRCUIT_BREAKER_COOLDOWN
 
     # Deduplicate ticker list (P6)
     seen = set()
@@ -373,6 +437,7 @@ def download_and_save(
     failed_batches = []
     consecutive_failures = 0
     circuit_breaker_tripped = False
+    circuit_breaker_trip_count = 0
     current_delay = rate_limit_delay
     t_start = time.time()
 
@@ -421,23 +486,66 @@ def download_and_save(
                         time.sleep(2 ** attempt)
 
         if batch_df is None or batch_df.empty:
-            logger.warning("Batch %d: no data returned, skipping.", batch_num)
-            failed_batches.append({'batch_num': batch_num, 'tickers': list(batch)})
-            consecutive_failures += 1
-            if on_batch_failed:
-                on_batch_failed(list(batch), batch_num)
-            if pbar:
-                pbar.update(1)
+            # Try sub-batch splitting before giving up
+            min_sub = config.PIPELINE_MIN_SUB_BATCH_SIZE
+            if len(batch) > min_sub:
+                logger.info("Batch %d: full batch failed, attempting sub-batch "
+                            "splitting (min=%d)...", batch_num, min_sub)
+                split_df, still_failed = _retry_with_splitting(
+                    list(batch), start, end, batch_timeout,
+                    min_sub, current_delay)
+                if split_df is not None and not split_df.empty:
+                    batch_df = split_df
+                    if still_failed:
+                        failed_batches.append({
+                            'batch_num': batch_num,
+                            'tickers': still_failed,
+                        })
+                        if on_batch_failed:
+                            on_batch_failed(still_failed, batch_num)
+                        logger.info("Batch %d: recovered %d tickers, "
+                                    "%d still failed after splitting",
+                                    batch_num, len(split_df.columns),
+                                    len(still_failed))
+                    # Fall through to the save path below
+                else:
+                    batch_df = None  # splitting recovered nothing
 
-            # Circuit breaker (P1)
-            if consecutive_failures >= circuit_breaker_threshold:
-                logger.error(
-                    "Circuit breaker tripped: %d consecutive batch failures. "
-                    "Aborting download. Use --resume to retry later.",
-                    consecutive_failures)
-                circuit_breaker_tripped = True
-                break
-            continue
+            if batch_df is None or batch_df.empty:
+                logger.warning("Batch %d: no data returned, skipping.",
+                               batch_num)
+                failed_batches.append({
+                    'batch_num': batch_num, 'tickers': list(batch),
+                })
+                consecutive_failures += 1
+                if on_batch_failed:
+                    on_batch_failed(list(batch), batch_num)
+                if pbar:
+                    pbar.update(1)
+
+                # Circuit breaker with cooldown-then-retry
+                if consecutive_failures >= circuit_breaker_threshold:
+                    circuit_breaker_trip_count += 1
+                    if circuit_breaker_trip_count >= circuit_breaker_max_trips:
+                        logger.error(
+                            "Circuit breaker tripped %d times (max %d). "
+                            "Aborting download. Use --resume to retry later.",
+                            circuit_breaker_trip_count,
+                            circuit_breaker_max_trips)
+                        circuit_breaker_tripped = True
+                        break
+                    else:
+                        logger.warning(
+                            "Circuit breaker trip %d/%d: %d consecutive "
+                            "failures. Cooling down %.0fs before retry...",
+                            circuit_breaker_trip_count,
+                            circuit_breaker_max_trips,
+                            consecutive_failures,
+                            circuit_breaker_cooldown)
+                        time.sleep(circuit_breaker_cooldown)
+                        consecutive_failures = 0
+                        current_delay = max_rate_limit_delay
+                continue
 
         # Reset circuit breaker on success
         consecutive_failures = 0
@@ -493,7 +601,8 @@ def download_and_save(
             on_batch_complete(saved_tickers_list, batch_num)
 
         if current_delay > 0 and batch_num < len(batches):
-            time.sleep(current_delay)
+            jittered = current_delay * random.uniform(0.8, 1.2)
+            time.sleep(jittered)
 
     if pbar:
         pbar.close()
@@ -510,6 +619,7 @@ def download_and_save(
         'saved_tickers': total_saved,
         'failed_batches': failed_batches,
         'circuit_breaker_tripped': circuit_breaker_tripped,
+        'circuit_breaker_trip_count': circuit_breaker_trip_count,
     }
 
 
@@ -626,6 +736,10 @@ def main():
                              'downloading.')
     parser.add_argument('--skip-validation', action='store_true',
                         help='Skip data quality checks after download.')
+    parser.add_argument('--retry-dropped', action='store_true',
+                        help='Retry tickers from the most recent '
+                             'data/dropped_*.csv files instead of building '
+                             'a new universe.')
     args = parser.parse_args()
 
     from src import db, config
@@ -690,7 +804,53 @@ def main():
 
     # ── Build ticker list ──────────────────────────────────────────────────
 
-    if args.from_csv:
+    if args.retry_dropped:
+        # Find the most recent dropped_*.csv files in data/
+        data_dir = os.path.dirname(db.DB_PATH)
+        dropped_files = sorted(
+            _glob.glob(os.path.join(data_dir, 'dropped_*.csv')),
+            key=os.path.getmtime, reverse=True,
+        )
+        if not dropped_files:
+            logger.error("No dropped_*.csv files found in %s", data_dir)
+            return
+
+        # Group by asset type: dropped_etf_* -> etf, dropped_stock_* -> stock
+        seen_types = set()
+        frames = []
+        for path in dropped_files:
+            basename = os.path.basename(path)
+            # Extract asset type from filename: dropped_{type}_{id}.csv
+            parts = basename.replace('.csv', '').split('_')
+            if len(parts) >= 2:
+                at = parts[1]  # 'etf' or 'stock'
+            else:
+                at = 'etf'
+            # Only use the most recent file per asset type
+            if at in seen_types:
+                continue
+            seen_types.add(at)
+            df = pd.read_csv(path)
+            if 'Tickers' not in df.columns:
+                logger.warning("Skipping %s: no 'Tickers' column", path)
+                continue
+            # Map back to FinanceDatabase asset type labels for AssetType column
+            fd_type = 'equity' if at == 'stock' else at
+            df['AssetType'] = fd_type
+            df['Name'] = ''
+            df['Country'] = ''
+            frames.append(df)
+            logger.info("Loaded %d dropped tickers from %s (type=%s)",
+                        len(df), path, at)
+
+        if not frames:
+            logger.error("No valid dropped ticker files found")
+            return
+        tickers_df = pd.concat(frames, ignore_index=True)
+        logger.info("Retrying %d dropped tickers across %d asset types",
+                     len(tickers_df), len(seen_types))
+
+    elif args.from_csv:
         logger.info("Loading tickers from %s", args.from_csv)
         tickers_df = load_tickers(args.from_csv, args.ticker_column)
     else:
@@ -788,7 +948,8 @@ def main():
 
     if 'AssetType' in tickers_df.columns:
         all_manifests = []
-        for fd_type, group in tickers_df.groupby('AssetType'):
+        groups = list(tickers_df.groupby('AssetType'))
+        for idx, (fd_type, group) in enumerate(groups):
             db_type = ASSET_TYPE_MAP.get(fd_type, fd_type)
             ticker_list = group[args.ticker_column].tolist()
             names = None
@@ -813,6 +974,13 @@ def main():
                 rate_limit_delay=args.rate_limit,
             )
             all_manifests.append((db_type, manifest))
+
+            # Cooldown between asset type pipelines to avoid rate limiting
+            if idx < len(groups) - 1:
+                cooldown = config.PIPELINE_INTER_TYPE_COOLDOWN
+                logger.info("Cooling down %.0fs before next asset type...",
+                            cooldown)
+                time.sleep(cooldown)
 
         for db_type, manifest in all_manifests:
             dl = manifest.get('download_result', {})
