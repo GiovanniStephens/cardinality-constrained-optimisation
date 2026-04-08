@@ -8,16 +8,16 @@ Select N ETFs from a universe of 1700+ to maximise the Sharpe Ratio, subject to 
 pip install -r requirements.txt
 
 # 1. Download ETF price data from Yahoo Finance
-python download_data.py
+python -m src.download_data
 
 # 2. (Optional) Forecast returns and variances
-python forecast.py
+python -m src.forecast
 
 # 3. Run the optimisation
 python -m src.optimisers.pygad_ga
 
 # 4. Run the backtest to validate performance
-python backtest.py
+python -m src.backtest
 ```
 
 ## Project Structure
@@ -33,18 +33,27 @@ python backtest.py
 │   ├── backtest.py              # Out-of-sample backtesting framework
 │   ├── forecast.py              # ARIMA return + GARCH variance forecasts
 │   ├── download_data.py         # Fetches prices from Yahoo Finance
-│   └── portfolio_utils.py       # Shared analytics + OptimisationResult
+│   ├── portfolio_utils.py       # Shared analytics + OptimisationResult
+│   ├── config.py                # Centralised algorithm/pipeline/universe configuration
+│   ├── db.py                    # SQLite database module
+│   ├── pipeline.py              # Orchestrates download, quality checks, forecasting
+│   ├── data_quality.py          # Data validation and bad-ticker flagging
+│   └── logging_config.py        # Centralised logging setup
 ├── cpp/
 │   └── optimisation.cpp         # C++ parallel island GA
-├── tests/                       # Unit tests
+├── benchmark/                   # Benchmarking framework
+│   ├── adapters.py              # Adapter wrappers for all optimisation methods
+│   ├── runner.py                # Orchestrates parallel benchmark runs
+│   ├── analysis.py              # Result analysis and reporting
+│   └── results.py               # Data structures for benchmark results
+├── tests/                       # Unit and integration tests
 │
 └── data/
-    ├── ETF_Prices.csv           # Main dataset: ~756 days x ~1792 ETFs (102 MB)
+    ├── portfolio.db             # SQLite database (gitignored)
+    ├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs (98 MB)
     ├── NZ_ETF_Prices.csv        # NZ ETF prices (smaller dataset)
-    ├── leveraged_ETF_Prices.csv # 2x/3x leveraged ETFs
-    ├── expected_returns.csv     # Output from forecast.py (ARIMA)
-    ├── variances.csv            # Output from forecast.py (GARCH)
-    ├── ETFs_Full.csv            # Master list of ETF tickers for download
+    ├── expected_returns.csv     # Output from forecast (ARIMA)
+    ├── variances.csv            # Output from forecast (GARCH)
     └── ...
 ```
 
@@ -64,22 +73,22 @@ Given the selected ETFs, `scipy.optimize.minimize` finds weights that maximise t
 ### Data Pipeline
 
 ```
-download_data.py          forecast.py              optimisers/pygad_ga.py
+src.download_data         src.forecast             src.optimisers.pygad_ga
 Yahoo Finance  ──>  ETF_Prices.csv  ──>  expected_returns.csv  ──>  Portfolio
                                     ──>  variances.csv              selection
                                          (optional)                 + weights
 ```
 
-1. **`download_data.py`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025). Filters ETFs with <90% data availability.
+1. **`src.download_data`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025). Filters ETFs with <90% data availability.
 
-2. **`forecast.py`** -- Generates forward-looking inputs:
+2. **`src.forecast`** -- Generates forward-looking inputs:
    - **Returns**: Auto-ARIMA per ETF, projects price 252 days out, computes log return.
    - **Variances**: GARCH(1,1) with skew-t innovations, annualised.
    - Outputs saved to `data/expected_returns.csv` and `data/variances.csv`.
 
-3. **`optimisers/pygad_ga.py`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
+3. **`src.optimisers.pygad_ga`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
 
-4. **`backtest.py`** -- Validates the approach out-of-sample (see Backtest section below).
+4. **`src.backtest`** -- Validates the approach out-of-sample (see Backtest section below).
 
 ## Key Configuration
 
@@ -87,20 +96,19 @@ These parameters in `src/config.py` control the optimisation behaviour:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `MAX_NUM_STOCKS` | 15 | Maximum ETFs in portfolio |
-| `MIN_NUM_STOCKS` | 3 | Minimum ETFs in portfolio |
-| `TARGET_RETURN` | 0.15 | Minimum annualised return constraint (or `None`) |
-| `TARGET_RISK` | None | Maximum annualised volatility constraint (or `None`) |
-| `MAX_WEIGHT` | 0.45 | Maximum allocation to any single ETF |
-| `MIN_WEIGHT` | 0.05 | Minimum allocation to any single ETF |
+| `GA_MAX_SECURITIES` | 15 | Maximum ETFs in portfolio |
+| `GA_MIN_SECURITIES` | 3 | Minimum ETFs in portfolio |
+| `GA_TARGET_RETURN` | 0.15 | Minimum annualised return constraint |
+| `GA_MAX_WEIGHT` | 0.45 | Maximum allocation to any single ETF |
+| `GA_MIN_WEIGHT` | 0.05 | Minimum allocation to any single ETF |
 
-Backtest configuration in `backtest.py`:
+Backtest configuration (also in `src/config.py`):
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `NUM_PORTFOLIOS` | 20 | Number of portfolios to generate per group |
-| `NUM_CHILDREN` | 100 | GA population size |
-| `NUM_DAYS_OUT_OF_SAMPLE` | 252 | Out-of-sample period (~1 trading year) |
+| `BACKTEST_NUM_PORTFOLIOS` | 20 | Number of portfolios to generate per group |
+| `BACKTEST_NUM_CHILDREN` | 100 | GA population size |
+| `BACKTEST_NUM_DAYS_OOS` | 252 | Out-of-sample period (~1 trading year) |
 
 ## Why Cardinality-Constrained?
 
@@ -221,17 +229,20 @@ Tests cover data loading, return calculations, Sharpe Ratio computation, weight 
 ```
 arch            # GARCH volatility models
 copulae         # Copula-based correlation estimation
+financedatabase # Instrument universe sourcing
 matplotlib      # Plotting
 muarch          # Multivariate ARCH models
 numpy           # Numerical computing
 pandas          # Data manipulation
 pmdarima        # Auto-ARIMA forecasting
+pulp            # Mixed integer linear programming
 pygad           # Genetic algorithm framework
+scikit-learn    # Ledoit-Wolf covariance shrinkage
+scikit-posthocs # Post-hoc statistical tests
 scipy           # Optimisation (SLSQP) and statistics
 seaborn         # Statistical visualisation
 tqdm            # Progress bars
 yfinance        # Yahoo Finance data download
-beautifulsoup4  # Web scraping (yfinance dependency)
 ```
 
 ## Todo
@@ -239,8 +250,8 @@ beautifulsoup4  # Web scraping (yfinance dependency)
 - [x] Add risk parity portfolios
 - [x] Maximum drawdown, Calmar ratio, Sortino ratio
 - [x] Test optimisation against portfoliovisualizer.com
+- [x] Download full stock + ETF universe (~25k tickers from FinanceDatabase)
+- [x] Data quality validation (`src/data_quality.py`)
 - [ ] Portfolio beta and alpha (requires benchmark specification)
 - [ ] Verify weights match an independent optimisation engine
-- [ ] Refactor and expand test coverage
-- [ ] Download full stock + ETF universe (~25k tickers from FinanceDatabase) and run data quality validation
 - [ ] Run optimisation on the combined stocks + ETFs universe

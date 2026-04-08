@@ -6,7 +6,7 @@ Solves the cardinality-constrained portfolio selection problem: find an optimal 
 
 ## Tech Stack
 
-- **Python 3.7+** — primary language
+- **Python 3.10+** — primary language
 - **C++** — high-performance parallel GA (`cpp/optimisation.cpp`, compiled to `cpp/optimisation` binary)
 - **Key Python libs**: numpy, pandas, scipy, pygad, arch, copulae, pmdarima, yfinance, matplotlib, pulp
 - **C++ deps** (header-only submodules): Eigen (linear algebra), csv-parser
@@ -26,18 +26,28 @@ src/                         # Python source package
 ├── backtest.py              # Forward-walk backtesting with Sharpe/Sortino/Calmar/drawdown stats
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
 ├── db.py                    # SQLite database module (schema, save/load functions, CSV migration)
-├── portfolio_utils.py       # Shared utility functions + OptimisationResult
-├── config.py                # Centralised algorithm/pipeline configuration
+├── portfolio_utils.py       # Shared utilities: data loading, covariance, metrics, weight optimisation, DB persistence
+├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── download_data.py         # Yahoo Finance data downloader
-├── list_of_stocks.py        # ETF/stock universe definitions
-└── prices_EDA.py            # Exploratory data analysis / visualisation
-tests/                       # Unit tests
+├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
+├── data_quality.py          # Data validation and bad-ticker flagging
+└── logging_config.py        # Centralised logging setup
+tests/                       # Unit and integration tests
 ├── __init__.py
-├── test_optimisation.py     # Tests for optimisation module
+├── helpers.py               # Shared test utilities + base classes (BaseDBTest, BaseTmpDirTest, OptimiserTestMixin)
+├── test_optimisers.py       # Tests for optimisation algorithms
 ├── test_backtest.py         # Tests for backtest module
 ├── test_db.py               # Tests for database module
 ├── test_portfolio_utils.py  # Tests for portfolio utilities
-└── test_securities.py       # Tests for security universe/download
+├── test_securities.py       # Tests for security universe/download
+├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
+├── test_data_quality.py     # Tests for data validation
+├── test_pipeline.py         # Tests for pipeline orchestration
+├── test_cpp_equivalence.py  # Tests for C++/Python parity
+├── test_backtest_integration.py     # Integration tests for backtesting
+├── test_benchmark_integration.py    # Integration tests for benchmarks
+├── test_forecast_integration.py     # Integration tests for forecasting
+└── test_pipeline_integration.py     # Integration tests for pipeline
 cpp/                         # C++ parallel island GA implementation
 ├── optimisation.cpp         # Source code
 └── optimisation             # Compiled binary
@@ -240,7 +250,7 @@ Note: Geographic exposure is tracked via the `country` column on `tickers`, not 
 
 ### Universe Scope
 
-All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/universe_config.py`.
+All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/config.py`.
 
 - **Equities**: ~22k across 27 countries (US, Canada, UK, Japan, Australia, Germany, France, Switzerland, Netherlands, Sweden, Norway, Denmark, Finland, Ireland, Belgium, Austria, Singapore, Hong Kong, Israel, New Zealand, Brazil, Mexico, India, South Korea, Taiwan, South Africa, Thailand). Foreign companies are available as US-listed ADRs.
 - **ETFs**: ~2,900 covering equities, bonds/treasuries, commodities, REITs, crypto, managed futures/CTA
