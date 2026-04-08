@@ -12,11 +12,10 @@ from scipy.stats import friedmanchisquare, ttest_rel
 from tqdm import tqdm
 
 from src.portfolio_utils import (
-    load_data,
     calculate_log_returns,
     calculate_expected_returns,
     calculate_covariance_matrix,
-    negative_sharpe_ratio,
+    optimise_weights,
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
@@ -34,8 +33,6 @@ from src.config import (
     BACKTEST_FORECAST_WINDOWS,
     BACKTEST_MAX_WEIGHT_FLOOR,
     TRADING_DAYS_PER_YEAR,
-    DATA_MIN_COVERAGE,
-    DATA_FFILL_LIMIT,
     GA_MIN_SECURITIES,
     GA_MAX_SECURITIES,
     GA_MIN_WEIGHT,
@@ -185,25 +182,23 @@ def optimal_weights(portfolio, use_copulae=False):
     missing = set(portfolio) - set(_backtest_log_returns.index)
     if missing:
         raise KeyError(f"Tickers not found in data: {missing}")
-    random_weights = get_random_weights(portfolio)
     subset = _backtest_log_returns.loc[portfolio, :].transpose()
     er = _backtest_expected_returns.loc[subset.columns].values
     max_weight = max(1 / (len(portfolio) - 1), BACKTEST_MAX_WEIGHT_FLOOR)
 
     if use_copulae:
-        from src.optimisers.pygad_ga import estimate_corr_using_copulas
+        from src.portfolio_utils import estimate_corr_using_copulas
         corr = estimate_corr_using_copulas(subset)
         D = np.diag(subset.std().values * np.sqrt(TRADING_DAYS_PER_YEAR))
-        cov_matrix = np.matmul(np.matmul(D, corr), D)
+        cov = np.matmul(np.matmul(D, corr), D)
     else:
-        cov_matrix = calculate_covariance_matrix(subset).values
+        cov = calculate_covariance_matrix(subset).values
 
-    cons = [{'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}]
-    from scipy.optimize import minimize
-    bounds = tuple((0.0, max_weight) for _ in range(len(portfolio)))
-    result = minimize(negative_sharpe_ratio, random_weights,
-                      args=(er, cov_matrix), method='SLSQP',
-                      bounds=bounds, constraints=cons)
+    result = optimise_weights(
+        expected_returns=er, cov_matrix=cov,
+        max_weight=max_weight,
+        initial_weights=get_random_weights(portfolio),
+    )
     if not result.success:
         logger.warning("Weight optimization did not converge: %s", result.message)
     return result['x']
@@ -437,6 +432,193 @@ def aggregate_cross_window(all_results):
 # ─── Per-Window Evaluation ────────────────────────────────────────────────────
 
 
+def slice_window_data(window, full_prices):
+    """Slice full prices into train/test sets and compute OOS log returns.
+
+    :param window: WindowSpec defining train/test boundaries.
+    :param full_prices: complete price DataFrame.
+    :return: (train_prices, oos_log_returns) tuple.
+    """
+    train_prices = full_prices.loc[window.train_start:window.train_end]
+    test_prices = full_prices.loc[window.test_start:window.test_end]
+    assert train_prices.index.max() < test_prices.index.min(), (
+        f"Window {window.label}: train data ends at {train_prices.index.max()} "
+        f"but test data starts at {test_prices.index.min()}. "
+        f"This would leak test-period data into training."
+    )
+    boundary_price = train_prices.iloc[[-1]]
+    test_with_boundary = pd.concat([boundary_price, test_prices])
+    oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
+    logger.info(
+        "  Window %s: train=%d rows, test=%d rows, %d tickers",
+        window.label, len(train_prices), len(test_prices),
+        train_prices.shape[1],
+    )
+    return train_prices, oos_log_returns
+
+
+def create_random_portfolios(columns, num_portfolios, min_securities,
+                             max_securities):
+    """Create random portfolios by selecting random subsets of tickers.
+
+    :param columns: Index or list of available ticker names.
+    :param num_portfolios: number of portfolios to create.
+    :param min_securities: minimum number of securities per portfolio.
+    :param max_securities: maximum number of securities per portfolio.
+    :return: list of portfolios (each a list of ticker strings).
+    """
+    return [
+        list(_random_selection(len(columns), min_securities, max_securities,
+                               columns))
+        for _ in range(num_portfolios)
+    ]
+
+
+def evaluate_portfolios(portfolios, weights_list, oos_log_returns,
+                        train_log_returns, category):
+    """Evaluate portfolios OOS and return a MethodResults object.
+
+    :param portfolios: list of portfolios (each a list of ticker strings).
+    :param weights_list: list of weight arrays.
+    :param oos_log_returns: OOS log returns DataFrame.
+    :param train_log_returns: training log returns for IS diagnostic.
+    :param category: category name string.
+    :return: MethodResults object with all portfolio results.
+    """
+    prs = _evaluate_oos(portfolios, weights_list, oos_log_returns,
+                        train_log_returns)
+    return MethodResults(category=category, portfolios=prs)
+
+
+def _create_ga_portfolios(train_prices, num_portfolios, num_children,
+                           use_forecast):
+    """Create portfolios via GA using a worker pool.
+
+    :param train_prices: training price DataFrame.
+    :param num_portfolios: number of portfolios to create.
+    :param num_children: GA population size.
+    :param use_forecast: whether to use forecast-based GA.
+    :return: list of portfolios (each a list of ticker strings).
+    """
+    label = "forecast" if use_forecast else "no forecast"
+    logger.info("  Creating %d GA portfolios (%s)...", num_portfolios, label)
+    start = time.time()
+    with mp.Pool(
+        processes=NUM_JOBS,
+        initializer=_init_worker,
+        initargs=(train_prices, use_forecast),
+    ) as pool:
+        portfolios = pool.map(create_portfolio, [num_children] * num_portfolios)
+    logger.info("  GA (%s) done in %.1fs", label, time.time() - start)
+    return portfolios
+
+
+def _create_mc_portfolios(train_prices, num_portfolios, mc_trials):
+    """Create portfolios via Monte Carlo search.
+
+    :param train_prices: training price DataFrame.
+    :param num_portfolios: number of portfolios to create.
+    :param mc_trials: Monte Carlo trials per portfolio.
+    :return: list of portfolios (each a list of ticker strings).
+    """
+    from src.optimisers import monte_carlo as mc
+
+    logger.info("  Creating %d MC portfolios (%d trials)...",
+                num_portfolios, mc_trials)
+    start = time.time()
+    portfolios = []
+    for _ in tqdm(range(num_portfolios), desc="  MC portfolios", leave=False):
+        solution, _ = mc.monte_carlo_search(
+            train_prices, mc_trials,
+            min_num_etfs=GA_MIN_SECURITIES,
+            max_num_etfs=GA_MAX_SECURITIES,
+        )
+        if solution is not None:
+            portfolios.append(list(train_prices.columns[solution == 1]))
+        else:
+            portfolios.append(list(_random_selection(
+                train_prices.shape[1], GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+                train_prices.columns)))
+    logger.info("  MC done in %.1fs", time.time() - start)
+    return portfolios
+
+
+def _optimise_all_weights(categories, log_returns_T, expected_returns):
+    """Compute weights for all (portfolio, mode) pairs in parallel.
+
+    :param categories: list of (cat_name, portfolios, mode) tuples.
+    :param log_returns_T: transposed training log returns (tickers x dates).
+    :param expected_returns: Series of annualised expected returns.
+    :return: dict mapping cat_name -> list of weight arrays.
+    """
+    weight_tasks = []
+    task_metadata = []
+    for cat_name, portfolios, mode in categories:
+        for i, p in enumerate(portfolios):
+            weight_tasks.append((p, mode))
+            task_metadata.append((cat_name, i))
+
+    with mp.Pool(
+        processes=NUM_JOBS,
+        initializer=_init_weight_worker,
+        initargs=(log_returns_T, expected_returns),
+    ) as pool:
+        all_weights = pool.map(_compute_weights_for_portfolio, weight_tasks)
+
+    category_weights = {cat_name: [] for cat_name, _, _ in categories}
+    for (cat_name, _idx), w in zip(task_metadata, all_weights):
+        category_weights[cat_name].append(w)
+    return category_weights
+
+
+def _evaluate_oos(portfolios, weights_list, oos_log_returns,
+                  train_log_returns):
+    """Evaluate portfolios out-of-sample and compute IS Sharpe diagnostic.
+
+    :param portfolios: list of portfolios (each a list of ticker strings).
+    :param weights_list: list of weight arrays (same order as portfolios).
+    :param oos_log_returns: OOS log returns DataFrame.
+    :param train_log_returns: training log returns for IS Sharpe computation.
+    :return: list of PortfolioResult objects.
+    """
+    results = []
+    for p, w in zip(portfolios, weights_list):
+        metrics = get_statistics(p, w, oos_log_returns)
+        try:
+            is_stats = get_statistics(p, w, train_log_returns)
+            is_sr = is_stats['sharpe_ratio']
+        except Exception:
+            is_sr = None
+        results.append(PortfolioResult(
+            portfolio=p, weights=w, metrics=metrics, is_sharpe=is_sr,
+        ))
+    return results
+
+
+def _log_window_summary(window, result):
+    """Log per-window IS vs OOS Sharpe comparison."""
+    logger.info("  Window %s results (%.1fs):",
+                window.label, result.elapsed_seconds)
+    for cat, mr in sorted(result.method_results.items()):
+        is_sharpes = [p.is_sharpe for p in mr.portfolios
+                      if p.is_sharpe is not None]
+        if is_sharpes:
+            mean_is = np.mean(is_sharpes)
+            mean_oos = mr.mean_sharpe
+            degradation = (((mean_is - mean_oos) / mean_is * 100)
+                           if mean_is > 0 else float('nan'))
+            logger.info(
+                "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  "
+                "degradation=%.0f%%",
+                cat, mean_is, mean_oos, degradation,
+            )
+            warn_if_sharpe_suspicious(
+                mean_is, f"Window {window.label} {cat} IS", logger)
+        else:
+            logger.info("    %-25s  OOS_sharpe=%.4f  std=%.4f",
+                         cat, mr.mean_sharpe, mr.sharpe_ratios.std())
+
+
 def evaluate_window(
     window: WindowSpec,
     full_prices: pd.DataFrame,
@@ -449,14 +631,9 @@ def evaluate_window(
     """
     Run the full backtest for a single rolling window.
 
-    Creates portfolios via GA, MC, and random selection, computes weights
-    (optimal, copula, random), and evaluates OOS performance.
-
-    OVERFITTING AWARENESS: The GA optimises on training data, producing
-    in-sample (IS) Sharpe ratios that are biased upward due to selection
-    bias. The OOS Sharpe ratios from the test period are the real measure
-    of portfolio quality. Typical IS -> OOS degradation is 30-50%.
-    See CLAUDE.md "Sharpe Ratio Overfitting" section.
+    Orchestrates portfolio creation (GA, MC, random), weight optimisation,
+    and OOS evaluation. See CLAUDE.md "Sharpe Ratio Overfitting" for
+    details on IS vs OOS Sharpe degradation.
 
     :param window: WindowSpec defining train/test boundaries.
     :param full_prices: complete price DataFrame (will be sliced).
@@ -467,121 +644,36 @@ def evaluate_window(
     :param use_forecast: whether to also run forecast-based GA.
     :return: WindowResult with all method results.
     """
-    from src.optimisers import monte_carlo as mc
-
     window_start = time.time()
     result = WindowResult(window=window)
 
     # ── Slice data ────────────────────────────────────────────────────────
-    train_prices = full_prices.loc[window.train_start:window.train_end]
-    test_prices = full_prices.loc[window.test_start:window.test_end]
-    # Runtime guard: training must end strictly before testing begins
-    assert train_prices.index.max() < test_prices.index.min(), (
-        f"Window {window.label}: train data ends at {train_prices.index.max()} "
-        f"but test data starts at {test_prices.index.min()}. "
-        f"This would leak test-period data into training."
-    )
-    # Prepend last training price so the first test-day log return is
-    # log(test_price[0] / train_price[-1]) rather than 0.
-    boundary_price = train_prices.iloc[[-1]]
-    test_with_boundary = pd.concat([boundary_price, test_prices])
-    oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
+    train_prices, oos_log_returns = slice_window_data(window, full_prices)
 
-    logger.info(
-        "  Window %s: train=%d rows, test=%d rows, %d tickers",
-        window.label, len(train_prices), len(test_prices),
-        train_prices.shape[1],
-    )
-
-    # ── Prepare optimisation state for weight optimisation ──────────────
+    # ── Prepare optimisation state for weight workers ─────────────────────
     global _backtest_log_returns, _backtest_expected_returns
     log_returns_train = calculate_log_returns(train_prices)
     _backtest_log_returns = log_returns_train.transpose()
-    _backtest_expected_returns = calculate_expected_returns(
-        log_returns_train)
+    _backtest_expected_returns = calculate_expected_returns(log_returns_train)
 
-    # ── Create GA portfolios (no forecast) ────────────────────────────────
-    logger.info("  Creating %d GA portfolios (no forecast)...", num_portfolios)
-    start = time.time()
-    with mp.Pool(
-        processes=NUM_JOBS,
-        initializer=_init_worker,
-        initargs=(train_prices, False),
-    ) as pool:
-        ga_portfolios = pool.map(create_portfolio, [num_children] * num_portfolios)
-    logger.info("  GA (no forecast) done in %.1fs", time.time() - start)
+    # ── Create portfolios ─────────────────────────────────────────────────
+    ga_portfolios = _create_ga_portfolios(
+        train_prices, num_portfolios, num_children, use_forecast=False)
+    forecast_portfolios = (
+        _create_ga_portfolios(
+            train_prices, num_portfolios, num_children, use_forecast=True)
+        if use_forecast else []
+    )
+    random_portfolios = [
+        list(_random_selection(train_prices.shape[1], GA_MIN_SECURITIES,
+                               GA_MAX_SECURITIES, train_prices.columns))
+        for _ in range(num_portfolios)
+    ]
+    mc_portfolios = _create_mc_portfolios(
+        train_prices, num_portfolios, mc_trials)
 
-    # ── Create GA portfolios (with forecast) if requested ─────────────────
-    forecast_portfolios = []
-    if use_forecast:
-        logger.info("  Creating %d GA portfolios (with forecast)...", num_portfolios)
-        start = time.time()
-        with mp.Pool(
-            processes=NUM_JOBS,
-            initializer=_init_worker,
-            initargs=(train_prices, True),
-        ) as pool:
-            forecast_portfolios = pool.map(
-                create_portfolio, [num_children] * num_portfolios
-            )
-        logger.info("  GA (forecast) done in %.1fs", time.time() - start)
-
-    # ── Create random portfolios ──────────────────────────────────────────
-    random_portfolios = []
-    for _ in range(num_portfolios):
-        random_portfolios.append(list(_random_selection(
-            train_prices.shape[1], GA_MIN_SECURITIES, GA_MAX_SECURITIES,
-            train_prices.columns)))
-
-    # ── Create MC portfolios ──────────────────────────────────────────────
-    logger.info("  Creating %d MC portfolios (%d trials)...", num_portfolios, mc_trials)
-    start = time.time()
-    mc_portfolios = []
-    for _ in tqdm(range(num_portfolios), desc="  MC portfolios", leave=False):
-        solution, _ = mc.monte_carlo_search(
-            train_prices, mc_trials,
-            min_num_etfs=GA_MIN_SECURITIES,
-            max_num_etfs=GA_MAX_SECURITIES,
-        )
-        if solution is not None:
-            mc_portfolios.append(list(train_prices.columns[solution == 1]))
-        else:
-            mc_portfolios.append(list(_random_selection(
-                train_prices.shape[1], GA_MIN_SECURITIES, GA_MAX_SECURITIES,
-                train_prices.columns)))
-    logger.info("  MC done in %.1fs", time.time() - start)
-
-    # ── Compute in-sample Sharpe for each portfolio (overfitting diagnostic) ──
-    train_log_returns = calculate_log_returns(train_prices)
-
-    def _compute_is_sharpe(portfolio, weights):
-        """In-sample Sharpe on training data — biased upward by construction."""
-        try:
-            is_stats = get_statistics(portfolio, weights, train_log_returns)
-            return is_stats['sharpe_ratio']
-        except Exception:
-            return None
-
-    # ── Helper: build PortfolioResults for a set of portfolios + weights ──
-    def _evaluate(portfolios, weights_list, category):
-        prs = []
-        for p, w in zip(portfolios, weights_list):
-            metrics = get_statistics(p, w, oos_log_returns)
-            is_sr = _compute_is_sharpe(p, w)
-            prs.append(PortfolioResult(
-                portfolio=p, weights=w, metrics=metrics, is_sharpe=is_sr,
-            ))
-        result.method_results[category] = MethodResults(
-            category=category, portfolios=prs,
-        )
-
-    # ── Compute weights in parallel ──────────────────────────────────────
+    # ── Optimise weights in parallel ──────────────────────────────────────
     logger.info("  Optimising weights and running OOS evaluation...")
-
-    # Build all (portfolio, mode) work items
-    weight_tasks = []
-    task_metadata = []  # (category_name, portfolio_index)
-
     categories = [
         ('cc_optimised',      ga_portfolios,     'optimal'),
         ('cc_copulae',        ga_portfolios,     'copulae'),
@@ -591,64 +683,30 @@ def evaluate_window(
         ('random_optimised',  random_portfolios, 'optimal'),
         ('random_random',     random_portfolios, 'random'),
     ]
+    cat_weights = _optimise_all_weights(
+        categories, _backtest_log_returns, _backtest_expected_returns)
 
-    for cat_name, portfolios, mode in categories:
-        for i, p in enumerate(portfolios):
-            weight_tasks.append((p, mode))
-            task_metadata.append((cat_name, i))
-
-    # Parallel weight computation (SLSQP releases GIL during Fortran calls)
-    with mp.Pool(
-        processes=NUM_JOBS,
-        initializer=_init_weight_worker,
-        initargs=(_backtest_log_returns, _backtest_expected_returns),
-    ) as pool:
-        all_weights = pool.map(_compute_weights_for_portfolio, weight_tasks)
-
-    # Reassemble results by category
-    category_weights = {}
-    category_portfolios = {}
-    for (cat_name, portfolios, mode), _ in zip(categories, range(len(categories))):
-        category_weights[cat_name] = []
-        category_portfolios[cat_name] = portfolios
-
-    for (cat_name, idx), w in zip(task_metadata, all_weights):
-        category_weights[cat_name].append(w)
-
-    for cat_name, portfolios, mode in categories:
-        _evaluate(category_portfolios[cat_name], category_weights[cat_name], cat_name)
+    # ── Evaluate OOS ──────────────────────────────────────────────────────
+    train_log_returns = calculate_log_returns(train_prices)
+    for cat_name, portfolios, _mode in categories:
+        prs = _evaluate_oos(
+            portfolios, cat_weights[cat_name],
+            oos_log_returns, train_log_returns)
+        result.method_results[cat_name] = MethodResults(
+            category=cat_name, portfolios=prs)
 
     if use_forecast and forecast_portfolios:
-        with mp.Pool(
-            processes=NUM_JOBS,
-            initializer=_init_weight_worker,
-            initargs=(_backtest_log_returns, _backtest_expected_returns),
-        ) as pool:
-            forecast_weights = pool.map(
-                _compute_weights_for_portfolio,
-                [(p, 'optimal') for p in forecast_portfolios],
-            )
-        _evaluate(forecast_portfolios, forecast_weights, 'cc_forecast')
+        fc_weights = _optimise_all_weights(
+            [('cc_forecast', forecast_portfolios, 'optimal')],
+            _backtest_log_returns, _backtest_expected_returns)
+        prs = _evaluate_oos(
+            forecast_portfolios, fc_weights['cc_forecast'],
+            oos_log_returns, train_log_returns)
+        result.method_results['cc_forecast'] = MethodResults(
+            category='cc_forecast', portfolios=prs)
 
     result.elapsed_seconds = time.time() - window_start
-
-    # Log per-window summary with IS vs OOS comparison
-    logger.info("  Window %s results (%.1fs):", window.label, result.elapsed_seconds)
-    for cat, mr in sorted(result.method_results.items()):
-        is_sharpes = [p.is_sharpe for p in mr.portfolios if p.is_sharpe is not None]
-        if is_sharpes:
-            mean_is = np.mean(is_sharpes)
-            mean_oos = mr.mean_sharpe
-            degradation = ((mean_is - mean_oos) / mean_is * 100) if mean_is > 0 else float('nan')
-            logger.info(
-                "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  degradation=%.0f%%",
-                cat, mean_is, mean_oos, degradation,
-            )
-            warn_if_sharpe_suspicious(mean_is, f"Window {window.label} {cat} IS", logger)
-        else:
-            logger.info("    %-25s  OOS_sharpe=%.4f  std=%.4f",
-                         cat, mr.mean_sharpe, mr.sharpe_ratios.std())
-
+    _log_window_summary(window, result)
     return result
 
 
@@ -657,21 +715,13 @@ def evaluate_window(
 
 def main():
     from src import db
+    from src.portfolio_utils import load_training_data
 
     bt_start = time.time()
 
-    # ── Load prices from DB (CSV fallback) ────────────────────────────────
     conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_data(NZ_ETF_PRICES_CSV)
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
-    logger.info("Loaded price data: %d rows x %d columns", *data.shape)
+    data = load_training_data(
+        exchange='US', csv_fallback=NZ_ETF_PRICES_CSV, lookback_days=None)
 
     # ── Generate rolling windows ──────────────────────────────────────────
     windows = generate_windows(data.index)

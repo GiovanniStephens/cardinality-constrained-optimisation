@@ -55,7 +55,7 @@ class SimpleGAAdapter(OptimiserAdapter):
         return_dict = manager.dict()
         convergence_log = manager.list()
         start_time = time.time()
-        mutation_rate = 1 / data.shape[1]
+        mutation_rate = max(1 / data.shape[1], 0.005)
         island_pop_size = self.total_population_size // num_islands
 
         def init_random_state():
@@ -130,7 +130,11 @@ class SimpleGAAdapter(OptimiserAdapter):
 
 
 class PygadGAAdapter(OptimiserAdapter):
-    """Wraps optimisation.py (pygad-based GA with copula support)."""
+    """Wraps PygadOptimiser (pygad-based GA with copula support).
+
+    Uses the class-based PygadOptimiser internally, adding time-budget
+    enforcement and convergence logging for benchmarking.
+    """
 
     name = "Pygad GA"
 
@@ -144,26 +148,31 @@ class PygadGAAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pygad
-        from src.optimisers import pygad_ga as opt_mod
+        from src.optimisers.pygad_ga import PygadOptimiser
 
         np.random.seed(seed)
         start_time = time.time()
 
-        # Prepare global state in optimisation module
-        opt_mod.prepare_opt_inputs(data, use_forecasts=False)
-        saved_max = opt_mod.MAX_NUM_STOCKS
-        saved_min = opt_mod.MIN_NUM_STOCKS
-        opt_mod.MAX_NUM_STOCKS = self.max_etfs
-        opt_mod.MIN_NUM_STOCKS = self.min_etfs
+        opt = PygadOptimiser(
+            num_children=self.population_size,
+            num_generations=self.num_generations,
+            min_securities=self.min_etfs,
+            max_securities=self.max_etfs,
+            use_forecasts=False,
+            seed=seed,
+        )
+        opt._prepare_inputs(data)
 
         convergence = []
         best_so_far = float('-inf')
 
-        # Wrap fitness to bail out early when time is up
+        # Wrap the class fitness function with time-budget enforcement
+        base_fitness_fn = opt._make_fitness_fn()
+
         def timed_fitness(ga_instance, solution, solution_idx):
             if (time.time() - start_time) > time_budget:
                 return -1e6
-            return opt_mod.fitness_2(ga_instance, solution, solution_idx)
+            return base_fitness_fn(ga_instance, solution, solution_idx)
 
         def on_gen_callback(ga_instance):
             nonlocal best_so_far
@@ -185,28 +194,26 @@ class PygadGAAdapter(OptimiserAdapter):
                 return "stop"
 
         try:
-            initial_pop = np.array([
-                opt_mod.create_individual(opt_mod.data)
-                for _ in range(self.population_size)
-            ])
+            initial_pop = np.array([opt._create_individual()
+                                    for _ in range(self.population_size)])
 
             ga_instance = pygad.GA(
                 num_generations=self.num_generations,
                 initial_population=initial_pop,
-                num_parents_mating=max(2, self.population_size // 10),
+                num_parents_mating=max(2, int(self.population_size * 0.30)),
                 gene_type=int,
-                init_range_low=0,
-                init_range_high=2,
-                parent_selection_type='rank',
+                init_range_low=0, init_range_high=2,
+                parent_selection_type='tournament',
+                K_tournament=5,
                 keep_parents=0,
-                random_mutation_min_val=-1,
-                random_mutation_max_val=1,
+                keep_elitism=max(1, int(self.population_size * 0.10)),
+                random_mutation_min_val=-1, random_mutation_max_val=1,
                 mutation_type="random",
-                crossover_type="single_point",
+                crossover_type="uniform",
                 crossover_probability=0.85,
                 fitness_func=timed_fitness,
                 on_generation=on_gen_callback,
-                stop_criteria='saturate_5',
+                stop_criteria='saturate_15',
             )
             ga_instance.run()
 
@@ -217,38 +224,29 @@ class PygadGAAdapter(OptimiserAdapter):
 
             # Extract selected ETFs
             indices = np.array(solution).astype(bool)
-            all_tickers = list(opt_mod.data.columns)
-            selected_etfs = [all_tickers[i] for i in range(len(indices)) if indices[i]]
+            selected_etfs = list(
+                opt._data.transpose().iloc[:, indices].columns)
 
             # Try SLSQP weight optimisation
             optimised_weights = None
             remaining = time_budget - (time.time() - start_time)
             if remaining > 1.0 and len(selected_etfs) >= 2:
                 try:
-                    subset = opt_mod.data.iloc[indices, :]
-                    random_weights = np.random.random(np.count_nonzero(solution))
+                    log_rets = opt._data.loc[selected_etfs, :]
+                    random_weights = np.random.random(len(selected_etfs))
                     random_weights /= np.sum(random_weights)
-                    sol = opt_mod.optimize(
-                        subset.transpose(),
-                        random_weights,
-                        target_return=opt_mod.TARGET_RETURN,
-                        target_risk=opt_mod.TARGET_RISK,
-                        max_weight=opt_mod.MAX_WEIGHT,
-                        min_weight=opt_mod.MIN_WEIGHT,
-                    )
+                    sol = opt._optimize_weights(
+                        log_rets.transpose(), random_weights)
                     if sol.success:
                         best_fitness = -sol.fun
                         optimised_weights = sol.x
                 except Exception:
                     pass
 
-        except Exception as e:
+        except Exception:
             best_fitness = float('-inf')
             selected_etfs = None
             optimised_weights = None
-        finally:
-            opt_mod.MAX_NUM_STOCKS = saved_max
-            opt_mod.MIN_NUM_STOCKS = saved_min
 
         elapsed = time.time() - start_time
         return BenchmarkResult(
