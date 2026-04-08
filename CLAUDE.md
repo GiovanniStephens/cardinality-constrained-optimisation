@@ -8,6 +8,7 @@ Solves the cardinality-constrained portfolio selection problem: find an optimal 
 
 - **Python 3.10+** — primary language
 - **C++** — high-performance parallel GA (`cpp/optimisation.cpp`, compiled to `cpp/optimisation` binary)
+- **Metal (GPU)** — Apple Silicon GPU-accelerated fitness evaluation via Metal compute shaders (`cpp/metal_fitness.mm`)
 - **Key Python libs**: numpy, pandas, scipy, pygad, arch, copulae, pmdarima, yfinance, matplotlib, pulp
 - **C++ deps** (header-only submodules): Eigen (linear algebra), csv-parser
 
@@ -23,10 +24,20 @@ src/                         # Python source package
 │   ├── island_ga.py         # Parallel island-based GA
 │   ├── monte_carlo.py       # Monte Carlo brute-force baseline
 │   └── mip.py               # Mixed Integer Linear Programming
-├── backtest.py              # Forward-walk backtesting with Sharpe/Sortino/Calmar/drawdown stats
+├── backtest.py              # Forward-walk backtesting orchestrator (portfolio creation, OOS eval)
+├── backtest_types.py        # Dataclasses: WindowSpec, PortfolioResult, MethodResults, WindowResult
+├── backtest_windows.py      # Window generation, data slicing, cross-window aggregation
+├── backtest_simulation.py   # Portfolio simulation: get_random_weights, run_portfolio, get_statistics
+├── backtest_statistics.py   # Hypothesis tests: difference_of_means, paired_t_test, friedman_test
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
-├── db.py                    # SQLite database module (schema, save/load functions, CSV migration)
-├── portfolio_utils.py       # Shared utilities: data loading, covariance, metrics, weight optimisation, DB persistence
+├── db.py                    # SQLite database module (schema, migrations, save/load functions)
+├── portfolio_utils.py       # OptimisationResult dataclass + save_optimisation_result DB helper
+├── returns.py               # Log returns, expected returns, variances
+├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance estimation
+├── metrics.py               # Sharpe, Sortino, Calmar, drawdown, overfitting detection
+├── weights.py               # SLSQP weight optimisation, risk-parity, portfolio variance
+├── data_loading.py          # DB-first / CSV-fallback price data loading
+├── binary_io.py             # Binary data format for C++ optimiser
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── download_data.py         # Yahoo Finance data downloader
 ├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
@@ -43,14 +54,17 @@ tests/                       # Unit and integration tests
 ├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
 ├── test_data_quality.py     # Tests for data validation
 ├── test_pipeline.py         # Tests for pipeline orchestration
-├── test_cpp_equivalence.py  # Tests for C++/Python parity
+├── test_cpp_equivalence.py  # Tests for C++/Python parity + Metal GPU equivalence
 ├── test_backtest_integration.py     # Integration tests for backtesting
 ├── test_benchmark_integration.py    # Integration tests for benchmarks
 ├── test_forecast_integration.py     # Integration tests for forecasting
 └── test_pipeline_integration.py     # Integration tests for pipeline
 cpp/                         # C++ parallel island GA implementation
-├── optimisation.cpp         # Source code
-└── optimisation             # Compiled binary
+├── CMakeLists.txt           # CMake build config (auto-detects Metal on macOS)
+├── optimisation.cpp         # GA/MC source — `--gpu` flag enables Metal path
+├── metal_fitness.h          # PIMPL header for GPU evaluator (pure C++, no ObjC)
+├── metal_fitness.mm         # ObjC++ Metal implementation (shader + host code)
+└── optimisation             # Compiled binary (gitignored, rebuild via cmake)
 benchmark/                   # Benchmarking framework package
 ├── __init__.py
 ├── adapters.py              # Adapter wrappers for all optimisation methods
@@ -64,7 +78,10 @@ data/                        # CSV price data, ETF lists, forecast outputs (~112
 images/                      # Visualisation outputs
 benchmark_results/           # Benchmark run outputs (JSON/PKL)
 run_benchmark.py             # CLI entry point for benchmarking
-requirements.txt
+run_throughput_benchmark.py  # CLI entry point for throughput benchmarking
+Makefile                     # Build automation (install, test, build-cpp, clean)
+pyproject.toml               # Project metadata, dependencies, console_scripts
+.github/workflows/test.yml   # CI: runs tests on push/PR
 CLAUDE.md
 README.md
 ```
@@ -72,8 +89,10 @@ README.md
 ## Common Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install (editable mode, includes all dependencies from pyproject.toml)
+pip install -e ".[dev]"
+# or
+make install
 
 # Run the main GA optimisation (InvestNow data)
 python -m src.optimisers.island_ga
@@ -81,13 +100,13 @@ python -m src.optimisers.island_ga
 # Run the full optimisation with copulas/forecasts
 python -m src.optimisers.pygad_ga
 
-# Run backtests
+# Run backtests (also available as: portfolio-backtest)
 python -m src.backtest
 
-# Generate ARIMA/GARCH forecasts
+# Generate ARIMA/GARCH forecasts (also: portfolio-forecast)
 python -m src.forecast
 
-# Download price data (ETFs + stocks)
+# Download price data (also: portfolio-download)
 python -m src.download_data --asset-types equities etfs
 python -m src.download_data --incremental   # only new dates
 
@@ -99,12 +118,42 @@ python -m src.data_quality --dry-run        # preview without writing
 python -m src.db                # Create empty database with schema
 python -m src.db migrate        # Import existing CSVs into database
 
-# Run benchmarks
+# Run benchmarks (also: portfolio-benchmark)
 python run_benchmark.py
+
+# Build C++ optimiser (requires CMake 3.14+, Eigen and csv-parser submodules)
+# On macOS with Metal, GPU support is auto-detected and compiled in.
+make build-cpp
+
+# Run C++ GA with Metal GPU acceleration (Apple Silicon only)
+./cpp/optimisation --binary --data data.bin --gpu --time-budget 10
 
 # Run tests
 python -m unittest discover tests
+# or
+make test
 ```
+
+## Metal GPU Acceleration
+
+The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silicon. The GPU evaluates entire populations in parallel while the CPU handles GA operators (selection, crossover, mutation).
+
+**Architecture**: each threadgroup evaluates one portfolio. 64 threads per group parallelize over the time dimension (T=1260 rows) with coalesced memory access. Thread 0 extracts selected ETF indices via bit-scan, all threads accumulate column values for their time slice, then a tree reduction combines partial squared norms for the Sharpe ratio.
+
+**Build**: CMake auto-detects Metal/Foundation frameworks on macOS. On other platforms the binary compiles without GPU support; `--gpu` prints a warning and falls back to CPU.
+
+**Correctness**: GPU uses FP32 during the GA search (sufficient for ranking — max 0.00002% Sharpe error vs FP64). After the GA completes, each island's best solution is re-evaluated with FP64 on CPU for precise final reporting. Tests in `tests/test_cpp_equivalence.py::TestMetalGpuEquivalence` verify GPU/CPU/Python parity.
+
+**Performance** (M4, M=1800, T=1260, n=15, pop=1000):
+
+| Config | Evals/sec |
+|--------|-----------|
+| CPU 1 island | 268K |
+| GPU 1 island | 1.2M (4.5x) |
+| CPU 10 islands | 1.6M |
+| GPU 10 islands | 5.8M (3.6x) |
+
+**Limitations**: `maxETFs` must be ≤ 64 (shader `selectedIndices` array size). `THREADS_PER_GROUP` must be a power of 2 (tree reduction correctness). Multiple islands share one GPU evaluator — command buffers are thread-safe but GPU dispatches serialize on the command queue.
 
 ## Key Concepts
 
