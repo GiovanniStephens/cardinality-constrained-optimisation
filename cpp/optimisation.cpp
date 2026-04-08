@@ -14,7 +14,12 @@
 #include <mutex>
 #include <atomic>
 #include <numeric>
+#include <cassert>
 #include "csv.hpp"
+
+#ifdef HAS_METAL
+#include "metal_fitness.h"
+#endif
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
@@ -39,6 +44,7 @@ struct Config {
     bool binary_input = false;       // if true, read binary format instead of CSV
     bool use_svd = false;            // if true, use truncated SVD for fitness
     int svd_components = 200;        // number of SVD components to keep
+    bool use_gpu = false;            // if true, use Metal GPU for fitness
 };
 
 Config parse_args(int argc, char* argv[]) {
@@ -66,12 +72,14 @@ Config parse_args(int argc, char* argv[]) {
                 << "  --mc-log-interval N    MC: log every N trials per thread (default: 5000)\n"
                 << "  --binary               Read binary format instead of CSV\n"
                 << "  --svd                  Use truncated SVD for approximate fitness\n"
-                << "  --svd-components N     Number of SVD components (default: 200)\n";
+                << "  --svd-components N     Number of SVD components (default: 200)\n"
+                << "  --gpu                  Use Metal GPU for fitness evaluation\n";
             std::exit(0);
         }
         // Boolean flags (no value)
         if (arg == "--binary") { cfg.binary_input = true; continue; }
         if (arg == "--svd") { cfg.use_svd = true; continue; }
+        if (arg == "--gpu") { cfg.use_gpu = true; continue; }
         if (i + 1 >= argc) break;
         std::string val = argv[++i];
         if (arg == "--mode") cfg.mode = val;
@@ -273,10 +281,12 @@ inline int numWords(int numGenes) {
 }
 
 inline bool getBit(const BitIndividual& ind, int pos) {
+    assert(pos >= 0 && pos < static_cast<int>(ind.size() * BITS_PER_WORD));
     return (ind[pos / BITS_PER_WORD] >> (pos % BITS_PER_WORD)) & 1ULL;
 }
 
 inline void setBit(BitIndividual& ind, int pos) {
+    assert(pos >= 0 && pos < static_cast<int>(ind.size() * BITS_PER_WORD));
     ind[pos / BITS_PER_WORD] |= (1ULL << (pos % BITS_PER_WORD));
 }
 
@@ -519,7 +529,8 @@ void run_island(int id, const Config& cfg,
                 std::chrono::steady_clock::time_point deadline,
                 bool hasDeadline,
                 std::mutex& outputMutex,
-                IslandResult& result) {
+                IslandResult& result,
+                void* gpuEvaluator = nullptr) {
 
     // Per-island seeded RNG
     unsigned int islandSeed;
@@ -551,6 +562,20 @@ void run_island(int id, const Config& cfg,
     newPop.reserve(cfg.pop_size);
     Eigen::VectorXd newFitness = Eigen::VectorXd::Zero(cfg.pop_size);
 
+#ifdef HAS_METAL
+    // Pre-allocate GPU flat bit vector buffer (reused every generation)
+    int gpuWpi = 0;
+    std::vector<uint32_t> flatBits;
+    if (gpuEvaluator != nullptr) {
+        gpuWpi = static_cast<MetalFitnessEvaluator*>(gpuEvaluator)->wordsPerInd32();
+        flatBits.resize(cfg.pop_size * gpuWpi, 0);
+    }
+    std::vector<double> gpuResults;
+    if (gpuEvaluator != nullptr) {
+        gpuResults.resize(cfg.pop_size);
+    }
+#endif
+
     // First generation: evaluate all individuals
     bool firstGeneration = true;
 
@@ -560,24 +585,62 @@ void run_island(int id, const Config& cfg,
 
         // Evaluate fitness — skip elites after the first generation
         int evalStart = (firstGeneration || numElites == 0) ? 0 : numElites;
-        for (int i = evalStart; i < cfg.pop_size; ++i) {
-            double f;
-            if (svMatrix != nullptr) {
-                f = calculateFitnessSVD(population[i], numGenes, *svMatrix,
-                                         expectedReturns, T,
-                                         cfg.min_etfs, cfg.max_etfs,
-                                         cfg.risk_free_rate, cfg.min_return);
-            } else {
-                f = calculateFitnessExact(population[i], numGenes, centeredReturns,
-                                           expectedReturns, T,
-                                           cfg.min_etfs, cfg.max_etfs,
-                                           cfg.risk_free_rate, cfg.min_return);
+        int evalCount = cfg.pop_size - evalStart;
+
+#ifdef HAS_METAL
+        if (gpuEvaluator != nullptr) {
+            auto* gpu = static_cast<MetalFitnessEvaluator*>(gpuEvaluator);
+            int wpi = gpu->wordsPerInd32();
+
+            // Flatten population[evalStart..evalStart+evalCount) into uint32_t buffer.
+            // Each uint64 word becomes 2 uint32 words (low half first).
+            // wpi == ind.size()*2 always, so every word pair is written.
+            std::fill(flatBits.begin(), flatBits.begin() + evalCount * wpi, 0);
+            for (int i = 0; i < evalCount; ++i) {
+                const auto& ind = population[evalStart + i];
+                uint32_t* dst = flatBits.data() + i * wpi;
+                for (size_t w64 = 0; w64 < ind.size(); ++w64) {
+                    uint64_t val = ind[w64];
+                    dst[w64 * 2]     = static_cast<uint32_t>(val);
+                    dst[w64 * 2 + 1] = static_cast<uint32_t>(val >> 32);
+                }
             }
-            fitness(i) = f;
-            evaluations++;
-            if (f > bestFitness) {
-                bestFitness = f;
-                bestIndividual = population[i];
+
+            // GPU batch evaluation
+            gpu->evaluateBatch(flatBits.data(), evalCount, gpuResults.data());
+
+            for (int i = 0; i < evalCount; ++i) {
+                double f = gpuResults[i];
+                fitness(evalStart + i) = f;
+                evaluations++;
+                if (f > bestFitness) {
+                    bestFitness = f;
+                    bestIndividual = population[evalStart + i];
+                }
+            }
+        } else
+#endif
+        {
+            // CPU fallback (existing code)
+            for (int i = evalStart; i < cfg.pop_size; ++i) {
+                double f;
+                if (svMatrix != nullptr) {
+                    f = calculateFitnessSVD(population[i], numGenes, *svMatrix,
+                                             expectedReturns, T,
+                                             cfg.min_etfs, cfg.max_etfs,
+                                             cfg.risk_free_rate, cfg.min_return);
+                } else {
+                    f = calculateFitnessExact(population[i], numGenes, centeredReturns,
+                                               expectedReturns, T,
+                                               cfg.min_etfs, cfg.max_etfs,
+                                               cfg.risk_free_rate, cfg.min_return);
+                }
+                fitness(i) = f;
+                evaluations++;
+                if (f > bestFitness) {
+                    bestFitness = f;
+                    bestIndividual = population[i];
+                }
             }
         }
         firstGeneration = false;
@@ -844,6 +907,28 @@ int main(int argc, char* argv[]) {
                   << " instruments (threshold: 5000)." << std::endl;
     }
 
+    // GPU fitness evaluator (Metal)
+#ifdef HAS_METAL
+    MetalFitnessEvaluator* gpuEvaluator = nullptr;
+    if (cfg.use_gpu) {
+        gpuEvaluator = new MetalFitnessEvaluator(
+            centeredReturns.data(), T, numETFs,
+            expectedReturns.data(),
+            cfg.min_etfs, cfg.max_etfs,
+            cfg.risk_free_rate, cfg.min_return);
+        if (!gpuEvaluator->isValid()) {
+            std::cerr << "Metal: GPU init failed, falling back to CPU." << std::endl;
+            delete gpuEvaluator;
+            gpuEvaluator = nullptr;
+        }
+    }
+    void* gpuEvalPtr = gpuEvaluator;
+#else
+    void* gpuEvalPtr = nullptr;
+    if (cfg.use_gpu)
+        std::cerr << "Warning: --gpu ignored (not compiled with Metal support)." << std::endl;
+#endif
+
     // Time budget starts AFTER data loading and preprocessing
     bool hasDeadline = cfg.time_budget > 0;
     auto computeStart = std::chrono::steady_clock::now();
@@ -900,9 +985,25 @@ int main(int argc, char* argv[]) {
                                  std::cref(expectedReturns),
                                  svMatrixPtr, numETFs, T,
                                  std::ref(migration), deadline, hasDeadline,
-                                 std::ref(outputMutex), std::ref(gaResults[i]));
+                                 std::ref(outputMutex), std::ref(gaResults[i]),
+                                 gpuEvalPtr);
         }
         for (auto& t : threads) t.join();
+
+#ifdef HAS_METAL
+        // Re-evaluate best solutions with FP64 for precise final reporting
+        if (gpuEvaluator) {
+            for (int i = 0; i < numThreads; ++i) {
+                if (gaResults[i].bestFitness > -1e3) {
+                    gaResults[i].bestFitness = calculateFitnessExact(
+                        gaResults[i].bestIndividual, numETFs,
+                        centeredReturns, expectedReturns, T,
+                        cfg.min_etfs, cfg.max_etfs,
+                        cfg.risk_free_rate, cfg.min_return);
+                }
+            }
+        }
+#endif
 
         for (int i = 0; i < numThreads; ++i) {
             totalTrials += gaResults[i].evaluations;
@@ -914,6 +1015,10 @@ int main(int argc, char* argv[]) {
             allSolutions.push_back(sol);
         }
     }
+
+#ifdef HAS_METAL
+    delete gpuEvaluator;
+#endif
 
     std::sort(allSolutions.begin(), allSolutions.end(),
               [](const Solution& a, const Solution& b) { return a.fitness > b.fitness; });
