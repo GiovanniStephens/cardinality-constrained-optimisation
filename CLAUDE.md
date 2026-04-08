@@ -122,6 +122,7 @@ python -m unittest discover tests
 - No short selling by default (weights >= 0)
 - Tests use `unittest` in `tests/`; run `python -m unittest discover tests` to verify changes
 - When modifying optimisation parameters (population size, generations, mutation rate, migration), document the rationale — small changes significantly affect convergence
+- **Covariance estimation rule:** NEVER compute the full M×M covariance matrix when M > ~30. The sample covariance from ~1260 daily observations is rank-deficient and noise-dominated at large M. Always compute the sub-covariance matrix for each candidate portfolio (n ≤ 30 securities), where the estimation problem is well-conditioned (T >> n). The equal-weight column-sum shortcut (`||Xc @ s||² / (n² × (T-1))`) is permitted as a fast path during GA search since it is mathematically equivalent to `w^T @ Σ_sub @ w` for equal weights.
 
 ## Sharpe Ratio Overfitting — Critical Awareness
 

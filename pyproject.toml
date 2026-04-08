@@ -5,10 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cardinality-constrained-optimisation"
 version = "0.1.0"
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 dependencies = [
     "arch>=5.0,<7",
-    "beautifulsoup4>=4.9",
     "copulae>=0.7,<1",
     "financedatabase>=2.0",
     "matplotlib>=3.3",

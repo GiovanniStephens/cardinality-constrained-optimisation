@@ -86,9 +86,9 @@ def load_prices_csv(filename, min_coverage=0.95, last_n_days=None):
     :return: cleaned DataFrame with dates as index, tickers as columns.
     """
     prices_df = pd.read_csv(filename, index_col=0)
+    prices_df.index = pd.to_datetime(prices_df.index)
+    prices_df = prices_df.sort_index()
     if last_n_days is not None:
-        prices_df.index = pd.to_datetime(prices_df.index)
-        prices_df = prices_df.sort_index()
         cutoff = prices_df.index[-1] - pd.Timedelta(days=last_n_days)
         prices_df = prices_df[prices_df.index >= cutoff]
     thresh = int(min_coverage * len(prices_df))
@@ -97,12 +97,32 @@ def load_prices_csv(filename, min_coverage=0.95, last_n_days=None):
     return prices_df
 
 
+def load_data(filename, min_coverage=0.10, last_n_days=None):
+    """Load price data with permissive coverage filtering.
+
+    Convenience wrapper around load_prices_csv with a lower default
+    min_coverage (0.10 vs 0.95) — used by entry points and scripts.
+    Raises ValueError if the resulting DataFrame is empty.
+    """
+    prices_df = load_prices_csv(filename, min_coverage=min_coverage,
+                                last_n_days=last_n_days)
+    if prices_df.empty:
+        raise ValueError(f"Loaded CSV '{filename}' is empty.")
+    return prices_df
+
+
 def calculate_log_returns(prices):
     """Calculate log returns, replacing NaN and inf with 0.
 
     :param prices: DataFrame of prices.
     :return: DataFrame of log returns.
+    :raises ValueError: if the index is not monotonically increasing.
     """
+    if not prices.index.is_monotonic_increasing:
+        raise ValueError(
+            "prices index must be sorted in ascending order. "
+            "Unsorted data causes .shift(1) to compute returns against wrong date pairs."
+        )
     log_returns = np.log(prices / prices.shift(1))
     log_returns = log_returns.fillna(0)
     log_returns = log_returns.replace([np.inf, -np.inf], 0)
@@ -190,30 +210,32 @@ def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
     return -sharpe_ratio(weights, expected_returns, cov_matrix)
 
 
-def equal_weight_sharpe(selected_indices, expected_returns, cov_matrix,
-                        min_securities, max_securities):
-    """Equal-weight Sharpe ratio for a binary selection vector.
+def equal_weight_fitness(selection_mask, expected_returns, cov_matrix,
+                         min_count, max_count, min_return=None):
+    """Equal-weight Sharpe ratio for a binary selection vector with cardinality constraints.
 
-    Shared fitness function for GA and Monte Carlo portfolio search.
-    Returns a large negative penalty if cardinality constraints are violated.
-
-    :param selected_indices: boolean or binary array (1 = selected).
-    :param expected_returns: array of annualised expected returns (all assets).
-    :param cov_matrix: annualised covariance matrix as numpy array (all assets).
-    :param min_securities: minimum number of selected assets.
-    :param max_securities: maximum number of selected assets.
-    :return: Sharpe ratio (float), or -1e4 on constraint violation.
+    :param selection_mask: binary array (1 = selected).
+    :param expected_returns: array of annualised expected returns per asset.
+    :param cov_matrix: annualised covariance matrix (array).
+    :param min_count: minimum number of selected assets.
+    :param max_count: maximum number of selected assets.
+    :param min_return: optional minimum portfolio return threshold.
+    :return: Sharpe ratio (float), or -1e4 if constraints violated.
     """
-    sel = np.asarray(selected_indices, dtype=bool)
-    n_selected = np.sum(sel)
-    if n_selected < min_securities or n_selected > max_securities:
+    selected = selection_mask == 1
+    n = np.sum(selected)
+    if n < min_count or n > max_count:
         return -1e4
-    if n_selected == 0:
+    if not np.any(selected):
         return 0.0
-    weights = np.ones(n_selected) / n_selected
-    ret = np.dot(weights, expected_returns[sel])
-    var = np.dot(weights, np.dot(cov_matrix[np.ix_(sel, sel)], weights))
-    return ret / np.sqrt(var) if var > 0 else 0.0
+    filtered_returns = expected_returns[selected]
+    filtered_cov = cov_matrix[np.ix_(selected, selected)]
+    weights = np.ones(n) / n
+    port_return = np.dot(weights, filtered_returns)
+    if min_return is not None and port_return < min_return:
+        return -1e4
+    port_variance = np.dot(weights, np.dot(filtered_cov, weights))
+    return port_return / np.sqrt(port_variance) if port_variance > 0 else 0.0
 
 
 # ─── Performance Metrics ──────────────────────────────────────────────────────

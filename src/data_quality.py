@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 from src import db
-from src import config as uc
+from src import config
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ def _check_zero_variance(prices_by_ticker, min_annual_vol):
         if len(closes) < 30:
             return None
         log_rets = np.diff(np.log(closes))
-        annual_vol = np.std(log_rets) * np.sqrt(uc.TRADING_DAYS_PER_YEAR)
+        annual_vol = np.std(log_rets) * np.sqrt(config.TRADING_DAYS_PER_YEAR)
         if annual_vol < min_annual_vol:
             return (tid, f"zero_variance:vol={annual_vol:.6f}")
         return None
@@ -206,11 +206,11 @@ def validate_universe(conn, exchange='US', dry_run=False):
     prices_by_ticker = _load_prices_by_ticker(conn, exchange_id)
 
     checks = [
-        ('min_history', _check_min_history(conn, exchange_id, uc.MIN_HISTORY_DAYS)),
-        ('stale', _check_stale_prices(conn, exchange_id, uc.MAX_STALENESS_DAYS)),
-        ('zero_variance', _check_zero_variance(prices_by_ticker, uc.MIN_ANNUAL_VOLATILITY)),
-        ('frozen_price', _check_frozen_prices(prices_by_ticker, uc.MAX_CONSECUTIVE_SAME_PRICE)),
-        ('extreme_returns', _check_extreme_returns(prices_by_ticker, uc.MAX_EXTREME_RETURN_PCT)),
+        ('min_history', _check_min_history(conn, exchange_id, config.MIN_HISTORY_DAYS)),
+        ('stale', _check_stale_prices(conn, exchange_id, config.MAX_STALENESS_DAYS)),
+        ('zero_variance', _check_zero_variance(prices_by_ticker, config.MIN_ANNUAL_VOLATILITY)),
+        ('frozen_price', _check_frozen_prices(prices_by_ticker, config.MAX_CONSECUTIVE_SAME_PRICE)),
+        ('extreme_returns', _check_extreme_returns(prices_by_ticker, config.MAX_EXTREME_RETURN_PCT)),
     ]
 
     # Deduplicate: first check to flag a ticker wins

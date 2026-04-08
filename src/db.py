@@ -15,7 +15,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'portfolio.db')
+from src.config import DB_PATH
 
 SCHEMA_SQL = """
 -- Broad market groupings (US, NZX, ASX, etc.)

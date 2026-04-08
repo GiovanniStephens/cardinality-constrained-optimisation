@@ -10,43 +10,55 @@ from src.portfolio_utils import (
     calculate_expected_returns,
     calculate_variances,
     calculate_covariance_matrix,
-    equal_weight_sharpe,
     optimise_weights,
     OptimisationResult,
 )
 from src.optimisers.base import BaseOptimiser
-from src.config import GA_MAX_SECURITIES
+from src.config import GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS
 
 logger = logging.getLogger(__name__)
 
 
+def calculate_portfolio_variance(weights, cov_matrix):
+    """Compute portfolio variance given weights and a covariance DataFrame."""
+    return np.dot(weights, np.dot(cov_matrix.values, weights))
+
+
+def calculate_portfolio_return(weights, expected_returns):
+    """Compute expected portfolio return given weights and per-asset returns."""
+    return np.dot(weights, expected_returns)
+
+
 def portfolio_sharpe_ratio(selection_vars, expected_returns, log_returns):
-    """Equal-weight Sharpe ratio for a PuLP selection result."""
-    all_etfs = list(selection_vars.keys())
-    sel = np.array([1 if pulp.value(selection_vars[etf]) > 0.5 else 0
-                    for etf in all_etfs])
-    if not np.any(sel):
+    """Compute equal-weight Sharpe ratio for the MILP-selected portfolio."""
+    selected_etfs = [etf for etf in selection_vars if pulp.value(selection_vars[etf]) > 0.5]
+    if not selected_etfs:
         return 0
-    cov_matrix = calculate_covariance_matrix(log_returns[all_etfs]).values
-    er = expected_returns[all_etfs].values
-    n = int(np.sum(sel))
-    return equal_weight_sharpe(sel.astype(bool), er, cov_matrix, n, n)
+    selected_log_returns = log_returns[selected_etfs]
+    cov_matrix = calculate_covariance_matrix(selected_log_returns)
+    num_etfs = len(selected_etfs)
+    weights = np.array([1/num_etfs] * num_etfs)
+    portfolio_variance = calculate_portfolio_variance(weights, cov_matrix)
+    portfolio_return = calculate_portfolio_return(weights, expected_returns[selected_etfs])
+    sharpe_ratio = portfolio_return / np.sqrt(portfolio_variance) if portfolio_variance > 0 else 0
+    return sharpe_ratio
 
 
-def setup_portfolio_selection_problem(etfs, expected_returns, volatilities,
-                                      risk_aversion, max_securities=GA_MAX_SECURITIES):
+def setup_portfolio_selection_problem(etfs, expected_returns, volatilities, risk_aversion,
+                                      max_etfs=MIP_DEFAULT_MAX_ETFS):
+    """Build the MILP problem: maximise risk-adjusted return with cardinality constraint."""
     portfolio_problem = pulp.LpProblem("Portfolio_Selection", pulp.LpMaximize)
     selection = pulp.LpVariable.dicts("Select", etfs, 0, 1, pulp.LpBinary)
     portfolio_problem += pulp.lpSum([expected_returns[etf] * selection[etf] - risk_aversion
                                      * volatilities[etf] * selection[etf] for etf in etfs]), "Risk_Adjusted_Return"
-    portfolio_problem += pulp.lpSum([selection[etf] for etf in etfs]) <= max_securities, "Max_ETFs"
+    portfolio_problem += pulp.lpSum([selection[etf] for etf in etfs]) <= max_etfs, "Max_ETFs"
     return portfolio_problem, selection
 
 
 class MIPOptimiser(BaseOptimiser):
     """Mixed Integer Linear Programming portfolio selection."""
 
-    def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=0.8):
+    def __init__(self, max_securities=GA_MAX_SECURITIES, risk_aversion=MIP_DEFAULT_RISK_AVERSION):
         self.max_securities = max_securities
         self.risk_aversion = risk_aversion
 
@@ -56,8 +68,13 @@ class MIPOptimiser(BaseOptimiser):
         volatilities = np.sqrt(calculate_variances(log_returns))
 
         problem, selection = setup_portfolio_selection_problem(
-            log_returns.columns, er, volatilities, self.risk_aversion,
-            max_securities=self.max_securities)
+            log_returns.columns, er, volatilities, self.risk_aversion)
+        # Override max ETFs constraint with our setting
+        problem.constraints.pop("Max_ETFs", None)
+        problem += (
+            pulp.lpSum([selection[etf] for etf in log_returns.columns])
+            <= self.max_securities, "Max_ETFs"
+        )
         problem.solve(pulp.PULP_CBC_CMD(msg=0))
 
         selected = [etf for etf in log_returns.columns
@@ -89,7 +106,7 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
     # Load data
-    prices_df = load_prices_csv('data/ETF_Prices.csv')
+    prices_df = load_prices_csv(ETF_PRICES_CSV)
     prices_df = prices_df.iloc[:-213]
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     log_returns = calculate_log_returns(prices_df)
@@ -106,7 +123,7 @@ if __name__ == '__main__':
     logger.info("MILP solver status: %s", pulp.LpStatus[portfolio_problem.status])
 
     if portfolio_problem.status != pulp.constants.LpStatusOptimal:
-        logger.warning("Solver did not find optimal solution. Status: %s", pulp.LpStatus[portfolio_problem.status])
+        print(f"Warning: Solver did not find optimal solution. Status: {pulp.LpStatus[portfolio_problem.status]}")
 
     # Output the selected ETFs
     selected = [etf for etf in log_returns.columns if pulp.value(selection[etf]) == 1]
