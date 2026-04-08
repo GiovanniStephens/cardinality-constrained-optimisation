@@ -7,9 +7,9 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
-from src.portfolio_utils import load_data, calculate_log_returns
+from src.portfolio_utils import calculate_log_returns
 from src.config import (
-    BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR, DATA_MIN_COVERAGE,
+    BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR,
     FORECAST_MIN_OBSERVATIONS,
     FORECAST_ARIMA_START_P, FORECAST_ARIMA_START_Q,
     FORECAST_ARIMA_MAX_P, FORECAST_ARIMA_MAX_Q,
@@ -88,15 +88,9 @@ def main():
     setup_logging()
     start_time = time.time()
 
-    from src import db
-    conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    conn.close()
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_data(ETF_PRICES_CSV)
-    data = data.dropna(axis=1, thresh=DATA_MIN_COVERAGE*len(data))
-    logger.info("Loaded price data: %d rows x %d tickers", *data.shape)
+    from src.portfolio_utils import load_training_data
+    data = load_training_data(
+        exchange='US', csv_fallback=ETF_PRICES_CSV, lookback_days=None)
     training_data = data.iloc[:-BACKTEST_NUM_DAYS_OOS, :]
 
     if len(training_data) < FORECAST_MIN_OBSERVATIONS:

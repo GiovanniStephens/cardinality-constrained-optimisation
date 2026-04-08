@@ -10,6 +10,7 @@ from src.portfolio_utils import (
     calculate_expected_returns,
     calculate_variances,
     calculate_covariance_matrix,
+    calculate_portfolio_variance,
     optimise_weights,
     OptimisationResult,
 )
@@ -17,11 +18,6 @@ from src.optimisers.base import BaseOptimiser
 from src.config import GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS
 
 logger = logging.getLogger(__name__)
-
-
-def calculate_portfolio_variance(weights, cov_matrix):
-    """Compute portfolio variance given weights and a covariance DataFrame."""
-    return np.dot(weights, np.dot(cov_matrix.values, weights))
 
 
 def calculate_portfolio_return(weights, expected_returns):

@@ -17,7 +17,6 @@ from src.portfolio_utils import (
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
-    DATA_MIN_COVERAGE, DATA_FFILL_LIMIT, DATA_LOOKBACK_DAYS,
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
     ETF_PRICES_CSV,
 )
@@ -97,18 +96,27 @@ class MonteCarloOptimiser(BaseOptimiser):
     def __init__(self, n_trials=10_000_000,
                  min_securities=GA_MIN_SECURITIES,
                  max_securities=GA_MAX_SECURITIES,
-                 num_processes=None):
+                 num_processes=None, seed=None):
         self.n_trials = n_trials
         self.min_securities = min_securities
         self.max_securities = max_securities
         self.num_processes = num_processes or os.cpu_count()
+        self.seed = seed
 
     def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
+        if self.seed is not None:
+            np.random.seed(self.seed)
         start = time.time()
-        best_solution, best_fitness = parallel_monte_carlo(
-            prices, self.n_trials, self.num_processes,
-            self.min_securities, self.max_securities,
-        )
+        if self.seed is not None and self.num_processes == 1:
+            # Run in-process for reproducibility (Pool forks lose seed state)
+            best_solution, best_fitness = monte_carlo_search(
+                prices, self.n_trials, self.min_securities, self.max_securities,
+            )
+        else:
+            best_solution, best_fitness = parallel_monte_carlo(
+                prices, self.n_trials, self.num_processes,
+                self.min_securities, self.max_securities,
+            )
         elapsed = time.time() - start
 
         if best_solution is None:
@@ -142,24 +150,11 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
 
-    # ── Load prices from DB (CSV fallback) ────────────────────────────────
+    from src.portfolio_utils import load_training_data, save_optimisation_result
     from src import db
 
     conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        from src.portfolio_utils import load_prices_csv
-        data = load_prices_csv(ETF_PRICES_CSV, last_n_days=730)
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
-        data = data[data.index >= cutoff]
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
-
-    logger.info("Loaded price data: %d rows x %d columns", *data.shape)
+    data = load_training_data(exchange='US', csv_fallback=ETF_PRICES_CSV)
 
     # ── Parameters ────────────────────────────────────────────────────────
     num_trials = 10_000_000
@@ -189,35 +184,18 @@ if __name__ == '__main__':
                 if w > 1e-4:
                     logger.info("  %s: %.1f%%", ticker, w * 100)
 
-            # ── Compute return / volatility for DB ────────────────────────
-            log_returns = calculate_log_returns(data[selected_tickers])
-            er = calculate_expected_returns(log_returns)
-            cov = calculate_covariance_matrix(log_returns)
-            portfolio_return = float(np.dot(result.x, er))
-            portfolio_vol = float(
-                np.sqrt(np.dot(result.x.T, np.dot(cov, result.x)))
-            )
-
-            # ── Save to database ──────────────────────────────────────────
-            run_id = db.save_optimisation_run(
-                conn,
+            run_id = save_optimisation_result(
+                conn, selected_tickers, result.x, data,
+                script_name='monte_carlo',
                 params={
-                    'script': 'monte_carlo',
                     'data_source': 'yahoo_finance',
                     'num_trials': num_trials,
                     'num_processes': num_processes,
                     'min_securities': min_num_etfs,
                     'max_securities': max_num_etfs,
                 },
-                results={
-                    'best_sharpe': final_sharpe,
-                    'portfolio_return': portfolio_return,
-                    'portfolio_volatility': portfolio_vol,
-                    'num_selected': len(selected_tickers),
-                    'elapsed_seconds': mc_elapsed,
-                },
-                holdings=list(zip(selected_tickers, result.x)),
                 exchange='US',
+                elapsed_seconds=mc_elapsed,
             )
             logger.info("Run saved to database (id=%d)", run_id)
         else:

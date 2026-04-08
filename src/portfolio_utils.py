@@ -35,6 +35,22 @@ class OptimisationResult:
     sharpe_ratio: float
     metadata: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        """Validate result integrity (skip for empty-result sentinels)."""
+        if len(self.weights) == 0:
+            return
+        if len(self.weights) != len(self.selected_tickers):
+            raise ValueError(
+                f"weights length ({len(self.weights)}) != "
+                f"selected_tickers length ({len(self.selected_tickers)})"
+            )
+        if not np.all(np.isfinite(self.weights)):
+            raise ValueError("weights contain NaN or inf values")
+        if np.any(self.weights < -1e-10):
+            raise ValueError("weights contain negative values")
+        if not np.isfinite(self.sharpe_ratio):
+            raise ValueError(f"sharpe_ratio is not finite: {self.sharpe_ratio}")
+
 
 def load_prices(exchange='US', csv_fallback=None, conn=None,
                 last_n_days=None, min_coverage=None, ffill_limit=None):
@@ -81,6 +97,35 @@ def load_prices(exchange='US', csv_fallback=None, conn=None,
         data = data[data.index >= cutoff]
     data = data.dropna(axis=1, thresh=int(min_coverage * len(data)))
     data = data.ffill(limit=ffill_limit)
+    return data
+
+
+def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
+                       min_coverage=None):
+    """Load and filter price data for training, with DB-first-CSV-fallback.
+
+    Convenience wrapper for entry-point scripts that consolidates the common
+    pattern of loading from DB, falling back to CSV, and applying standard
+    filters (lookback, coverage, forward-fill).
+
+    :param exchange: exchange code for DB query (default 'US').
+    :param csv_fallback: CSV path to use if DB is empty.
+    :param lookback_days: restrict to last N calendar days (default from config).
+    :param min_coverage: minimum non-null fraction to keep a column (default from config).
+    :return: cleaned DataFrame.
+    :raises ValueError: if the resulting DataFrame is empty.
+    """
+    from src.config import DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE
+    if lookback_days is None:
+        lookback_days = DATA_LOOKBACK_DAYS
+    if min_coverage is None:
+        min_coverage = DATA_MIN_COVERAGE
+
+    data = load_prices(exchange=exchange, csv_fallback=csv_fallback,
+                       last_n_days=lookback_days, min_coverage=min_coverage)
+    if data.empty:
+        raise ValueError("No price data available from DB or CSV fallback.")
+    logger.info("Loaded price data: %d rows x %d columns", *data.shape)
     return data
 
 
@@ -186,19 +231,142 @@ def shrink_correlation_matrix(corr_matrix, log_returns):
     return (1 - alpha) * corr_matrix + alpha * np.eye(N)
 
 
-def calculate_covariance_matrix(log_returns, annualise=True, shrinkage=None):
-    """Covariance matrix of log returns with optional Ledoit-Wolf shrinkage.
+def estimate_corr_using_copulas(data: pd.DataFrame,
+                                diagnostics: bool = False) -> np.ndarray:
+    """Estimate the correlation matrix using the copula method.
+
+    Fits AR(1)-GARCH(1,1) with skew-t innovations to each series, then
+    fits a Student-t copula to the standardised residuals and extracts
+    the correlation matrix (``cop.sigma``).
+
+    Falls back to the (optionally shrunk) sample correlation matrix if
+    copula fitting fails.
+
+    :param data: DataFrame of log returns.
+    :param diagnostics: if True, log GARCH residual adequacy tests and
+        copula model comparison (t-copula vs Gaussian).
+    :return: numpy array correlation matrix.
+    """
+    from copulae import GaussianCopula, TCopula
+    from muarch import MUArch
+    from statsmodels.stats.diagnostic import acorr_ljungbox
+
+    try:
+        # scale=10 multiplies returns before fitting for numerical stability
+        # (daily returns are ~0.001), then divides back internally.
+        models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=10)
+        models.fit(data)
+        residuals = models.residuals()
+
+        if diagnostics:
+            for i, col in enumerate(data.columns):
+                sq_resid = residuals[:, i] ** 2
+                lb_result = acorr_ljungbox(sq_resid, lags=[10], return_df=True)
+                p_value = lb_result['lb_pvalue'].values[0]
+                if p_value < 0.05:
+                    _cov_logger.warning(
+                        "GARCH residuals for %s show remaining autocorrelation "
+                        "(Ljung-Box p=%.4f < 0.05). Model may be inadequate.",
+                        col, p_value)
+                else:
+                    _cov_logger.info(
+                        "GARCH residuals for %s pass Ljung-Box test (p=%.4f).",
+                        col, p_value)
+
+        cop = TCopula(dim=data.shape[1])
+        cop.fit(residuals)
+
+        if diagnostics:
+            gauss_cop = GaussianCopula(dim=data.shape[1])
+            gauss_cop.fit(residuals)
+            _cov_logger.info(
+                "Copula comparison — t-copula log-lik: %.2f, "
+                "Gaussian copula log-lik: %.2f",
+                cop.log_lik(residuals), gauss_cop.log_lik(residuals))
+
+        return cop.sigma
+    except Exception as e:
+        _cov_logger.warning(
+            "Copula estimation failed: %s; falling back to sample correlation.", e)
+        _cov_logger.debug("Copula traceback:", exc_info=True)
+        corr = data.corr().values if isinstance(data, pd.DataFrame) else np.corrcoef(data, rowvar=False)
+        if COV_SHRINKAGE_ENABLED:
+            corr = shrink_correlation_matrix(corr, data)
+        return corr
+
+
+def calculate_covariance_matrix(log_returns, annualise=True, shrinkage=None, *,
+                                 forecast_variances=None, use_copulae=False):
+    """Covariance matrix of log returns.
+
+    Supports three modes depending on the arguments:
+
+    1. **Sample covariance** (default): Ledoit-Wolf shrinkage or raw sample
+       covariance, controlled by *shrinkage*.
+    2. **CCC model** (``forecast_variances`` provided): Bollerslev (1990)
+       Cov = D × R × D, where D uses GARCH-forecast volatilities and R is
+       the (optionally shrunk) historical correlation matrix.
+    3. **Copula-CCC** (``use_copulae=True``): same as CCC but R is estimated
+       via a Student-t copula on AR(1)-GARCH standardised residuals.
+
+    When ``forecast_variances`` is provided, columns missing from it cause a
+    logged warning and automatic fallback to mode 1.
 
     :param log_returns: DataFrame of log returns.
     :param annualise: multiply by 252 trading days (default True).
     :param shrinkage: True/False to force shrinkage on/off, or None to use
         the COV_SHRINKAGE_ENABLED config default.
-    :return: DataFrame covariance matrix.
+    :param forecast_variances: optional Series of GARCH-forecast annualised
+        variances, indexed by ticker.  Enables CCC mode.
+    :param use_copulae: if True, estimate R via copula instead of sample
+        correlation (requires copulae/muarch packages).
+    :return: covariance matrix.  DataFrame in mode 1, numpy array in
+        modes 2/3.
     """
     T, N = log_returns.shape
     if N >= 2:
         check_observation_ratio(T, N)
 
+    # ── CCC / Copula-CCC path ────────────────────────────────────────────
+    if forecast_variances is not None or use_copulae:
+        # Validate forecast variances if provided
+        if forecast_variances is not None:
+            missing = set(log_returns.columns) - set(forecast_variances.index)
+            if missing:
+                _cov_logger.warning(
+                    "Columns missing from forecast variances: %s. "
+                    "Falling back to historical covariance.", missing)
+                return calculate_covariance_matrix(
+                    log_returns, annualise=annualise, shrinkage=shrinkage)
+
+        # Correlation matrix R
+        if use_copulae:
+            corr = estimate_corr_using_copulas(log_returns)
+        else:
+            corr = log_returns.corr().values
+            if COV_SHRINKAGE_ENABLED if shrinkage is None else shrinkage:
+                corr = shrink_correlation_matrix(corr, log_returns)
+
+        # Diagonal volatility matrix D
+        if forecast_variances is not None:
+            var_values = forecast_variances.loc[log_returns.columns].values.flatten()
+            if np.any(var_values < 0):
+                _cov_logger.warning(
+                    "Negative forecast variances found; clipping to 0.")
+                var_values = np.clip(var_values, 0, None)
+            diag = np.sqrt(var_values)
+        else:
+            diag = log_returns.std().values * np.sqrt(TRADING_DAYS_PER_YEAR)
+
+        D = np.diag(diag)
+        cov = D @ corr @ D
+        if annualise and forecast_variances is None:
+            # forecast variances are already annualised; only annualise when
+            # using historical std (which is daily scale).
+            cov = cov * TRADING_DAYS_PER_YEAR
+        return cov
+
+    # ── Standard sample-covariance path ──────────────────────────────────
     use_shrinkage = COV_SHRINKAGE_ENABLED if shrinkage is None else shrinkage
     if use_shrinkage and N >= 2:
         cov, _ = _ledoit_wolf_covariance(log_returns)
@@ -267,7 +435,7 @@ def sharpe_ratio(weights, expected_returns, cov_matrix):
     return p_return / p_volatility
 
 
-def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
+def sharpe_loss(weights, expected_returns, cov_matrix):
     """Negated Sharpe ratio for use as a minimisation objective (e.g. SLSQP).
 
     :param weights: array of portfolio weights.
@@ -276,6 +444,10 @@ def negative_sharpe_ratio(weights, expected_returns, cov_matrix):
     :return: negative Sharpe ratio as a float.
     """
     return -sharpe_ratio(weights, expected_returns, cov_matrix)
+
+
+# Backward-compatible alias
+negative_sharpe_ratio = sharpe_loss
 
 
 def equal_weight_fitness(selection_mask, expected_returns, cov_matrix,
@@ -518,39 +690,218 @@ def read_binary_data(path):
     return pd.DataFrame(mat, columns=tickers), tickers
 
 
+# ─── Portfolio Variance ──────────────────────────────────────────────────────
+
+
+def calculate_portfolio_variance(weights, cov_matrix):
+    """Portfolio variance: w^T @ Cov @ w.
+
+    Accepts numpy arrays or pandas DataFrames for *cov_matrix*.
+
+    :param weights: array of portfolio weights.
+    :param cov_matrix: covariance matrix (array or DataFrame).
+    :return: portfolio variance as a float.
+    """
+    cov = cov_matrix.values if hasattr(cov_matrix, 'values') else np.asarray(cov_matrix)
+    w = np.asarray(weights).flatten()
+    return float(np.dot(w, np.dot(cov, w)))
+
+
+# ─── Risk-Parity Helpers ────────────────────────────────────────────────────
+
+
+def _risk_parity_portfolio_var(w, V):
+    """Portfolio variance via np.matrix (internal, used by risk-parity)."""
+    w = np.matrix(w)
+    return (w * V * w.T)[0, 0]
+
+
+def calculate_risk_contribution(w, V):
+    """Asset contribution to total risk for risk-parity objective.
+
+    :param w: weight vector.
+    :param V: covariance matrix (np.matrix).
+    :return: column vector of risk contributions.
+    """
+    w = np.matrix(w)
+    portfolio_var = _risk_parity_portfolio_var(w, V)
+    if portfolio_var <= 0:
+        return np.zeros_like(w.T)
+    sigma = np.sqrt(portfolio_var)
+    MRC = V * w.T
+    RC = np.multiply(MRC, w.T) / sigma
+    return RC
+
+
+def risk_budget_objective(x, pars):
+    """Risk-parity objective: minimise deviation from equal risk contribution.
+
+    :param x: weight vector.
+    :param pars: [covariance_matrix, risk_target_proportions].
+    :return: sum of squared deviations from target risk contributions.
+    """
+    V = pars[0]     # covariance table
+    x_t = pars[1]   # risk target in percent of portfolio risk
+    sig_p = np.sqrt(_risk_parity_portfolio_var(x, V))
+    risk_target = np.asmatrix(np.multiply(sig_p, x_t))
+    asset_RC = calculate_risk_contribution(x, V)
+    J = sum(np.square(asset_RC - risk_target.T))[0, 0]
+    return J
+
+
 # ─── Weight Optimisation ─────────────────────────────────────────────────────
 
 
-def optimise_weights(selection_vector, data, min_weight=0.0, max_weight=1.0,
-                     min_return=None):
-    """SLSQP weight optimisation for a selected subset of securities.
+def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
+                     max_weight=1.0, min_return=None, *,
+                     expected_returns=None, cov_matrix=None,
+                     target_return=None, target_risk=None,
+                     initial_weights=None, risk_parity=False):
+    """SLSQP weight optimisation for a portfolio.
+
+    Can be called in two modes:
+
+    1. **Selection-vector mode** (original API): pass ``selection_vector``
+       and ``data`` (prices DataFrame).  Log returns, expected returns, and
+       covariance are computed internally.
+
+    2. **Pre-computed mode**: pass ``expected_returns`` and ``cov_matrix``
+       directly (as numpy arrays).  Useful when the caller has already
+       computed these (e.g. backtest weight workers, GA fitness closures).
 
     :param selection_vector: binary array (1 = selected, 0 = not).
+        Required in mode 1, ignored in mode 2.
     :param data: DataFrame of prices (index=dates, columns=tickers).
+        Required in mode 1, ignored in mode 2.
     :param min_weight: lower bound per position weight.
     :param max_weight: upper bound per position weight.
     :param min_return: if set, adds an inequality constraint for minimum
         annualised portfolio return.
+    :param expected_returns: pre-computed expected returns (array).
+        If provided, ``cov_matrix`` must also be provided.
+    :param cov_matrix: pre-computed covariance matrix (array).
+        If provided, ``expected_returns`` must also be provided.
+    :param target_return: if set, adds an equality constraint for the
+        annualised portfolio return.
+    :param target_risk: if set, adds an equality constraint for the
+        annualised portfolio standard deviation.
+    :param initial_weights: starting point for the optimiser.  Defaults to
+        equal weights.
+    :param risk_parity: if True, minimise risk-budget deviation instead of
+        negative Sharpe ratio.
     :return: scipy.optimize.OptimizeResult with optimised weights in .x
     """
     from scipy.optimize import minimize
 
-    selected = data.columns[selection_vector == 1]
-    log_returns = calculate_log_returns(data[selected])
-    expected_returns = calculate_expected_returns(log_returns)
-    cov_matrix = calculate_covariance_matrix(log_returns)
-    n = len(selected)
+    # ── Resolve inputs ────────────────────────────────────────────────────
+    if expected_returns is not None and cov_matrix is not None:
+        # Pre-computed mode
+        er = np.asarray(expected_returns)
+        cov = np.asarray(cov_matrix)
+        n = len(er)
+    elif selection_vector is not None and data is not None:
+        # Selection-vector mode (original API)
+        selected = data.columns[selection_vector == 1]
+        log_returns = calculate_log_returns(data[selected])
+        er = calculate_expected_returns(log_returns).values
+        cov = calculate_covariance_matrix(log_returns).values
+        n = len(selected)
+    else:
+        raise ValueError(
+            "Either (selection_vector, data) or "
+            "(expected_returns, cov_matrix) must be provided."
+        )
 
+    if initial_weights is not None:
+        x0 = np.asarray(initial_weights, dtype=float)
+    else:
+        x0 = np.ones(n) / n
+
+    # ── Constraints ───────────────────────────────────────────────────────
     bounds = [(min_weight, max_weight) for _ in range(n)]
     constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]
+
     if min_return is not None:
         constraints.append({
             'type': 'ineq',
-            'fun': lambda x: np.dot(expected_returns, x) - min_return,
+            'fun': lambda x, _er=er: np.dot(_er, x) - min_return,
+        })
+    if target_return is not None and target_risk is None:
+        constraints.append({
+            'type': 'eq',
+            'fun': lambda x, _er=er: np.sum(_er * x) - target_return,
+        })
+    if target_risk is not None and target_return is None:
+        constraints.append({
+            'type': 'eq',
+            'fun': lambda x, _cov=cov: target_risk -
+            np.sqrt(np.dot(x.T, np.dot(_cov, x))),
         })
 
-    def objective(x):
-        return negative_sharpe_ratio(x, expected_returns, cov_matrix)
+    # ── Objective ─────────────────────────────────────────────────────────
+    if risk_parity:
+        risk_proportion = [1 / n] * n
+        return minimize(risk_budget_objective, x0,
+                        args=([np.matrix(cov), risk_proportion]),
+                        method='SLSQP', bounds=bounds,
+                        constraints=constraints)
 
-    return minimize(objective, x0=np.ones(n) / n, method='SLSQP',
+    def objective(x):
+        return sharpe_loss(x, er, cov)
+
+    return minimize(objective, x0=x0, method='SLSQP',
                     bounds=bounds, constraints=constraints)
+
+
+# ─── DB Persistence ──────────────────────────────────────────────────────────
+
+
+def save_optimisation_result(conn, selected_tickers, weights, prices,
+                             script_name, params=None, exchange='US',
+                             elapsed_seconds=None):
+    """Compute portfolio metrics and persist an optimisation run to DB.
+
+    Consolidates the common pattern: compute log returns for selected
+    tickers → expected returns and covariance → portfolio return/vol →
+    save to ``optimisation_runs`` and ``portfolio_holdings``.
+
+    :param conn: sqlite3 connection.
+    :param selected_tickers: list of ticker symbols in the portfolio.
+    :param weights: array of portfolio weights (same order as tickers).
+    :param prices: full price DataFrame (will be sliced to selected_tickers).
+    :param script_name: identifier for the optimisation script.
+    :param params: extra parameter dict merged into the DB params column.
+    :param exchange: exchange code (default 'US').
+    :param elapsed_seconds: optional wall-clock time for the run.
+    :return: run_id (int) from the database.
+    """
+    from src import db
+
+    log_returns = calculate_log_returns(prices[selected_tickers])
+    er = calculate_expected_returns(log_returns)
+    cov = calculate_covariance_matrix(log_returns)
+    w = np.asarray(weights)
+    portfolio_return = float(np.dot(w, er))
+    portfolio_vol = float(
+        np.sqrt(calculate_portfolio_variance(w, cov)))
+    sr = portfolio_return / portfolio_vol if portfolio_vol > 0 else 0.0
+
+    all_params = {'script': script_name}
+    if params:
+        all_params.update(params)
+
+    results = {
+        'best_sharpe': sr,
+        'portfolio_return': portfolio_return,
+        'portfolio_volatility': portfolio_vol,
+        'num_selected': len(selected_tickers),
+    }
+    if elapsed_seconds is not None:
+        results['elapsed_seconds'] = elapsed_seconds
+
+    run_id = db.save_optimisation_run(
+        conn, params=all_params, results=results,
+        holdings=list(zip(selected_tickers, weights)),
+        exchange=exchange,
+    )
+    return run_id
