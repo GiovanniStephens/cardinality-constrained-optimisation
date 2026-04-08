@@ -3,10 +3,9 @@
 import json
 import os
 import sqlite3
-import tempfile
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -428,27 +427,28 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
         def side_effect(tickers, start, end, timeout):
             call_count[0] += 1
             if call_count[0] <= 2:
-                # First two calls: raise 429
                 raise Exception("HTTP Error 429: Too Many Requests")
-            # After retries, succeed
             return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
 
         mock_dl.side_effect = side_effect
         tickers = [f'T{i}' for i in range(5)]
-        result = download_and_save(
+        download_and_save(
             tickers, self.conn, exchange='US', batch_size=5,
-            max_retries=3, rate_limit_delay=0.5,
+            max_retries=3, rate_limit_delay=2.0,
             circuit_breaker_threshold=100, batch_timeout=10,
-            max_rate_limit_delay=30.0,
+            max_rate_limit_delay=600.0,
         )
-        # Should have called sleep with increasing backoff values
         sleep_calls = [c[0][0] for c in mock_sleep.call_args_list]
-        # The 429 backoff sleeps should be in the list (8s, 16s for attempts 1, 2)
-        self.assertTrue(any(s >= 8 for s in sleep_calls))
+        # Adaptive: 2.0 → 4.0 → 8.0 on successive 429s (with ±20% jitter)
+        # Second sleep should be roughly double the first
+        rate_limit_sleeps = sleep_calls[:2]  # first two are 429 backoffs
+        self.assertTrue(len(rate_limit_sleeps) >= 2)
+        self.assertGreater(rate_limit_sleeps[1], rate_limit_sleeps[0],
+                           "Backoff should escalate on repeated 429s")
 
     @patch('src.download_data.time.sleep')
     @patch('src.download_data._download_batch_with_timeout')
-    def test_rate_limit_delay_decays_on_success(self, mock_dl, mock_sleep):
+    def test_rate_limit_delay_halves_on_success(self, mock_dl, mock_sleep):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
 
         call_count = [0]
@@ -459,14 +459,22 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
             return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
 
         mock_dl.side_effect = side_effect
-        tickers = [f'T{i}' for i in range(10)]
+        # 3 batches: B1 gets 429 then succeeds, B2 clean, B3 clean
+        tickers = [f'T{i}' for i in range(15)]
         result = download_and_save(
             tickers, self.conn, exchange='US', batch_size=5,
-            max_retries=3, rate_limit_delay=0.5,
+            max_retries=3, rate_limit_delay=2.0,
             circuit_breaker_threshold=100, batch_timeout=10,
-            max_rate_limit_delay=30.0,
+            max_rate_limit_delay=600.0,
         )
-        self.assertEqual(result['saved_tickers'], 10)
+        self.assertEqual(result['saved_tickers'], 15)
+        # Sleeps: [429 backoff ~4.0, inter-B1 ~4.0, inter-B2 ~2.0]
+        # After B2 clean success, delay halves 4→2. Inter-B2 sleep uses 2.0.
+        sleep_calls = [c[0][0] for c in mock_sleep.call_args_list]
+        self.assertGreaterEqual(len(sleep_calls), 3)
+        # Last inter-batch sleep should be roughly half the first
+        self.assertLess(sleep_calls[-1], sleep_calls[0],
+                        "Delay should decay after clean batches")
 
 
 class TestBatchTimeout(BaseTmpDirTest):
@@ -651,8 +659,8 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         self.assertEqual(result['circuit_breaker_trip_count'], 1)
 
 
-class TestDroppedCsvAutoSave(BaseTmpDirTest):
-    """Test auto-save of dropped tickers CSV in run_pipeline."""
+class TestKnownBadTickerCache(BaseTmpDirTest):
+    """Test that failed tickers are cached in the production DB."""
 
     def setUp(self):
         super().setUp()
@@ -661,15 +669,15 @@ class TestDroppedCsvAutoSave(BaseTmpDirTest):
 
     @patch('src.pipeline.validate_universe')
     @patch('src.pipeline.download_and_save')
-    def test_dropped_csv_created_on_failures(self, mock_dl, mock_val):
+    def test_failed_tickers_recorded_with_count(self, mock_dl, mock_val):
         from src.pipeline import run_pipeline
+        failed_batches = [
+            {'batch_num': 1, 'tickers': ['T0', 'T1', 'T2']},
+            {'batch_num': 2, 'tickers': ['T3', 'T4']},
+        ]
         mock_dl.return_value = {
-            'total_tickers': 10,
-            'saved_tickers': 5,
-            'failed_batches': [
-                {'batch_num': 1, 'tickers': ['T0', 'T1', 'T2']},
-                {'batch_num': 2, 'tickers': ['T3', 'T4']},
-            ],
+            'total_tickers': 10, 'saved_tickers': 5,
+            'failed_batches': failed_batches,
             'circuit_breaker_tripped': False,
             'circuit_breaker_trip_count': 0,
         }
@@ -677,26 +685,42 @@ class TestDroppedCsvAutoSave(BaseTmpDirTest):
             'total_tickers': 5, 'total_excluded': 0, 'total_active': 5,
         }
         tickers = [f'T{i}' for i in range(10)]
-        manifest = run_pipeline(
+
+        # First run: failure_count=1, not yet filtered
+        run_pipeline(
             tickers, exchange='US', asset_type='etf',
             prod_db_path=self.prod_db_path,
             staging_db_path=self.staging_db_path,
             stage_only=True,
         )
-        # Check that dropped CSV was created
-        self.assertIn('dropped_csv', manifest)
-        self.assertTrue(os.path.exists(manifest['dropped_csv']))
-        dropped_df = pd.read_csv(manifest['dropped_csv'])
-        self.assertEqual(list(dropped_df['Tickers']),
-                         ['T0', 'T1', 'T2', 'T3', 'T4'])
+        conn = db.get_connection(self.prod_db_path)
+        # min_failures=2: nothing filtered yet after one run
+        cached = db.load_known_bad_tickers(conn, exchange='US', min_failures=2)
+        self.assertEqual(cached, set())
+        # min_failures=1: all recorded
+        all_bad = db.load_known_bad_tickers(conn, exchange='US', min_failures=1)
+        self.assertEqual(all_bad, {'T0', 'T1', 'T2', 'T3', 'T4'})
+        conn.close()
+
+        # Second run: failure_count bumps to 2, now filtered
+        self.staging_db_path = os.path.join(self.tmpdir, 'staging2.db')
+        run_pipeline(
+            tickers, exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            stage_only=True,
+        )
+        conn = db.get_connection(self.prod_db_path)
+        cached = db.load_known_bad_tickers(conn, exchange='US', min_failures=2)
+        self.assertEqual(cached, {'T0', 'T1', 'T2', 'T3', 'T4'})
+        conn.close()
 
     @patch('src.pipeline.validate_universe')
     @patch('src.pipeline.download_and_save')
-    def test_no_dropped_csv_when_all_succeed(self, mock_dl, mock_val):
+    def test_no_cache_when_all_succeed(self, mock_dl, mock_val):
         from src.pipeline import run_pipeline
         mock_dl.return_value = {
-            'total_tickers': 5,
-            'saved_tickers': 5,
+            'total_tickers': 5, 'saved_tickers': 5,
             'failed_batches': [],
             'circuit_breaker_tripped': False,
             'circuit_breaker_trip_count': 0,
@@ -711,7 +735,11 @@ class TestDroppedCsvAutoSave(BaseTmpDirTest):
             staging_db_path=self.staging_db_path,
             stage_only=True,
         )
-        self.assertNotIn('dropped_csv', manifest)
+        self.assertNotIn('failed_ticker_count', manifest)
+        conn = db.get_connection(self.prod_db_path)
+        cached = db.load_known_bad_tickers(conn, exchange='US', min_failures=1)
+        conn.close()
+        self.assertEqual(cached, set())
 
 
 if __name__ == '__main__':

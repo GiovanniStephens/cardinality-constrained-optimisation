@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
-
 from src.config import DB_PATH
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 -- Broad market groupings (US, NZX, ASX, etc.)
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tickers (
     excluded    TEXT,
     exchange_id INTEGER NOT NULL REFERENCES exchanges(id),
     asset_type  TEXT NOT NULL DEFAULT 'etf'
-        CHECK(asset_type IN ('etf', 'stock', 'fund', 'managed_fund')),
+        CHECK(asset_type IN ('etf', 'stock', 'fund', 'managed_fund',
+                             'crypto', 'currency')),
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE(symbol, exchange_id)
@@ -178,6 +179,18 @@ CREATE TABLE IF NOT EXISTS backtest_holdings (
     UNIQUE(result_id, ticker_id)
 );
 
+-- Tickers that consistently fail to download (delisted, renamed, etc.)
+-- Only filtered out when failure_count >= 2 (to avoid blacklisting
+-- tickers that were merely rate-limited on a single run).
+CREATE TABLE IF NOT EXISTS known_bad_tickers (
+    symbol         TEXT NOT NULL,
+    exchange_id    INTEGER NOT NULL REFERENCES exchanges(id),
+    failure_count  INTEGER NOT NULL DEFAULT 1,
+    first_failed   TEXT NOT NULL,
+    last_failed    TEXT NOT NULL,
+    PRIMARY KEY (symbol, exchange_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tickers_exchange ON tickers(exchange_id);
 CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker_id);
 CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);
@@ -194,6 +207,80 @@ DEFAULT_EXCHANGES = [
     ('ASX', 'Australian Securities Exchange', 'AU'),
 ]
 
+# Current schema version.  Bump this and add a migration function below
+# when the schema changes.
+SCHEMA_VERSION = 1
+
+
+# ─── Migrations ──────────────────────────────────────────────────────────────
+#
+# Each migration is a function that takes a connection and applies one schema
+# change.  Migrations are numbered sequentially starting at 1.  The framework
+# tracks the current version in a ``schema_version`` table and applies any
+# pending migrations in order on every get_connection() call.
+#
+# To add a migration:
+#   1. Write a function ``_migrate_to_N(conn)`` that runs the DDL.
+#   2. Add it to the MIGRATIONS dict: ``N: _migrate_to_N``.
+#   3. Bump SCHEMA_VERSION to N.
+#
+# Example:
+#   def _migrate_to_2(conn):
+#       conn.execute("ALTER TABLE optimisation_runs ADD COLUMN tag TEXT")
+#
+#   MIGRATIONS = {1: _migrate_to_1, 2: _migrate_to_2}
+#   SCHEMA_VERSION = 2
+
+def _migrate_to_1(conn):
+    """Initial schema — applied by SCHEMA_SQL; this is a no-op sentinel."""
+    pass
+
+
+MIGRATIONS = {
+    1: _migrate_to_1,
+}
+
+
+def _get_schema_version(conn):
+    """Return the current schema version, or 0 if the table doesn't exist."""
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else 0
+    except sqlite3.OperationalError:
+        logger.debug("schema_version table not found, assuming version 0")
+        return 0
+
+
+def _apply_migrations(conn):
+    """Apply any pending migrations to bring the DB up to SCHEMA_VERSION."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version ("
+        "  version    INTEGER PRIMARY KEY,"
+        "  applied_at TEXT NOT NULL"
+        ")"
+    )
+    current = _get_schema_version(conn)
+    if current >= SCHEMA_VERSION:
+        return
+
+    for version in range(current + 1, SCHEMA_VERSION + 1):
+        migrate_fn = MIGRATIONS.get(version)
+        if migrate_fn is None:
+            raise RuntimeError(
+                f"Missing migration function for version {version}"
+            )
+        logger.info("Applying migration %d...", version)
+        migrate_fn(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version, applied_at) "
+            "VALUES (?, ?)",
+            (version, datetime.now(timezone.utc).isoformat()),
+        )
+    conn.commit()
+    logger.info("Schema at version %d", SCHEMA_VERSION)
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -208,6 +295,7 @@ def get_connection(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
+    _apply_migrations(conn)
     # Seed exchanges if empty
     count = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     if count == 0:
@@ -477,6 +565,53 @@ def get_latest_prices_date(conn, exchange=None, asset_type=None):
 
     row = conn.execute(query, params).fetchone()
     return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Known-bad ticker cache
+# ---------------------------------------------------------------------------
+
+def save_known_bad_tickers(conn, symbols, exchange='US'):
+    """Record failed tickers. Increments failure_count on repeated failures."""
+    exchange_id = _get_exchange_id(conn, exchange)
+    now = _now()
+    # INSERT on first failure, increment count on subsequent failures
+    conn.executemany(
+        "INSERT INTO known_bad_tickers "
+        "(symbol, exchange_id, failure_count, first_failed, last_failed) "
+        "VALUES (?, ?, 1, ?, ?) "
+        "ON CONFLICT(symbol, exchange_id) DO UPDATE SET "
+        "failure_count = failure_count + 1, last_failed = ?",
+        [(s, exchange_id, now, now, now) for s in symbols],
+    )
+    conn.commit()
+    logger.info("Recorded %d failed tickers (exchange=%s)", len(symbols), exchange)
+
+
+def load_known_bad_tickers(conn, exchange='US', min_failures=2):
+    """Return the set of ticker symbols that have failed >= min_failures times."""
+    exchange_id = _get_exchange_id(conn, exchange)
+    rows = conn.execute(
+        "SELECT symbol FROM known_bad_tickers "
+        "WHERE exchange_id = ? AND failure_count >= ?",
+        (exchange_id, min_failures),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def clear_known_bad_tickers(conn, exchange=None):
+    """Remove known-bad tickers. If exchange is None, clear all."""
+    if exchange is not None:
+        exchange_id = _get_exchange_id(conn, exchange)
+        conn.execute(
+            "DELETE FROM known_bad_tickers WHERE exchange_id = ?",
+            (exchange_id,),
+        )
+    else:
+        conn.execute("DELETE FROM known_bad_tickers")
+    conn.commit()
+    logger.info("Cleared known-bad ticker cache (exchange=%s)",
+                exchange or 'all')
 
 
 def save_forecast_results(conn, expected_returns_s, variances_s,

@@ -14,8 +14,6 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-import pandas as pd
-
 from src import config, db
 from src.data_quality import validate_universe
 from src.download_data import download_and_save
@@ -280,21 +278,21 @@ def _run_download(tickers, conn_staging, checkpoint, checkpoint_path,
     return result
 
 
-def _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest):
-    """Auto-save dropped tickers to CSV if there were failures."""
+def _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest,
+                          prod_db_path, exchange):
+    """Cache failed tickers in the production DB."""
     if not result['failed_batches']:
         return
     all_failed = []
     for fb in result['failed_batches']:
         all_failed.extend(fb['tickers'])
     if all_failed:
-        dropped_path = os.path.join(data_dir,
-                                    f'dropped_{asset_type}_{run_id}.csv')
-        pd.DataFrame({'Tickers': all_failed}).to_csv(dropped_path,
-                                                     index=False)
-        manifest['dropped_csv'] = dropped_path
-        logger.info("Saved %d failed tickers to %s (use --retry-dropped)",
-                    len(all_failed), dropped_path)
+        prod_conn = db.get_connection(prod_db_path)
+        db.save_known_bad_tickers(prod_conn, all_failed, exchange=exchange)
+        prod_conn.close()
+        manifest['failed_ticker_count'] = len(all_failed)
+        logger.info("Cached %d failed tickers in DB (use --retry-dropped "
+                    "or --clear-cache to manage)", len(all_failed))
 
 
 def _run_validation(conn_staging, exchange, manifest):
@@ -463,7 +461,8 @@ def run_pipeline(
         conn_staging.close()
         return _write_and_return()
 
-    _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest)
+    _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest,
+                          prod_db_path, exchange)
 
     if result.get('circuit_breaker_tripped'):
         logger.error("Circuit breaker tripped. Checkpoint saved at %s. "

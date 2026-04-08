@@ -7,10 +7,10 @@ for working with previously scraped lists.
 """
 
 import argparse
-import glob as _glob
 import logging
 import os
 import random
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -20,6 +20,9 @@ import financedatabase as fd
 import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
+
+from src.config import (DOWNLOAD_THREADS, DOWNLOAD_TIMEOUT,
+                        TICKER_EXCLUDE_SUFFIXES, TICKER_EXCLUDE_NAME_PATTERNS)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,10 @@ def _make_session():
 
 # Maps FinanceDatabase asset type labels to DB-canonical names.
 # DB migration uses 'stock' for equities (see db._migrate_ticker_list).
-ASSET_TYPE_MAP = {'equity': 'stock', 'etf': 'etf', 'fund': 'fund'}
+ASSET_TYPE_MAP = {
+    'equity': 'stock', 'etf': 'etf', 'fund': 'fund',
+    'crypto': 'crypto', 'currency': 'currency',
+}
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +140,19 @@ def get_funds(category_groups=None, categories=None, families=None,
     return _filter_by_exchange(funds.select(**kwargs), exchanges)
 
 
+def get_cryptos() -> pd.DataFrame:
+    """Retrieves cryptocurrency tickers from FinanceDatabase."""
+    return fd.Cryptos().select()
+
+
+def get_currencies() -> pd.DataFrame:
+    """Retrieves currency pair tickers from FinanceDatabase."""
+    return fd.Currencies().select()
+
+
+ALL_ASSET_TYPES = ['equities', 'etfs', 'funds', 'cryptos', 'currencies']
+
+
 def build_security_universe(asset_types=None, countries=None, sectors=None,
                             industries=None, exchanges=None,
                             market_caps=None, etf_categories=None,
@@ -141,8 +160,7 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
     """
     Builds a combined universe of securities from multiple asset types.
 
-    :param asset_types: list of asset types to include.
-        Options: 'equities', 'etfs', 'funds'. Defaults to all three.
+    :param asset_types: list of asset types to include. Defaults to ALL_ASSET_TYPES.
     :param countries: country filter (applies to equities).
     :param sectors: sector filter (applies to equities).
     :param industries: industry filter (applies to equities).
@@ -153,45 +171,37 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
     :returns: DataFrame with columns ['Tickers', 'Name', 'Country', 'AssetType'].
     """
     if asset_types is None:
-        asset_types = ['equities', 'etfs', 'funds']
+        asset_types = ALL_ASSET_TYPES
 
     all_securities = []
 
+    def _append(df, asset_type):
+        if df.empty:
+            return
+        all_securities.append(pd.DataFrame({
+            'Tickers': df.index,
+            'Name': df['name'] if 'name' in df.columns else '',
+            'Country': df['country'] if 'country' in df.columns else '',
+            'AssetType': asset_type,
+        }))
+
     if 'equities' in asset_types:
-        equities = get_equities(countries=countries, sectors=sectors,
-                                industries=industries, exchanges=exchanges,
-                                market_caps=market_caps)
-        if not equities.empty:
-            eq_df = pd.DataFrame({
-                'Tickers': equities.index,
-                'Name': equities['name'] if 'name' in equities.columns else '',
-                'Country': equities['country'] if 'country' in equities.columns else '',
-                'AssetType': 'equity'
-            })
-            all_securities.append(eq_df)
+        _append(get_equities(countries=countries, sectors=sectors,
+                             industries=industries, exchanges=exchanges,
+                             market_caps=market_caps), 'equity')
 
     if 'etfs' in asset_types:
-        etfs = get_etfs(category_groups=etf_category_groups,
-                        categories=etf_categories)
-        if not etfs.empty:
-            etf_df = pd.DataFrame({
-                'Tickers': etfs.index,
-                'Name': etfs['name'] if 'name' in etfs.columns else '',
-                'Country': '',
-                'AssetType': 'etf'
-            })
-            all_securities.append(etf_df)
+        _append(get_etfs(category_groups=etf_category_groups,
+                         categories=etf_categories), 'etf')
 
     if 'funds' in asset_types:
-        funds = get_funds()
-        if not funds.empty:
-            fund_df = pd.DataFrame({
-                'Tickers': funds.index,
-                'Name': funds['name'] if 'name' in funds.columns else '',
-                'Country': '',
-                'AssetType': 'fund'
-            })
-            all_securities.append(fund_df)
+        _append(get_funds(), 'fund')
+
+    if 'cryptos' in asset_types:
+        _append(get_cryptos(), 'crypto')
+
+    if 'currencies' in asset_types:
+        _append(get_currencies(), 'currency')
 
     if not all_securities:
         return pd.DataFrame(columns=['Tickers', 'Name', 'Country', 'AssetType'])
@@ -199,6 +209,42 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
     combined = pd.concat(all_securities, ignore_index=True)
     combined = combined.drop_duplicates(subset='Tickers')
     return combined
+
+
+def filter_unwanted_tickers(df, ticker_column='Tickers', name_column='Name',
+                            skip_suffix_filter=False, skip_name_filter=False):
+    """Remove warrants, units, preferred shares, rights, and SPACs.
+
+    Applies two tiers of regex filtering (zero API calls):
+      1a. Ticker suffix patterns (e.g. -WT, -UN, -PA, -RT)
+      1b. Name patterns (e.g. "Acquisition Corp", "Blank Check")
+
+    :param df: DataFrame with at least a ticker column.
+    :param ticker_column: column containing ticker symbols.
+    :param name_column: column containing security names.
+    :param skip_suffix_filter: if True, skip suffix regex filtering.
+    :param skip_name_filter: if True, skip name pattern filtering.
+    :returns: (filtered_df, removed_df) — both DataFrames.
+    """
+    if df.empty:
+        return df.copy(), df.iloc[:0].copy()
+
+    remove_mask = pd.Series(False, index=df.index)
+
+    # Tier 1a: suffix regex on ticker symbols
+    if not skip_suffix_filter and ticker_column in df.columns:
+        suffix_re = re.compile(TICKER_EXCLUDE_SUFFIXES)
+        remove_mask |= df[ticker_column].str.contains(suffix_re, na=False)
+
+    # Tier 1b: name patterns for SPACs/shell companies
+    if not skip_name_filter and name_column in df.columns:
+        combined_pattern = '|'.join(TICKER_EXCLUDE_NAME_PATTERNS)
+        name_re = re.compile(combined_pattern, re.IGNORECASE)
+        remove_mask |= df[name_column].str.contains(name_re, na=False)
+
+    removed = df[remove_mask].copy()
+    filtered = df[~remove_mask].copy()
+    return filtered, removed
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +281,7 @@ def _download_batch(tickers, start, end, session=None):
         session = _make_session()
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
-        threads=2, timeout=30, session=session,
+        threads=DOWNLOAD_THREADS, timeout=DOWNLOAD_TIMEOUT, session=session,
     )
     # Validate returned structure (P5)
     if prices is None or not isinstance(prices, pd.DataFrame) or prices.empty:
@@ -281,16 +327,29 @@ def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
             return None
 
 
+
 def _retry_with_splitting(tickers, start, end, timeout_seconds,
-                          min_batch_size, inter_batch_delay):
-    """Split a failed batch into halves and retry. Returns (df_or_None, failed_tickers)."""
+                          min_batch_size, delay_state):
+    """Split a failed batch into halves and retry. Returns (df_or_None, failed_tickers).
+
+    delay_state is a mutable list [current_delay, max_delay, base_delay]
+    so adaptive backoff propagates across recursive calls.
+    """
+    current_delay, max_delay, base_delay = delay_state
+
     # Try the full list with 2 quick retries
     for attempt in range(1, 3):
         df = _download_batch_with_timeout(tickers, start, end, timeout_seconds)
         if df is not None and not df.empty:
+            # Success — halve delay
+            delay_state[0] = max(base_delay, current_delay * 0.5)
             return df, []
         if attempt < 2:
-            time.sleep(inter_batch_delay)
+            # Failed — escalate delay
+            current_delay = min(current_delay * 2, max_delay)
+            delay_state[0] = current_delay
+            jittered = current_delay * random.uniform(0.8, 1.2)
+            time.sleep(jittered)
 
     # Can't split further — return as failed
     if len(tickers) <= min_batch_size:
@@ -300,13 +359,15 @@ def _retry_with_splitting(tickers, start, end, timeout_seconds,
     mid = len(tickers) // 2
     left, right = tickers[:mid], tickers[mid:]
 
-    time.sleep(inter_batch_delay)
+    jittered = delay_state[0] * random.uniform(0.8, 1.2)
+    time.sleep(jittered)
     df_left, failed_left = _retry_with_splitting(
-        left, start, end, timeout_seconds, min_batch_size, inter_batch_delay)
+        left, start, end, timeout_seconds, min_batch_size, delay_state)
 
-    time.sleep(inter_batch_delay)
+    jittered = delay_state[0] * random.uniform(0.8, 1.2)
+    time.sleep(jittered)
     df_right, failed_right = _retry_with_splitting(
-        right, start, end, timeout_seconds, min_batch_size, inter_batch_delay)
+        right, start, end, timeout_seconds, min_batch_size, delay_state)
 
     # Combine successful results
     parts = [d for d in (df_left, df_right) if d is not None and not d.empty]
@@ -462,38 +523,50 @@ def download_and_save(
                 if batch_df is not None and not batch_df.empty:
                     break
                 # Empty result likely means Yahoo silently rate-limited
-                # (yfinance doesn't raise on throttle, just returns no data)
                 if attempt < max_retries:
                     hit_rate_limit = True
-                    backoff = 2 ** (attempt + 1)
+                    current_delay = min(current_delay * 2, max_rate_limit_delay)
+                    jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
-                                   "likely rate-limited. Backing off %ds",
-                                   batch_num, attempt, max_retries, backoff)
-                    time.sleep(backoff)
+                                   "likely rate-limited. Backing off %.0fs "
+                                   "(adaptive delay now %.0fs)",
+                                   batch_num, attempt, max_retries,
+                                   jittered, current_delay)
+                    time.sleep(jittered)
             except Exception as e:
                 error_msg = str(e).lower()
-                if '429' in error_msg or 'too many' in error_msg or 'rate' in error_msg:
+                is_rate_limit = ('429' in error_msg or 'too many' in error_msg
+                                 or 'rate' in error_msg)
+                if is_rate_limit:
                     hit_rate_limit = True
-                    backoff = 2 ** (attempt + 2)
-                    logger.warning("Rate limited on batch %d, backing off %ds",
-                                   batch_num, backoff)
-                    time.sleep(backoff)
+                    current_delay = min(current_delay * 2, max_rate_limit_delay)
+                    jittered = current_delay * random.uniform(0.8, 1.2)
+                    logger.warning("Rate limited on batch %d (attempt %d/%d), "
+                                   "backing off %.0fs (adaptive delay now %.0fs)",
+                                   batch_num, attempt, max_retries,
+                                   jittered, current_delay)
+                    time.sleep(jittered)
                 else:
                     logger.warning("Batch %d attempt %d/%d failed: %s",
                                    batch_num, attempt, max_retries, e)
                     logger.debug("Batch %d traceback:", batch_num, exc_info=True)
                     if attempt < max_retries:
-                        time.sleep(2 ** attempt)
+                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        time.sleep(jittered)
 
         if batch_df is None or batch_df.empty:
             # Try sub-batch splitting before giving up
             min_sub = config.PIPELINE_MIN_SUB_BATCH_SIZE
             if len(batch) > min_sub:
                 logger.info("Batch %d: full batch failed, attempting sub-batch "
-                            "splitting (min=%d)...", batch_num, min_sub)
+                            "splitting (min=%d, delay=%.0fs)...",
+                            batch_num, min_sub, current_delay)
+                delay_state = [current_delay, max_rate_limit_delay,
+                               rate_limit_delay]
                 split_df, still_failed = _retry_with_splitting(
                     list(batch), start, end, batch_timeout,
-                    min_sub, current_delay)
+                    min_sub, delay_state)
+                current_delay = delay_state[0]  # propagate back
                 if split_df is not None and not split_df.empty:
                     batch_df = split_df
                     if still_failed:
@@ -550,13 +623,14 @@ def download_and_save(
         # Reset circuit breaker on success
         consecutive_failures = 0
 
-        # Adaptive rate limit: escalate after 429, decay after clean success (P3)
-        if hit_rate_limit:
-            current_delay = min(current_delay * 2, max_rate_limit_delay)
-            logger.info("Rate limit hit, inter-batch delay increased to %.1fs",
-                        current_delay)
-        else:
-            current_delay = max(rate_limit_delay, current_delay * 0.8)
+        # Adaptive delay: already escalated during retries above;
+        # on clean success, halve toward the base delay
+        if not hit_rate_limit:
+            old = current_delay
+            current_delay = max(rate_limit_delay, current_delay * 0.5)
+            if current_delay < old:
+                logger.info("Clean batch, adaptive delay halved to %.1fs",
+                            current_delay)
 
         # Filter out tickers with too many nulls
         pre_filter_count = len(batch_df.columns)
@@ -623,17 +697,6 @@ def download_and_save(
     }
 
 
-def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
-    """
-    Saves the given DataFrame to a CSV file.
-
-    :param prices: daily price data.
-    :param filename: name of the file to save the data to.
-    """
-    prices.to_csv(filename)
-    logger.info("Saved %d rows x %d columns to %s", len(prices), len(prices.columns), filename)
-
-
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -659,9 +722,9 @@ def main():
 
     # Universe source arguments
     parser.add_argument('--asset-types', nargs='+',
-                        default=['etfs'],
-                        choices=['equities', 'etfs', 'funds'],
-                        help='Asset types to include.')
+                        default=ALL_ASSET_TYPES,
+                        choices=ALL_ASSET_TYPES,
+                        help='Asset types to include (default: all).')
     parser.add_argument('--countries', nargs='+', default=None,
                         help='Countries to filter equities by. '
                              'Defaults to config.INCLUDED_COUNTRIES (27 countries).')
@@ -697,10 +760,6 @@ def main():
     parser.add_argument('--end',
                         default=__import__('datetime').date.today().isoformat(),
                         help='End date for price data (default: today).')
-    parser.add_argument('--output', default='data/Prices.csv',
-                        help='Output CSV file path for prices.')
-    parser.add_argument('--universe-output', default='data/Securities.csv',
-                        help='Output CSV for the security universe list.')
     parser.add_argument('--null-threshold', type=float, default=0.9,
                         help='Fraction of non-null values required to keep '
                              'a ticker (0-1).')
@@ -737,9 +796,17 @@ def main():
     parser.add_argument('--skip-validation', action='store_true',
                         help='Skip data quality checks after download.')
     parser.add_argument('--retry-dropped', action='store_true',
-                        help='Retry tickers from the most recent '
-                             'data/dropped_*.csv files instead of building '
-                             'a new universe.')
+                        help='Retry tickers from the known-bad cache in the '
+                             'database instead of building a new universe.')
+    parser.add_argument('--ignore-cache', action='store_true',
+                        help='Ignore the known-bad ticker cache and '
+                             'download all tickers.')
+    parser.add_argument('--skip-prefilter', action='store_true',
+                        help='Skip the regex pre-filter that removes '
+                             'warrants, units, preferred shares, rights, '
+                             'and SPACs.')
+    parser.add_argument('--clear-cache', action='store_true',
+                        help='Clear the known-bad ticker cache and exit.')
     args = parser.parse_args()
 
     from src import db, config
@@ -770,6 +837,12 @@ def main():
                      ', '.join(args.exchanges))
 
     # ── Standalone operations (no download needed) ─────────────────────────
+
+    if args.clear_cache:
+        conn = db.get_connection()
+        db.clear_known_bad_tickers(conn, exchange=args.exchange)
+        conn.close()
+        return
 
     if args.rollback:
         from src.pipeline import rollback
@@ -805,50 +878,33 @@ def main():
     # ── Build ticker list ──────────────────────────────────────────────────
 
     if args.retry_dropped:
-        # Find the most recent dropped_*.csv files in data/
-        data_dir = os.path.dirname(db.DB_PATH)
-        dropped_files = sorted(
-            _glob.glob(os.path.join(data_dir, 'dropped_*.csv')),
-            key=os.path.getmtime, reverse=True,
-        )
-        if not dropped_files:
-            logger.error("No dropped_*.csv files found in %s", data_dir)
+        # Load tickers that have failed at least once from the database
+        conn = db.get_connection()
+        # Use min_failures=1 to retry everything that's ever failed
+        known_bad = db.load_known_bad_tickers(conn, exchange=args.exchange,
+                                              min_failures=1)
+        conn.close()
+        if not known_bad:
+            logger.error("No known-bad tickers in DB for exchange %s. "
+                         "Nothing to retry.", args.exchange)
             return
 
-        # Group by asset type: dropped_etf_* -> etf, dropped_stock_* -> stock
-        seen_types = set()
-        frames = []
-        for path in dropped_files:
-            basename = os.path.basename(path)
-            # Extract asset type from filename: dropped_{type}_{id}.csv
-            parts = basename.replace('.csv', '').split('_')
-            if len(parts) >= 2:
-                at = parts[1]  # 'etf' or 'stock'
-            else:
-                at = 'etf'
-            # Only use the most recent file per asset type
-            if at in seen_types:
-                continue
-            seen_types.add(at)
-            df = pd.read_csv(path)
-            if 'Tickers' not in df.columns:
-                logger.warning("Skipping %s: no 'Tickers' column", path)
-                continue
-            # Map back to FinanceDatabase asset type labels for AssetType column
-            fd_type = 'equity' if at == 'stock' else at
-            df['AssetType'] = fd_type
-            df['Name'] = ''
-            df['Country'] = ''
-            frames.append(df)
-            logger.info("Loaded %d dropped tickers from %s (type=%s)",
-                        len(df), path, at)
+        tickers_df = pd.DataFrame({
+            'Tickers': sorted(known_bad),
+            'Name': '',
+            'Country': '',
+            'AssetType': 'equity',  # default; pipeline uses --asset-type
+        })
+        logger.info("Retrying %d known-bad tickers from DB cache "
+                     "(exchange=%s)", len(tickers_df), args.exchange)
 
-        if not frames:
-            logger.error("No valid dropped ticker files found")
-            return
-        tickers_df = pd.concat(frames, ignore_index=True)
-        logger.info("Retrying %d dropped tickers across %d asset types",
-                     len(tickers_df), len(seen_types))
+        # Clear the cache so successfully downloaded tickers aren't
+        # re-cached; those that fail again will get their count incremented
+        conn = db.get_connection()
+        db.clear_known_bad_tickers(conn, exchange=args.exchange)
+        conn.close()
+        logger.info("Cleared known-bad cache (tickers that still fail "
+                     "will be re-recorded)")
 
     elif args.from_csv:
         logger.info("Loading tickers from %s", args.from_csv)
@@ -862,8 +918,7 @@ def main():
             exchanges=args.exchanges,
             market_caps=args.market_caps,
         )
-        tickers_df.to_csv(args.universe_output, index=False)
-        logger.info("Saved %d securities to %s", len(tickers_df), args.universe_output)
+        logger.info("Built universe: %d securities", len(tickers_df))
         for at in tickers_df['AssetType'].unique():
             count = (tickers_df['AssetType'] == at).sum()
             logger.info("  %s: %d", at, count)
@@ -878,6 +933,52 @@ def main():
                             len(country_counts))
                 for country, cnt in country_counts.items():
                     logger.info("    %s: %d", country, cnt)
+
+    # ── Pre-filter unwanted tickers (warrants, units, SPACs, etc.) ─────────
+
+    if not args.skip_prefilter:
+        before = len(tickers_df)
+        name_col = 'Name' if 'Name' in tickers_df.columns else None
+        tickers_df, removed = filter_unwanted_tickers(
+            tickers_df, ticker_column=args.ticker_column,
+            name_column=name_col or 'Name',
+            skip_name_filter=(name_col is None),
+        )
+        if len(removed):
+            logger.info("Pre-filter removed %d unwanted tickers "
+                        "(%d remain). Use --skip-prefilter to bypass.",
+                        len(removed), len(tickers_df))
+            # Log breakdown by removal reason
+            suffix_re = re.compile(TICKER_EXCLUDE_SUFFIXES)
+            suffix_hits = removed[args.ticker_column].str.contains(
+                suffix_re, na=False).sum()
+            name_hits = len(removed) - suffix_hits
+            if suffix_hits:
+                logger.info("  Suffix matches (warrants/units/preferred/rights): %d",
+                            suffix_hits)
+            if name_hits:
+                logger.info("  Name matches (SPACs/shell companies): %d",
+                            name_hits)
+    else:
+        logger.info("--skip-prefilter: skipping ticker pre-filter")
+
+    # ── Filter known-bad tickers ────────────────────────────────────────────
+
+    if not args.ignore_cache:
+        conn = db.get_connection()
+        known_bad = db.load_known_bad_tickers(conn, exchange=args.exchange)
+        conn.close()
+        if known_bad:
+            before = len(tickers_df)
+            tickers_df = tickers_df[~tickers_df[args.ticker_column].isin(known_bad)]
+            removed = before - len(tickers_df)
+            if removed:
+                logger.info("Filtered %d known-bad tickers from DB cache "
+                            "(%d remain, %d in cache). "
+                            "Use --ignore-cache to override.",
+                            removed, len(tickers_df), len(known_bad))
+    else:
+        logger.info("--ignore-cache: skipping known-bad ticker filter")
 
     # ── Determine start date ───────────────────────────────────────────────
 
@@ -1011,16 +1112,6 @@ def main():
                      manifest['status'],
                      dl.get('saved_tickers', 'N/A'),
                      len(dl.get('failed_batches', [])))
-
-    # Step 4: Export to CSV for backward compatibility (only after promotion)
-    if not args.stage_only:
-        conn = db.get_connection()
-        prices_df = db.load_prices(conn, exchange=args.exchange)
-        conn.close()
-        if not prices_df.empty:
-            save_to_csv(prices_df, args.output)
-        else:
-            logger.warning("No prices in database to export.")
 
     # ── Final summary ─────────────────────────────────────────────────────
     _log_final_summary(all_manifests if 'AssetType' in tickers_df.columns
