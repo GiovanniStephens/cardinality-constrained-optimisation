@@ -1,37 +1,31 @@
+"""Forward-walk backtesting with hypothesis testing.
+
+Orchestrates portfolio creation (GA, MC, random), weight optimisation,
+and OOS evaluation across rolling windows. See CLAUDE.md "Sharpe Ratio
+Overfitting" for details on IS vs OOS Sharpe degradation.
+"""
 import logging
 import multiprocessing as mp
 import time
 import uuid
-from dataclasses import dataclass, field
 from multiprocessing import cpu_count
-from typing import Dict, List, Optional, Tuple
+from typing import List
 
 import numpy as np
 import pandas as pd
-from scipy.stats import friedmanchisquare, ttest_rel
 from tqdm import tqdm
 
-from src.portfolio_utils import (
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
-    optimise_weights,
-    maximum_drawdown,
-    downside_deviation,
-    sortino_ratio,
-    calmar_ratio,
-    warn_if_sharpe_suspicious,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.covariance import calculate_covariance_matrix
+from src.weights import optimise_weights
+from src.metrics import warn_if_sharpe_suspicious
 from src.config import (
     BACKTEST_NUM_PORTFOLIOS,
     BACKTEST_NUM_CHILDREN,
-    BACKTEST_NUM_DAYS_OOS,
     BACKTEST_MC_TRIALS,
-    BACKTEST_TRAIN_YEARS,
-    BACKTEST_TEST_DAYS,
-    BACKTEST_STEP_DAYS,
     BACKTEST_FORECAST_WINDOWS,
     BACKTEST_MAX_WEIGHT_FLOOR,
+    BACKTEST_MIN_METHODS_FOR_STATS,
     TRADING_DAYS_PER_YEAR,
     GA_MIN_SECURITIES,
     GA_MAX_SECURITIES,
@@ -41,137 +35,50 @@ from src.config import (
     NZ_ETF_PRICES_CSV,
 )
 
+from src.backtest_types import WindowSpec, PortfolioResult, MethodResults, WindowResult
+from src.backtest_windows import generate_windows, slice_window_data, aggregate_cross_window
+from src.backtest_statistics import difference_of_means_hypothesis_test, paired_t_test, friedman_test
+from src.backtest_simulation import METRIC_NAMES, get_random_weights, run_portfolio, get_statistics  # noqa: F401 — public API
+
 logger = logging.getLogger(__name__)
 
 NUM_JOBS = cpu_count()
 
-METRIC_NAMES = [
-    'annualised_return', 'annualised_volatility', 'sharpe_ratio',
-    'downside_deviation', 'max_drawdown', 'calmar_ratio', 'sortino_ratio',
-]
 
-# Module-level state set before spawning worker pools.
+# ─── Module-level state for multiprocessing ─────────────────────────────────
+#
+# These globals are set before spawning multiprocessing.Pool workers via the
+# _init_worker() and _init_weight_worker() initializer functions.  On macOS
+# (spawn start method), each worker process re-imports this module, so the
+# initializer copies data into these globals in the child process's address
+# space.  On Linux (fork), they are inherited from the parent.
+#
+# This pattern avoids serialising large DataFrames through Pool.map() args
+# (which would pickle them per task).  Instead, each worker reads from its
+# own copy of these module globals.
+#
+# The lifecycle is:
+#   1. Parent sets globals or passes them via Pool(initializer=..., initargs=...)
+#   2. Workers read globals during task execution
+#   3. Pool closes → workers terminate → globals are garbage collected
+#
+# Thread safety: each Pool creates isolated worker processes, so there are
+# no race conditions.  However, these globals must NOT be modified after the
+# Pool is created — only read.
 _backtest_data = None
 _use_forecast = False
-# Log returns (transposed: tickers×dates) and expected returns for weight optimisation.
-_backtest_log_returns = None
-_backtest_expected_returns = None
+_backtest_log_returns = None       # Transposed log returns: tickers × dates
+_backtest_expected_returns = None  # Series of annualised expected returns
 
 
-# ─── Data Structures ──────────────────────────────────────────────────────────
-
-
-@dataclass
-class WindowSpec:
-    """Defines a single train/test window."""
-    train_start: pd.Timestamp
-    train_end: pd.Timestamp
-    test_start: pd.Timestamp
-    test_end: pd.Timestamp
-    label: str
-
-
-@dataclass
-class PortfolioResult:
-    """Result for a single portfolio within a single window and method."""
-    portfolio: List[str]
-    weights: np.ndarray
-    metrics: Dict[str, float]
-    is_sharpe: Optional[float] = None  # in-sample Sharpe (biased upward)
-
-
-@dataclass
-class MethodResults:
-    """All portfolio results for one method in one window."""
-    category: str
-    portfolios: List[PortfolioResult] = field(default_factory=list)
-
-    @property
-    def sharpe_ratios(self) -> np.ndarray:
-        return np.array([p.metrics['sharpe_ratio'] for p in self.portfolios])
-
-    @property
-    def mean_sharpe(self) -> float:
-        return float(self.sharpe_ratios.mean())
-
-
-@dataclass
-class WindowResult:
-    """All method results for one window."""
-    window: WindowSpec
-    method_results: Dict[str, MethodResults] = field(default_factory=dict)
-    elapsed_seconds: float = 0.0
-
-
-# ─── Window Generation ────────────────────────────────────────────────────────
-
-
-def generate_windows(
-    date_index: pd.DatetimeIndex,
-    train_days: int = BACKTEST_TRAIN_YEARS * TRADING_DAYS_PER_YEAR,
-    test_days: int = BACKTEST_TEST_DAYS,
-    step_days: int = BACKTEST_STEP_DAYS,
-) -> List[WindowSpec]:
-    """
-    Generate non-overlapping rolling forward-walk windows from a date index.
-
-    :param date_index: sorted DatetimeIndex of trading days.
-    :param train_days: number of trading days for training.
-    :param test_days: number of trading days for OOS testing.
-    :param step_days: step size in trading days between windows.
-    :return: list of WindowSpec objects.
-    """
-    dates = date_index.sort_values()
-    n = len(dates)
-    min_required = train_days + test_days
-    if n < min_required:
-        raise ValueError(
-            f"Need at least {min_required} trading days, got {n}"
-        )
-
-    windows = []
-    start = 0
-    while start + min_required <= n:
-        train_start = dates[start]
-        train_end = dates[start + train_days - 1]
-        test_start = dates[start + train_days]
-        test_end_idx = min(start + train_days + test_days - 1, n - 1)
-        test_end = dates[test_end_idx]
-
-        label = f"{train_start.year}-{train_end.year}/{test_start.year}"
-        windows.append(WindowSpec(
-            train_start=train_start,
-            train_end=train_end,
-            test_start=test_start,
-            test_end=test_end,
-            label=label,
-        ))
-        start += step_days
-
-    return windows
-
-
-# ─── Portfolio Simulation ─────────────────────────────────────────────────────
-
-
-def get_random_weights(portfolio):
-    """
-    Creates a set of random weighting that sum to 1.
-
-    :portfolio: Input portfolio to get the length.
-    :return: A set of random weights equal in length to the portfolio.
-    """
-    if not portfolio:
-        raise ValueError("Cannot generate weights for an empty portfolio.")
-    random_weights = np.random.random(len(portfolio))
-    random_weights /= np.sum(random_weights)
-    return random_weights
+# ─── Pool Worker Helpers ─────────────────────────────────────────────────────
 
 
 def optimal_weights(portfolio, use_copulae=False):
     """
-    Finds the optimal weights (allocations) for the
-    input portfolio.
+    Finds the optimal weights (allocations) for the input portfolio.
+
+    Reads from module-level globals set by _init_weight_worker().
 
     :portfolio: The input portfolio. List of ticker strings.
     :use_copulae: Whether to use copulae or not.
@@ -187,7 +94,7 @@ def optimal_weights(portfolio, use_copulae=False):
     max_weight = max(1 / (len(portfolio) - 1), BACKTEST_MAX_WEIGHT_FLOOR)
 
     if use_copulae:
-        from src.portfolio_utils import estimate_corr_using_copulas
+        from src.covariance import estimate_corr_using_copulas
         corr = estimate_corr_using_copulas(subset)
         D = np.diag(subset.std().values * np.sqrt(TRADING_DAYS_PER_YEAR))
         cov = np.matmul(np.matmul(D, corr), D)
@@ -202,65 +109,6 @@ def optimal_weights(portfolio, use_copulae=False):
     if not result.success:
         logger.warning("Weight optimization did not converge: %s", result.message)
     return result['x']
-
-
-def run_portfolio(portfolio, weights, oos_log_returns):
-    """
-    Buy-and-hold simulation over the OOS period with natural weight drift.
-
-    :param portfolio: list of ticker strings.
-    :param weights: initial weight allocations (same order as portfolio).
-    :param oos_log_returns: DataFrame with dates as rows, tickers as columns.
-                            Only the OOS period — no offset needed.
-    :return: list of daily portfolio log returns.
-    """
-    subset = oos_log_returns[portfolio]
-    portfolio_returns = []
-    w = weights.copy()
-    for i in range(len(subset)):
-        step_returns = subset.iloc[i].values
-        weighted_return = float(np.sum(step_returns * w))
-        portfolio_returns.append(weighted_return)
-        w = w * np.exp(step_returns) / (1 + weighted_return)
-    return portfolio_returns
-
-
-def get_statistics(portfolio, weights, oos_log_returns):
-    """
-    Compute all performance metrics for one portfolio on an OOS window.
-
-    :param portfolio: list of ticker strings.
-    :param weights: weight allocations.
-    :param oos_log_returns: OOS log returns DataFrame (dates x tickers).
-    :return: dict keyed by metric name.
-    """
-    portfolio_returns = run_portfolio(portfolio, weights, oos_log_returns)
-    max_dd = maximum_drawdown(portfolio_returns)
-    dd = downside_deviation(portfolio_returns)
-    r = np.mean(portfolio_returns) * TRADING_DAYS_PER_YEAR
-    std = np.std(portfolio_returns) * np.sqrt(TRADING_DAYS_PER_YEAR)
-    sharpe = r / std if std != 0 else 0.0
-    return dict(zip(METRIC_NAMES, [
-        r, std, sharpe, dd, max_dd,
-        calmar_ratio(r, max_dd),
-        sortino_ratio(r, dd),
-    ]))
-
-
-def fitness(portfolio_returns):
-    """
-    Calculates the portfolio Sharpe Ratio.
-
-    :portfolio_returns: The input portfolio returns. List of floats.
-    :return: The fitness of the portfolio.
-    """
-    portfolio_std = np.std(portfolio_returns) * np.sqrt(TRADING_DAYS_PER_YEAR)
-    if portfolio_std == 0:
-        return 0.0
-    return (np.mean(portfolio_returns) * TRADING_DAYS_PER_YEAR) / portfolio_std
-
-
-# ─── GA Worker Helpers ────────────────────────────────────────────────────────
 
 
 def _random_selection(num_tickers, min_k, max_k, ticker_names):
@@ -300,8 +148,7 @@ def _compute_weights_for_portfolio(args):
 
 def create_portfolio(num_children):
     """
-    Creates a cardinality-constrained portfolio with the
-    training data.
+    Creates a cardinality-constrained portfolio with the training data.
 
     :num_children: The number of children in the GA to create.
     :return: A list of tickers.
@@ -321,140 +168,7 @@ def create_portfolio(num_children):
     return result.selected_tickers
 
 
-# ─── Statistical Testing ─────────────────────────────────────────────────────
-
-
-def difference_of_means_hypothesis_test(sample_1, sample_2):
-    """
-    Calculates the t statistic for the difference of means.
-
-    Second sample mean minus the first. (i.e. if positive,
-    the second is greater than the first.)
-
-    :sample_1: The first sample. List of floats.
-    :sample_2: The second sample. List of floats.
-    :return: The t statistic.
-    """
-    if not sample_1 or not sample_2:
-        raise ValueError("Both samples must be non-empty")
-    denominator = np.sqrt(
-        np.var(sample_1) / len(sample_1) + np.var(sample_2) / len(sample_2)
-    )
-    if denominator == 0:
-        raise ValueError(
-            "t-statistic is undefined: both samples have zero variance"
-        )
-    return (np.mean(sample_2) - np.mean(sample_1)) / denominator
-
-
-def paired_t_test(sharpes_a, sharpes_b):
-    """
-    Paired t-test across windows (same window, different methods).
-
-    Controls for market-regime effects by pairing observations from
-    the same OOS period.
-
-    :param sharpes_a: dict {window_label: mean_sharpe} for method A.
-    :param sharpes_b: dict {window_label: mean_sharpe} for method B.
-    :return: (t_statistic, p_value) tuple.
-    """
-    common = sorted(set(sharpes_a) & set(sharpes_b))
-    if len(common) < 2:
-        raise ValueError(
-            f"Need at least 2 common windows for paired test, got {len(common)}"
-        )
-    a = [sharpes_a[w] for w in common]
-    b = [sharpes_b[w] for w in common]
-    # ttest_rel computes first - second; swap so positive t = b > a
-    return ttest_rel(b, a)
-
-
-def friedman_test(all_results, categories):
-    """
-    Non-parametric Friedman test for comparing K methods across W windows.
-
-    :param all_results: list of WindowResult objects.
-    :param categories: list of category names to compare.
-    :return: (chi2_statistic, p_value) tuple.
-    """
-    # Build matrix: one column per method, one row per window
-    # Value = mean Sharpe of that method in that window
-    columns = {}
-    for cat in categories:
-        values = []
-        for wr in all_results:
-            if cat in wr.method_results:
-                values.append(wr.method_results[cat].mean_sharpe)
-        columns[cat] = values
-
-    # All methods must have the same number of windows
-    n_windows = len(all_results)
-    valid_cats = [c for c in categories if len(columns.get(c, [])) == n_windows]
-    if len(valid_cats) < 3:
-        raise ValueError(
-            f"Friedman test requires >= 3 methods present in all windows, "
-            f"got {len(valid_cats)}"
-        )
-    arrays = [columns[c] for c in valid_cats]
-    return friedmanchisquare(*arrays)
-
-
-def aggregate_cross_window(all_results):
-    """
-    Build a summary table of mean Sharpe per method per window.
-
-    :param all_results: list of WindowResult objects.
-    :return: DataFrame with methods as rows, windows + mean + std as columns.
-    """
-    data = {}
-    all_categories = set()
-    for wr in all_results:
-        for cat in wr.method_results:
-            all_categories.add(cat)
-
-    for cat in sorted(all_categories):
-        row = {}
-        values = []
-        for wr in all_results:
-            if cat in wr.method_results:
-                val = wr.method_results[cat].mean_sharpe
-                row[wr.window.label] = val
-                values.append(val)
-            else:
-                row[wr.window.label] = np.nan
-        row['mean'] = np.nanmean(values) if values else np.nan
-        row['std'] = np.nanstd(values) if values else np.nan
-        data[cat] = row
-
-    return pd.DataFrame(data).T
-
-
-# ─── Per-Window Evaluation ────────────────────────────────────────────────────
-
-
-def slice_window_data(window, full_prices):
-    """Slice full prices into train/test sets and compute OOS log returns.
-
-    :param window: WindowSpec defining train/test boundaries.
-    :param full_prices: complete price DataFrame.
-    :return: (train_prices, oos_log_returns) tuple.
-    """
-    train_prices = full_prices.loc[window.train_start:window.train_end]
-    test_prices = full_prices.loc[window.test_start:window.test_end]
-    assert train_prices.index.max() < test_prices.index.min(), (
-        f"Window {window.label}: train data ends at {train_prices.index.max()} "
-        f"but test data starts at {test_prices.index.min()}. "
-        f"This would leak test-period data into training."
-    )
-    boundary_price = train_prices.iloc[[-1]]
-    test_with_boundary = pd.concat([boundary_price, test_prices])
-    oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
-    logger.info(
-        "  Window %s: train=%d rows, test=%d rows, %d tickers",
-        window.label, len(train_prices), len(test_prices),
-        train_prices.shape[1],
-    )
-    return train_prices, oos_log_returns
+# ─── Portfolio Creation ──────────────────────────────────────────────────────
 
 
 def create_random_portfolios(columns, num_portfolios, min_securities,
@@ -492,14 +206,7 @@ def evaluate_portfolios(portfolios, weights_list, oos_log_returns,
 
 def _create_ga_portfolios(train_prices, num_portfolios, num_children,
                            use_forecast):
-    """Create portfolios via GA using a worker pool.
-
-    :param train_prices: training price DataFrame.
-    :param num_portfolios: number of portfolios to create.
-    :param num_children: GA population size.
-    :param use_forecast: whether to use forecast-based GA.
-    :return: list of portfolios (each a list of ticker strings).
-    """
+    """Create portfolios via GA using a worker pool."""
     label = "forecast" if use_forecast else "no forecast"
     logger.info("  Creating %d GA portfolios (%s)...", num_portfolios, label)
     start = time.time()
@@ -514,13 +221,7 @@ def _create_ga_portfolios(train_prices, num_portfolios, num_children,
 
 
 def _create_mc_portfolios(train_prices, num_portfolios, mc_trials):
-    """Create portfolios via Monte Carlo search.
-
-    :param train_prices: training price DataFrame.
-    :param num_portfolios: number of portfolios to create.
-    :param mc_trials: Monte Carlo trials per portfolio.
-    :return: list of portfolios (each a list of ticker strings).
-    """
+    """Create portfolios via Monte Carlo search."""
     from src.optimisers import monte_carlo as mc
 
     logger.info("  Creating %d MC portfolios (%d trials)...",
@@ -544,13 +245,7 @@ def _create_mc_portfolios(train_prices, num_portfolios, mc_trials):
 
 
 def _optimise_all_weights(categories, log_returns_T, expected_returns):
-    """Compute weights for all (portfolio, mode) pairs in parallel.
-
-    :param categories: list of (cat_name, portfolios, mode) tuples.
-    :param log_returns_T: transposed training log returns (tickers x dates).
-    :param expected_returns: Series of annualised expected returns.
-    :return: dict mapping cat_name -> list of weight arrays.
-    """
+    """Compute weights for all (portfolio, mode) pairs in parallel."""
     weight_tasks = []
     task_metadata = []
     for cat_name, portfolios, mode in categories:
@@ -571,16 +266,12 @@ def _optimise_all_weights(categories, log_returns_T, expected_returns):
     return category_weights
 
 
+# ─── OOS Evaluation ──────────────────────────────────────────────────────────
+
+
 def _evaluate_oos(portfolios, weights_list, oos_log_returns,
                   train_log_returns):
-    """Evaluate portfolios out-of-sample and compute IS Sharpe diagnostic.
-
-    :param portfolios: list of portfolios (each a list of ticker strings).
-    :param weights_list: list of weight arrays (same order as portfolios).
-    :param oos_log_returns: OOS log returns DataFrame.
-    :param train_log_returns: training log returns for IS Sharpe computation.
-    :return: list of PortfolioResult objects.
-    """
+    """Evaluate portfolios out-of-sample and compute IS Sharpe diagnostic."""
     results = []
     for p, w in zip(portfolios, weights_list):
         metrics = get_statistics(p, w, oos_log_returns)
@@ -588,6 +279,7 @@ def _evaluate_oos(portfolios, weights_list, oos_log_returns,
             is_stats = get_statistics(p, w, train_log_returns)
             is_sr = is_stats['sharpe_ratio']
         except Exception:
+            logger.debug("IS Sharpe computation failed for portfolio", exc_info=True)
             is_sr = None
         results.append(PortfolioResult(
             portfolio=p, weights=w, metrics=metrics, is_sharpe=is_sr,
@@ -632,17 +324,7 @@ def evaluate_window(
     Run the full backtest for a single rolling window.
 
     Orchestrates portfolio creation (GA, MC, random), weight optimisation,
-    and OOS evaluation. See CLAUDE.md "Sharpe Ratio Overfitting" for
-    details on IS vs OOS Sharpe degradation.
-
-    :param window: WindowSpec defining train/test boundaries.
-    :param full_prices: complete price DataFrame (will be sliced).
-    :param conn: sqlite3 connection (for forecast loading).
-    :param num_portfolios: portfolios per method.
-    :param num_children: GA population size.
-    :param mc_trials: Monte Carlo trials per portfolio.
-    :param use_forecast: whether to also run forecast-based GA.
-    :return: WindowResult with all method results.
+    and OOS evaluation.
     """
     window_start = time.time()
     result = WindowResult(window=window)
@@ -714,8 +396,11 @@ def evaluate_window(
 
 
 def main():
+    from src.logging_config import setup_logging
+    setup_logging()
+
     from src import db
-    from src.portfolio_utils import load_training_data
+    from src.data_loading import load_training_data
 
     bt_start = time.time()
 
@@ -830,7 +515,7 @@ def main():
                 logger.warning("  %-40s  %s", label, e)
 
     # ── Friedman omnibus test ─────────────────────────────────────────────
-    if len(core_categories) >= 3 and len(all_results) >= 2:
+    if len(core_categories) >= BACKTEST_MIN_METHODS_FOR_STATS and len(all_results) >= 2:
         try:
             chi2, p_val = friedman_test(all_results, core_categories)
             logger.info("FRIEDMAN TEST: chi2=%.4f  p=%.4f", chi2, p_val)
@@ -844,6 +529,4 @@ def main():
 
 
 if __name__ == '__main__':
-    from src.logging_config import setup_logging
-    setup_logging()
     main()

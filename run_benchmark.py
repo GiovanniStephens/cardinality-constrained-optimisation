@@ -61,7 +61,7 @@ def main():
         return
 
     # Load data
-    from src.portfolio_utils import load_data
+    from src.data_loading import load_data
     print(f"Loading data from {args.data_file}...")
     data = load_data(args.data_file)
     print(f"  {data.shape[1]} instruments, {data.shape[0]} days")
@@ -76,7 +76,7 @@ def main():
             sys.exit(1)
         adapters.append(ALL_ADAPTERS[name]())
 
-    print(f"\nBenchmark configuration:")
+    print("\nBenchmark configuration:")
     print(f"  Time budget: {args.time_budget}s per run")
     print(f"  Runs: {args.runs}")
     print(f"  Base seed: {args.seed}")

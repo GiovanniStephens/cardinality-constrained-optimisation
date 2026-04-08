@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from src import db
-from src.portfolio_utils import OptimisationResult
+from src.portfolio_utils import OptimisationResult  # defined there
 
 
 def make_synthetic_prices(n_days=500, n_tickers=30, seed=42,
@@ -87,10 +87,9 @@ def brute_force_optimal(prices, k):
 
     Uses SLSQP via optimise_weights for each combo. Feasible for small n.
     """
-    from src.portfolio_utils import (
-        calculate_log_returns, optimise_weights, calculate_expected_returns,
-        calculate_covariance_matrix,
-    )
+    from src.returns import calculate_log_returns, calculate_expected_returns
+    from src.covariance import calculate_covariance_matrix
+    from src.weights import optimise_weights
     tickers = list(prices.columns)
     log_returns = calculate_log_returns(prices)
     best_sharpe = -np.inf

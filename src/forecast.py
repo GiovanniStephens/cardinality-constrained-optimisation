@@ -7,14 +7,15 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
-from src.portfolio_utils import calculate_log_returns
+from src.returns import calculate_log_returns
 from src.config import (
     BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR,
-    FORECAST_MIN_OBSERVATIONS,
+    FORECAST_MIN_OBSERVATIONS, FORECAST_MIN_PRICE_FLOOR,
     FORECAST_ARIMA_START_P, FORECAST_ARIMA_START_Q,
     FORECAST_ARIMA_MAX_P, FORECAST_ARIMA_MAX_Q,
     FORECAST_GARCH_P, FORECAST_GARCH_O, FORECAST_GARCH_Q,
     FORECAST_GARCH_DIST, FORECAST_GARCH_VOL,
+    GARCH_SCALE,
     ETF_PRICES_CSV, EXPECTED_RETURNS_CSV, VARIANCES_CSV,
 )
 
@@ -50,7 +51,7 @@ def fit_arima_forecast(training_prices_series, n_periods):
             forecast.iloc[0],
         )
         return float(log_returns.mean() * TRADING_DAYS_PER_YEAR)
-    return float(np.log(max(0.0001, forecast.iloc[-1]) / forecast.iloc[0]))
+    return float(np.log(max(FORECAST_MIN_PRICE_FLOOR, forecast.iloc[-1]) / forecast.iloc[0]))
 
 
 def fit_garch_forecast(log_returns_series, n_periods):
@@ -66,13 +67,13 @@ def fit_garch_forecast(log_returns_series, n_periods):
         raise ValueError(f"Insufficient data: {len(clean)} observations (need >= {FORECAST_MIN_OBSERVATIONS})")
 
     am = arch_model(
-        100 * clean,
+        GARCH_SCALE * clean,
         vol=FORECAST_GARCH_VOL, p=FORECAST_GARCH_P, o=FORECAST_GARCH_O,
         q=FORECAST_GARCH_Q, dist=FORECAST_GARCH_DIST, rescale=False,
     )
     res = am.fit(disp='off')
     forecast = res.forecast(horizon=n_periods, reindex=False)
-    vol = forecast.residual_variance.iloc[-1].mean() / np.power(100, 2) * TRADING_DAYS_PER_YEAR
+    vol = forecast.residual_variance.iloc[-1].mean() / GARCH_SCALE ** 2 * TRADING_DAYS_PER_YEAR
 
     if np.isnan(vol) or vol <= 0:
         logger.warning(
@@ -88,7 +89,7 @@ def main():
     setup_logging()
     start_time = time.time()
 
-    from src.portfolio_utils import load_training_data
+    from src.data_loading import load_training_data
     data = load_training_data(
         exchange='US', csv_fallback=ETF_PRICES_CSV, lookback_days=None)
     training_data = data.iloc[:-BACKTEST_NUM_DAYS_OOS, :]

@@ -6,13 +6,9 @@ import numpy as np
 import pandas as pd
 from multiprocessing import Pool, Manager
 
-from src.portfolio_utils import (
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
-    equal_weight_fitness,
-    OptimisationResult,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.portfolio_utils import OptimisationResult
+from src.metrics import CONSTRAINT_VIOLATION_FITNESS
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
@@ -90,7 +86,7 @@ def batch_fitness(population, expected_returns, centered_returns, T_obs,
         fitness = np.where(
             valid & (port_var > 0),
             port_ret / np.sqrt(port_var),
-            -1e4
+            CONSTRAINT_VIOLATION_FITNESS
         )
 
     return fitness
@@ -268,7 +264,7 @@ def run_parallel_ga(data, num_generations, total_population_size,
 
 def optimise_weights(best_solution, data, min_return=ISLAND_GA_MIN_RETURN):
     """SLSQP weight refinement for a binary selection vector."""
-    from src.portfolio_utils import optimise_weights as _optimise_weights
+    from src.weights import optimise_weights as _optimise_weights
     return _optimise_weights(best_solution, data, min_return=min_return)
 
 
@@ -355,7 +351,8 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
 
-    from src.portfolio_utils import load_training_data, save_optimisation_result
+    from src.data_loading import load_training_data
+    from src.portfolio_utils import save_optimisation_result
 
     data = load_training_data(
         exchange='US',

@@ -1,10 +1,8 @@
-import logging
 import os
 import tempfile
 import unittest
 from unittest.mock import patch
 
-import numpy as np
 import pandas as pd
 
 from src import db
@@ -253,6 +251,95 @@ class TestLogAggregation(unittest.TestCase):
         skipped_logs = [l for l in cm.output if 'had no data' in l]
         self.assertEqual(len(skipped_logs), 1)
         self.assertIn('20/21', skipped_logs[0])
+
+
+class TestFilterUnwantedTickers(unittest.TestCase):
+    """Tests for the regex pre-filter that removes warrants, units, etc."""
+
+    def _make_df(self, tickers, names=None):
+        data = {'Tickers': tickers}
+        if names is not None:
+            data['Name'] = names
+        return pd.DataFrame(data)
+
+    def test_removes_warrants(self):
+        df = self._make_df(['AAPL', 'ACIC-WT', 'MSFT', 'FOO.WS', 'BAR-WTA'])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
+        self.assertEqual(sorted(removed['Tickers'].tolist()),
+                         ['ACIC-WT', 'BAR-WTA', 'FOO.WS'])
+
+    def test_removes_units(self):
+        df = self._make_df(['SPY', 'AAQC-UN', 'QQQ'])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['QQQ', 'SPY'])
+        self.assertEqual(removed['Tickers'].tolist(), ['AAQC-UN'])
+
+    def test_removes_preferred(self):
+        df = self._make_df(['AAPL', 'ABR-PA', 'ABR-PB', 'MSFT'])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
+        self.assertEqual(sorted(removed['Tickers'].tolist()), ['ABR-PA', 'ABR-PB'])
+
+    def test_removes_rights(self):
+        df = self._make_df(['AAPL', 'FOO-RT', 'BAR.RI'])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(filtered['Tickers'].tolist(), ['AAPL'])
+        self.assertEqual(sorted(removed['Tickers'].tolist()), ['BAR.RI', 'FOO-RT'])
+
+    def test_removes_spac_names(self):
+        df = self._make_df(
+            ['ARES', 'AAPL', 'BLNK', 'MSFT'],
+            ['Ares Acquisition Corp', 'Apple Inc', 'Blank Check Co', 'Microsoft Corp'],
+        )
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
+        self.assertEqual(sorted(removed['Tickers'].tolist()), ['ARES', 'BLNK'])
+
+    def test_preserves_normal_tickers(self):
+        df = self._make_df(
+            ['AAPL', 'MSFT', 'GOOG', 'SPY', 'TLT'],
+            ['Apple Inc', 'Microsoft Corp', 'Alphabet Inc', 'SPDR S&P 500', 'iShares 20+ Year'],
+        )
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(len(filtered), 5)
+        self.assertEqual(len(removed), 0)
+
+    def test_skip_suffix_filter(self):
+        df = self._make_df(['AAPL', 'ACIC-WT', 'MSFT'])
+        filtered, removed = dd.filter_unwanted_tickers(df, skip_suffix_filter=True)
+        self.assertEqual(len(filtered), 3)
+        self.assertEqual(len(removed), 0)
+
+    def test_skip_name_filter(self):
+        df = self._make_df(
+            ['ARES', 'AAPL'],
+            ['Ares Acquisition Corp', 'Apple Inc'],
+        )
+        filtered, removed = dd.filter_unwanted_tickers(df, skip_name_filter=True)
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(len(removed), 0)
+
+    def test_no_name_column(self):
+        """Gracefully skips name filter when Name column is absent."""
+        df = self._make_df(['AAPL', 'ACIC-WT', 'MSFT'])
+        # No Name column — should still filter by suffix
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
+        self.assertEqual(removed['Tickers'].tolist(), ['ACIC-WT'])
+
+    def test_empty_dataframe(self):
+        df = self._make_df([])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(len(filtered), 0)
+        self.assertEqual(len(removed), 0)
+
+    def test_dot_separated_suffixes(self):
+        """Tickers using dots instead of dashes are also caught."""
+        df = self._make_df(['ABR.PA', 'FOO.WT', 'MSFT'])
+        filtered, removed = dd.filter_unwanted_tickers(df)
+        self.assertEqual(filtered['Tickers'].tolist(), ['MSFT'])
+        self.assertEqual(sorted(removed['Tickers'].tolist()), ['ABR.PA', 'FOO.WT'])
 
 
 if __name__ == '__main__':

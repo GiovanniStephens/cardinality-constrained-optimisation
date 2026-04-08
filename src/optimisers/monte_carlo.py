@@ -6,18 +6,16 @@ import numpy as np
 import pandas as pd
 from multiprocessing import Pool
 
-from src.portfolio_utils import (
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
-    equal_weight_fitness,
-    optimise_weights,
-    OptimisationResult,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.metrics import equal_weight_fitness
+from src.weights import optimise_weights
+from src.portfolio_utils import OptimisationResult
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
+    ISLAND_GA_MIN_SECURITIES, ISLAND_GA_MAX_SECURITIES,
+    MC_NUM_TRIALS,
     ETF_PRICES_CSV,
 )
 
@@ -150,17 +148,18 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
 
-    from src.portfolio_utils import load_training_data, save_optimisation_result
+    from src.data_loading import load_training_data
+    from src.portfolio_utils import save_optimisation_result
     from src import db
 
     conn = db.get_connection()
     data = load_training_data(exchange='US', csv_fallback=ETF_PRICES_CSV)
 
     # ── Parameters ────────────────────────────────────────────────────────
-    num_trials = 10_000_000
+    num_trials = MC_NUM_TRIALS
     num_processes = os.cpu_count()
-    min_num_etfs = 10
-    max_num_etfs = 20
+    min_num_etfs = ISLAND_GA_MIN_SECURITIES
+    max_num_etfs = ISLAND_GA_MAX_SECURITIES
 
     # ── Monte Carlo search ────────────────────────────────────────────────
     mc_start = time.time()

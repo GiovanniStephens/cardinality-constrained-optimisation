@@ -120,7 +120,7 @@ def _check_zero_variance(prices_by_ticker, min_annual_vol):
     def _check(tid, closes_list):
         closes = np.array(closes_list, dtype=float)
         closes = closes[closes > 0]
-        if len(closes) < 30:
+        if len(closes) < config.DATA_QUALITY_MIN_OBS:
             return None
         log_rets = np.diff(np.log(closes))
         annual_vol = np.std(log_rets) * np.sqrt(config.TRADING_DAYS_PER_YEAR)
@@ -128,7 +128,7 @@ def _check_zero_variance(prices_by_ticker, min_annual_vol):
             return (tid, f"zero_variance:vol={annual_vol:.6f}")
         return None
 
-    return _check_per_ticker(prices_by_ticker, 30, _check)
+    return _check_per_ticker(prices_by_ticker, config.DATA_QUALITY_MIN_OBS, _check)
 
 
 def _check_frozen_prices(prices_by_ticker, max_consecutive_same):
@@ -170,20 +170,20 @@ def _check_extreme_returns(prices_by_ticker, max_extreme_pct):
     def _check(tid, closes_list):
         closes = np.array(closes_list, dtype=float)
         closes = closes[closes > 0]
-        if len(closes) < 60:
+        if len(closes) < config.DATA_QUALITY_MIN_OBS_EXTREME:
             return None
         log_rets = np.diff(np.log(closes))
         median = np.median(log_rets)
         robust_std = np.median(np.abs(log_rets - median)) * MAD_TO_STD
         if robust_std == 0:
             return None  # zero_variance check handles this
-        extreme_count = np.sum(np.abs(log_rets) > 10 * robust_std)
+        extreme_count = np.sum(np.abs(log_rets) > config.DATA_QUALITY_EXTREME_RETURN_MULTIPLIER * robust_std)
         extreme_pct = extreme_count / len(log_rets)
         if extreme_pct > max_extreme_pct:
             return (tid, f"extreme_returns:{extreme_pct:.1%}_of_days")
         return None
 
-    return _check_per_ticker(prices_by_ticker, 60, _check)
+    return _check_per_ticker(prices_by_ticker, config.DATA_QUALITY_MIN_OBS_EXTREME, _check)
 
 
 # ─── Main validation entry point ─────────────────────────────────────────────

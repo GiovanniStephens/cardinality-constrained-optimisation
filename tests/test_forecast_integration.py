@@ -19,7 +19,7 @@ from tests.helpers import make_synthetic_prices, make_arima_series, get_memory_d
 
 from src import db
 from src.config import GARCH_SCALE, TRADING_DAYS_PER_YEAR
-from src.portfolio_utils import calculate_log_returns
+from src.returns import calculate_log_returns
 
 
 @requires_integration

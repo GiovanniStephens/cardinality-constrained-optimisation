@@ -22,19 +22,15 @@ from typing import List
 
 import numpy as np
 
-# Ensure project root is on sys.path
+# Ensure project root is on sys.path (needed for tests.helpers which isn't
+# installed as a package).  Not needed for src.* if pip install -e . was used.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tests.helpers import make_synthetic_prices
-from src.portfolio_utils import (
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
-    equal_weight_fitness,
-    sharpe_ratio,
-    optimise_weights,
-    write_binary_data,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.covariance import calculate_covariance_matrix
+from src.metrics import equal_weight_fitness, sharpe_ratio
+from src.binary_io import write_binary_data
 from src.optimisers.island_ga import batch_fitness, calculate_fitness
 
 
@@ -221,27 +217,28 @@ def bench_pygad_fitness(prices, portfolios, min_time=MIN_TIME):
     """Pygad fitness path — includes SLSQP weight optimisation per eval."""
     import logging as _logging
     import warnings
-    from src.optimisers import pygad_ga
+    from src.optimisers.pygad_ga import PygadOptimiser
 
-    # Prepare module-level state for the legacy fitness() function
-    pygad_ga.prepare_opt_inputs(prices, use_forecasts=False)
-    pygad_ga.MIN_NUM_STOCKS = N
-    pygad_ga.MAX_NUM_STOCKS = N
+    opt = PygadOptimiser(
+        num_children=50,
+        min_securities=N,
+        max_securities=N,
+        use_forecasts=False,
+    )
+    opt._prepare_inputs(prices)
+    fitness_fn = opt._make_fitness_fn()
 
     individual = portfolios[0].astype(int)
 
-    # Suppress noisy convergence warnings from SLSQP and CCC overflow
+    # Suppress noisy convergence warnings from SLSQP
     pygad_logger = _logging.getLogger('src.optimisers.pygad_ga')
-    pu_logger = _logging.getLogger('src.portfolio_utils')
-    prev_pygad = pygad_logger.level
-    prev_pu = pu_logger.level
+    prev_level = pygad_logger.level
     pygad_logger.setLevel(_logging.CRITICAL)
-    pu_logger.setLevel(_logging.CRITICAL)
 
     def fn():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            pygad_ga.fitness(individual, pygad_ga._ctx.data)
+            fitness_fn(None, individual, 0)
         return 1
 
     try:
@@ -252,8 +249,7 @@ def bench_pygad_fitness(prices, portfolios, min_time=MIN_TIME):
             min_time=min_time, num_runs=2,
         )
     finally:
-        pygad_logger.setLevel(prev_pygad)
-        pu_logger.setLevel(prev_pu)
+        pygad_logger.setLevel(prev_level)
 
 
 def bench_cpp_mc(log_returns, num_threads, time_budget=CPP_TIME_BUDGET):
@@ -310,7 +306,7 @@ def bench_cpp_mc(log_returns, num_threads, time_budget=CPP_TIME_BUDGET):
         elapsed = parsed.get('elapsed_seconds', time_budget)
 
         if total_trials == 0:
-            print(f"  WARNING: C++ reported 0 trials", flush=True)
+            print("  WARNING: C++ reported 0 trials", flush=True)
             return None
 
         evals_per_sec = total_trials / elapsed if elapsed > 0 else 0
@@ -393,7 +389,7 @@ def bench_cpp_ga(log_returns, num_threads, time_budget=CPP_TIME_BUDGET,
         elapsed = parsed.get('elapsed_seconds', 0)
 
         if total_trials == 0 or elapsed <= 0:
-            print(f"  WARNING: C++ reported 0 trials or elapsed time", flush=True)
+            print("  WARNING: C++ reported 0 trials or elapsed time", flush=True)
             return None
 
         evals_per_sec = total_trials / elapsed
@@ -470,6 +466,9 @@ def save_json(results: List[ThroughputResult], path):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    from src.logging_config import setup_logging
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Portfolio evaluation throughput benchmark")
     parser.add_argument('--quick', action='store_true',
                         help='Reduce time budgets for faster execution')
@@ -533,6 +532,26 @@ def main():
                 print(f"  {r.method}: {r.evals_per_sec:,.0f} evals/sec")
             else:
                 print(f"  C++ GA ({cpu_count} islands): skipped")
+
+        # C++ GA with Metal GPU (single island — isolates GPU throughput)
+        r = bench_cpp_ga(log_returns, num_threads=1, time_budget=cpp_time,
+                         label="C++ GA (GPU, 1 island)", extra_args=['--gpu'])
+        if r:
+            results.append(r)
+            print(f"  {r.method}: {r.evals_per_sec:,.0f} evals/sec")
+        else:
+            print("  C++ GA (GPU, 1 island): skipped")
+
+        # GPU with all islands
+        if cpu_count > 1:
+            r = bench_cpp_ga(log_returns, num_threads=cpu_count, time_budget=cpp_time,
+                             label=f"C++ GA (GPU, {cpu_count} islands)",
+                             extra_args=['--gpu'])
+            if r:
+                results.append(r)
+                print(f"  {r.method}: {r.evals_per_sec:,.0f} evals/sec")
+            else:
+                print(f"  C++ GA (GPU, {cpu_count} islands): skipped")
 
     # ── Python benchmarks ──────────────────────────────────────────────────
     print("\n--- Python Benchmarks ---", flush=True)

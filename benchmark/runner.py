@@ -5,15 +5,13 @@ import json
 import logging
 import os
 import pickle
-import time
-from multiprocessing import cpu_count
 from typing import List, Optional
 
 import pandas as pd
 
 from benchmark.adapters import OptimiserAdapter
 from benchmark.results import BenchmarkSuite
-from src.portfolio_utils import warn_if_sharpe_suspicious
+from src.metrics import warn_if_sharpe_suspicious
 
 logger = logging.getLogger(__name__)
 

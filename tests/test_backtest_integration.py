@@ -18,19 +18,13 @@ from tests import requires_integration
 from tests.helpers import make_synthetic_prices, get_memory_db
 
 from src import db
-from src.backtest import (
-    generate_windows,
-    slice_window_data,
-    create_random_portfolios,
-    get_random_weights,
-    evaluate_portfolios,
-    aggregate_cross_window,
-    paired_t_test,
-    friedman_test,
-    get_statistics,
-    WindowResult,
-)
-from src.portfolio_utils import calculate_log_returns, optimise_weights
+from src.backtest import create_random_portfolios, evaluate_portfolios
+from src.backtest_types import WindowResult
+from src.backtest_windows import generate_windows, slice_window_data, aggregate_cross_window
+from src.backtest_simulation import get_random_weights
+from src.backtest_statistics import paired_t_test
+from src.returns import calculate_log_returns
+from src.weights import optimise_weights
 
 
 def _run_window(prices, window, conn):

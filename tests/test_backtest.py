@@ -1,15 +1,9 @@
 import os
 import unittest
 from src import backtest
-from src.portfolio_utils import (
-    load_data,
-    calculate_log_returns,
-    calculate_expected_returns,
-    maximum_drawdown,
-    downside_deviation,
-    sortino_ratio,
-    calmar_ratio,
-)
+from src.data_loading import load_data
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.metrics import maximum_drawdown, downside_deviation, sortino_ratio, calmar_ratio
 from src.config import BACKTEST_TEST_DAYS, TRADING_DAYS_PER_YEAR
 import numpy as np
 import pandas as pd
@@ -136,11 +130,6 @@ class TestBacktest(unittest.TestCase):
 
     def test_calmar_ratio_zero_drawdown(self):
         result = calmar_ratio(0.1, 0)
-        self.assertEqual(result, 0.0)
-
-    def test_fitness_zero_std(self):
-        constant_returns = [0.0] * 100
-        result = backtest.fitness(constant_returns)
         self.assertEqual(result, 0.0)
 
     def test_maximum_drawdown_single_return(self):
@@ -438,7 +427,7 @@ class TestBacktestValidation(unittest.TestCase):
         The first OOS log return must reflect the price change from
         the last training day to the first test day, not be zero.
         """
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
         # Construct prices: train ends at 100, test starts at 105
         train_dates = pd.bdate_range('2020-01-01', periods=10, freq='B')
         test_dates = pd.bdate_range(train_dates[-1] + pd.Timedelta(days=1),
@@ -677,7 +666,7 @@ class TestBacktestDataIsolation(unittest.TestCase):
         Inject 999.0 as a price in the test period. After computing log returns
         on training data, no value should be derived from 999.0.
         """
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
         prices = self._make_prices(n_days=80, n_tickers=3)
         # Inject canary in the last 20 days (test period)
         prices.iloc[-20:, 0] = 999.0
@@ -721,7 +710,7 @@ class TestBacktestDataIsolation(unittest.TestCase):
         test_prices = prices.iloc[n_train:]
         boundary = train_prices.iloc[[-1]]
         test_with_boundary = pd.concat([boundary, test_prices])
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
         oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
 
         weights = np.array([1/3, 1/3, 1/3])
@@ -737,7 +726,7 @@ class TestBacktestDataIsolation(unittest.TestCase):
         Window 1 has 3 tickers, Window 2 has 5. After preparing Window 2,
         log returns should have 5 columns (tickers), not 3.
         """
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
         prices_3 = self._make_prices(n_days=80, n_tickers=3, seed=1)
         prices_5 = self._make_prices(n_days=80, n_tickers=5, seed=2)
 
@@ -774,7 +763,7 @@ class TestSurvivorshipBias(unittest.TestCase):
 
         # Attempting to run_portfolio with the delisted ticker
         # The log returns for B will be NaN → replaced with 0 (safe)
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
         train_prices = prices.iloc[:n_train]
         boundary = train_prices.iloc[[-1]]
         test_with_boundary = pd.concat([boundary, test_prices])
@@ -801,8 +790,9 @@ class TestSurvivorshipBias(unittest.TestCase):
         # Training on first 60 days: B is all NaN
         train = prices.iloc[:60]
         # With high coverage requirement, B should be dropped
-        from src.portfolio_utils import load_prices_csv
-        import tempfile, os
+        from src.data_loading import load_prices_csv
+        import tempfile
+        import os
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             train.to_csv(f.name)
             path = f.name
@@ -871,7 +861,7 @@ class TestBacktestEndToEnd(unittest.TestCase):
             index=dates, columns=tickers,
         )
 
-        from src.portfolio_utils import calculate_log_returns
+        from src.returns import calculate_log_returns
 
         train_prices = prices.iloc[:n_train]
         test_prices = prices.iloc[n_train:]

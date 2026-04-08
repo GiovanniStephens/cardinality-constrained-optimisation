@@ -115,7 +115,7 @@ class TestBenchmarkResume(unittest.TestCase):
 
     def test_resume_skips_completed(self):
         from benchmark.adapters import MIPAdapter
-        from benchmark.runner import BenchmarkRunner, load_suite
+        from benchmark.runner import BenchmarkRunner
 
         prices = make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
         adapter = MIPAdapter(max_securities=5)

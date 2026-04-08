@@ -5,13 +5,11 @@ import warnings
 import numpy as np
 import pandas as pd
 import pygad
-from src.portfolio_utils import (
-    load_data, calculate_log_returns,
-    OptimisationResult, calculate_covariance_matrix,
-    check_observation_ratio,
-    optimise_weights as _optimise_weights,
-    estimate_corr_using_copulas,
-)
+from src.returns import calculate_log_returns
+from src.covariance import calculate_covariance_matrix
+from src.weights import optimise_weights as _optimise_weights
+from src.data_loading import load_data
+from src.portfolio_utils import OptimisationResult
 from src.optimisers.base import BaseOptimiser
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
@@ -66,6 +64,7 @@ class PygadOptimiser(BaseOptimiser):
         self._data = None
         self._expected_returns = None
         self._variances = None
+        self._forecast_source = None  # 'db', 'csv', or 'historical_fallback'
 
     def _prepare_inputs(self, prices):
         """Prepare log returns, expected returns, and variances."""
@@ -82,21 +81,25 @@ class PygadOptimiser(BaseOptimiser):
                 if not er.empty and not var.empty:
                     self._expected_returns = er
                     self._variances = var
+                    self._forecast_source = 'db'
             if self._expected_returns is None:
                 try:
                     self._variances = load_data(VARIANCES_CSV)
                     self._expected_returns = load_data(EXPECTED_RETURNS_CSV)['0']
+                    self._forecast_source = 'csv'
                 except (FileNotFoundError, KeyError) as e:
                     logger.warning(
-                        "Could not load forecast files (%s); "
-                        "falling back to historical estimates.", e)
+                        "Forecasts requested but unavailable (%s); "
+                        "using historical estimates.", e)
                     self._variances = None
                     self._expected_returns = (
                         self._data.mean() * TRADING_DAYS_PER_YEAR)
+                    self._forecast_source = 'historical_fallback'
         else:
             self._variances = None
             self._expected_returns = (
                 self._data.mean() * TRADING_DAYS_PER_YEAR)
+            self._forecast_source = 'historical'
 
     def _get_cov_matrix(self, ret_data, use_copulae=False):
         """CCC covariance matrix using instance variances."""
@@ -235,6 +238,7 @@ class PygadOptimiser(BaseOptimiser):
                 'num_generations': self.num_generations,
                 'use_copulae': self.use_copulae,
                 'use_forecasts': self.use_forecasts,
+                'forecast_source': self._forecast_source,
                 'elapsed_seconds': elapsed,
             },
         )
@@ -247,7 +251,8 @@ if __name__ == '__main__':
     from src.logging_config import setup_logging
     setup_logging()
 
-    from src.portfolio_utils import load_training_data, save_optimisation_result
+    from src.data_loading import load_training_data
+    from src.portfolio_utils import save_optimisation_result
 
     from src import db as _db
     conn = _db.get_connection()

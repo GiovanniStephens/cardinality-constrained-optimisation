@@ -4,25 +4,18 @@ import numpy as np
 import pandas as pd
 import pulp
 
-from src.portfolio_utils import (
-    load_prices_csv,
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_variances,
-    calculate_covariance_matrix,
-    calculate_portfolio_variance,
-    optimise_weights,
-    OptimisationResult,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns, calculate_variances
+from src.covariance import calculate_covariance_matrix
+from src.weights import calculate_portfolio_variance, calculate_portfolio_return, optimise_weights
+from src.data_loading import load_prices_csv
+from src.portfolio_utils import OptimisationResult
 from src.optimisers.base import BaseOptimiser
-from src.config import GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS
+from src.config import (
+    GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS,
+    BACKTEST_NUM_DAYS_OOS,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def calculate_portfolio_return(weights, expected_returns):
-    """Compute expected portfolio return given weights and per-asset returns."""
-    return np.dot(weights, expected_returns)
 
 
 def portfolio_sharpe_ratio(selection_vars, expected_returns, log_returns):
@@ -103,14 +96,14 @@ if __name__ == '__main__':
     setup_logging()
     # Load data
     prices_df = load_prices_csv(ETF_PRICES_CSV)
-    prices_df = prices_df.iloc[:-213]
+    prices_df = prices_df.iloc[:-BACKTEST_NUM_DAYS_OOS]
     logger.info("Loaded price data: %d rows x %d columns", *prices_df.shape)
     log_returns = calculate_log_returns(prices_df)
     expected_returns = calculate_expected_returns(log_returns)
     volatilities = np.sqrt(calculate_variances(log_returns))
 
     # Define risk aversion coefficient
-    risk_aversion = 0.8     # Adjust based on risk preference
+    risk_aversion = MIP_DEFAULT_RISK_AVERSION
 
     # Setup and solve the MILP problem
     portfolio_problem, selection = setup_portfolio_selection_problem(log_returns.columns, expected_returns,
@@ -119,7 +112,7 @@ if __name__ == '__main__':
     logger.info("MILP solver status: %s", pulp.LpStatus[portfolio_problem.status])
 
     if portfolio_problem.status != pulp.constants.LpStatusOptimal:
-        print(f"Warning: Solver did not find optimal solution. Status: {pulp.LpStatus[portfolio_problem.status]}")
+        logger.warning("Solver did not find optimal solution. Status: %s", pulp.LpStatus[portfolio_problem.status])
 
     # Output the selected ETFs
     selected = [etf for etf in log_returns.columns if pulp.value(selection[etf]) == 1]

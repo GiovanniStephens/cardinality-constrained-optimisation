@@ -6,7 +6,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.portfolio_utils import OptimisationResult, calculate_log_returns
+from src.portfolio_utils import OptimisationResult
+from src.returns import calculate_log_returns
 from tests.helpers import (
     OptimiserTestMixin,
     make_small_divergent_prices,
@@ -255,8 +256,9 @@ class TestOptimiserDataBoundary(unittest.TestCase):
         with insufficient data. This test verifies that pipeline-level
         filtering removes the all-NaN ticker before the optimiser sees it.
         """
-        import tempfile, os
-        from src.portfolio_utils import load_prices_csv
+        import tempfile
+        import os
+        from src.data_loading import load_prices_csv
 
         # Extend training prices with a late-entry ticker (all NaN)
         late_ticker = pd.DataFrame(
@@ -302,7 +304,7 @@ class TestBatchFitnessSubsetCov(unittest.TestCase):
 
     def test_matches_manual_computation(self):
         from src.optimisers.island_ga import batch_fitness
-        from src.portfolio_utils import (
+        from src.returns import (
             calculate_log_returns, calculate_expected_returns,
         )
         from src.config import TRADING_DAYS_PER_YEAR
@@ -386,7 +388,7 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
         return pd.DataFrame(returns, index=dates, columns=['X', 'Y'])
 
     def test_copula_uses_only_provided_data(self):
-        from src.optimisers.pygad_ga import estimate_corr_using_copulas
+        from src.covariance import estimate_corr_using_copulas
         pos_data = self._make_correlated_returns(n=500, rho=0.8, seed=42)
         corr_pos = estimate_corr_using_copulas(pos_data)
         off_diag_pos = corr_pos[0, 1] if isinstance(corr_pos, np.ndarray) else corr_pos.iloc[0, 1]
@@ -398,7 +400,7 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
         self.assertLess(off_diag_neg, 0.0)
 
     def test_copula_fallback_preserves_correlation_sign(self):
-        from src.optimisers.pygad_ga import estimate_corr_using_copulas
+        from src.covariance import estimate_corr_using_copulas
         pos_data = self._make_correlated_returns(n=15, rho=0.9, seed=42)
         corr = estimate_corr_using_copulas(pos_data)
         off_diag = corr[0, 1] if isinstance(corr, np.ndarray) else corr.iloc[0, 1]

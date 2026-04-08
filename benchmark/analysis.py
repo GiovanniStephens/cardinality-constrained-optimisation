@@ -1,14 +1,17 @@
 """Statistical analysis and plotting for benchmark results."""
 
+import logging
 import os
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 from benchmark.results import BenchmarkResult, BenchmarkSuite
-from src.portfolio_utils import warn_if_sharpe_suspicious
+from src.metrics import warn_if_sharpe_suspicious
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +98,7 @@ def nemenyi_posthoc(suite: BenchmarkSuite) -> Optional[pd.DataFrame]:
     try:
         import scikit_posthocs as sp
     except ImportError:
-        print("scikit-posthocs not installed. Skipping Nemenyi test.")
+        logger.warning("scikit-posthocs not installed. Skipping Nemenyi test.")
         return None
 
     seed_results, common_seeds, algos = _build_seed_matrix(suite)
@@ -225,7 +228,7 @@ def plot_convergence_curves(suite: BenchmarkSuite, time_budget: float,
     path = os.path.join(output_dir, 'convergence_curves.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 def plot_boxplots(suite: BenchmarkSuite, output_dir: str = 'benchmark_results'):
@@ -255,7 +258,7 @@ def plot_boxplots(suite: BenchmarkSuite, output_dir: str = 'benchmark_results'):
     path = os.path.join(output_dir, 'boxplots.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 def plot_performance_profile(suite: BenchmarkSuite, time_budget: float,
@@ -319,7 +322,7 @@ def plot_performance_profile(suite: BenchmarkSuite, time_budget: float,
         cdf = [sum(1 for r in ratios if r <= t) / n for t in taus]
         ax.plot(taus, cdf, label=algo, linewidth=2)
 
-    ax.set_xlabel(f'Performance ratio (time / best time)')
+    ax.set_xlabel('Performance ratio (time / best time)')
     ax.set_ylabel('Fraction of runs')
     ax.set_title(f'Performance Profile (target = {target_fraction:.0%} of best)')
     ax.legend()
@@ -330,7 +333,7 @@ def plot_performance_profile(suite: BenchmarkSuite, time_budget: float,
     path = os.path.join(output_dir, 'performance_profile.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +403,7 @@ def generate_full_report(suite: BenchmarkSuite, time_budget: float,
             print(f"  Statistic: {fr['statistic']:.4f}")
             print(f"  p-value: {fr['p_value']:.6f}")
             print(f"  Seeds: {fr['num_seeds']}")
-            print(f"  Mean rankings (lower=better):")
+            print("  Mean rankings (lower=better):")
             for algo, rank in sorted(fr['rankings'].items(), key=lambda x: x[1]):
                 print(f"    {algo}: {rank:.2f}")
 

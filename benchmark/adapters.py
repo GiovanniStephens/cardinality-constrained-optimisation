@@ -1,9 +1,9 @@
 """Adapter classes wrapping each optimisation algorithm for benchmarking."""
 
+import logging
 import os
 import re
 import subprocess
-import sys
 import time
 from abc import ABC, abstractmethod
 from multiprocessing import Manager, Pool
@@ -12,6 +12,24 @@ import numpy as np
 import pandas as pd
 
 from benchmark.results import BenchmarkResult, ConvergenceRecord
+
+logger = logging.getLogger(__name__)
+from src.config import (
+    ISLAND_GA_NUM_GENERATIONS,
+    ISLAND_GA_POPULATION_SIZE,
+    ISLAND_GA_NUM_ELITES,
+    ISLAND_GA_MIGRATION_INTERVAL,
+    ISLAND_GA_MIGRATION_RATE,
+    GA_MIN_SECURITIES,
+    GA_MAX_SECURITIES,
+    GA_PARENT_FRACTION,
+    GA_ELITISM_FRACTION,
+    GA_CROSSOVER_PROBABILITY,
+    GA_TOURNAMENT_SIZE,
+    GA_EARLY_STOP_SATURATE,
+    MIP_DEFAULT_RISK_AVERSION,
+    RISK_FREE_RATE,
+)
 
 
 class OptimiserAdapter(ABC):
@@ -33,9 +51,13 @@ class SimpleGAAdapter(OptimiserAdapter):
 
     name = "Island GA (Python)"
 
-    def __init__(self, num_generations=200, total_population_size=2000,
-                 num_elites=50, migration_interval=10, migration_rate=0.1,
-                 min_etfs=3, max_etfs=15, min_return=None):
+    def __init__(self, num_generations=ISLAND_GA_NUM_GENERATIONS,
+                 total_population_size=ISLAND_GA_POPULATION_SIZE,
+                 num_elites=ISLAND_GA_NUM_ELITES,
+                 migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
+                 migration_rate=ISLAND_GA_MIGRATION_RATE,
+                 min_etfs=GA_MIN_SECURITIES, max_etfs=GA_MAX_SECURITIES,
+                 min_return=None):
         self.num_generations = num_generations
         self.total_population_size = total_population_size
         self.num_elites = num_elites
@@ -48,7 +70,7 @@ class SimpleGAAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         from src.optimisers.island_ga import genetic_algorithm
-        from src.portfolio_utils import optimise_weights
+        from src.weights import optimise_weights
         np.random.seed(seed)
         num_islands = min(os.cpu_count(), 4)
         manager = Manager()
@@ -115,7 +137,7 @@ class SimpleGAAdapter(OptimiserAdapter):
                         best_fitness = -opt_result.fun
                         optimised_weights = opt_result.x
                 except Exception:
-                    pass
+                    logger.debug("Weight optimisation failed in SimpleGA", exc_info=True)
 
         return BenchmarkResult(
             algorithm=self.name,
@@ -138,8 +160,9 @@ class PygadGAAdapter(OptimiserAdapter):
 
     name = "Pygad GA"
 
-    def __init__(self, num_generations=200, population_size=50,
-                 min_etfs=3, max_etfs=15):
+    def __init__(self, num_generations=ISLAND_GA_NUM_GENERATIONS,
+                 population_size=50,
+                 min_etfs=GA_MIN_SECURITIES, max_etfs=GA_MAX_SECURITIES):
         self.num_generations = num_generations
         self.population_size = population_size
         self.min_etfs = min_etfs
@@ -200,20 +223,20 @@ class PygadGAAdapter(OptimiserAdapter):
             ga_instance = pygad.GA(
                 num_generations=self.num_generations,
                 initial_population=initial_pop,
-                num_parents_mating=max(2, int(self.population_size * 0.30)),
+                num_parents_mating=max(2, int(self.population_size * GA_PARENT_FRACTION)),
                 gene_type=int,
                 init_range_low=0, init_range_high=2,
                 parent_selection_type='tournament',
-                K_tournament=5,
+                K_tournament=GA_TOURNAMENT_SIZE,
                 keep_parents=0,
-                keep_elitism=max(1, int(self.population_size * 0.10)),
+                keep_elitism=max(1, int(self.population_size * GA_ELITISM_FRACTION)),
                 random_mutation_min_val=-1, random_mutation_max_val=1,
                 mutation_type="random",
                 crossover_type="uniform",
-                crossover_probability=0.85,
+                crossover_probability=GA_CROSSOVER_PROBABILITY,
                 fitness_func=timed_fitness,
                 on_generation=on_gen_callback,
-                stop_criteria='saturate_15',
+                stop_criteria=f'saturate_{GA_EARLY_STOP_SATURATE}',
             )
             ga_instance.run()
 
@@ -241,9 +264,10 @@ class PygadGAAdapter(OptimiserAdapter):
                         best_fitness = -sol.fun
                         optimised_weights = sol.x
                 except Exception:
-                    pass
+                    logger.debug("Weight optimisation failed in PygadGA", exc_info=True)
 
         except Exception:
+            logger.debug("PygadGA run failed", exc_info=True)
             best_fitness = float('-inf')
             selected_etfs = None
             optimised_weights = None
@@ -266,14 +290,15 @@ class MonteCarloAdapter(OptimiserAdapter):
 
     name = "Monte Carlo"
 
-    def __init__(self, min_etfs=3, max_etfs=15, log_interval=5000):
+    def __init__(self, min_etfs=GA_MIN_SECURITIES, max_etfs=GA_MAX_SECURITIES,
+                 log_interval=5000):
         self.min_etfs = min_etfs
         self.max_etfs = max_etfs
         self.log_interval = log_interval
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
-        from src.portfolio_utils import (
+        from src.returns import (
             calculate_log_returns as calculate_returns,
             calculate_expected_returns,
         )
@@ -359,14 +384,14 @@ class MIPAdapter(OptimiserAdapter):
 
     name = "MILP"
 
-    def __init__(self, max_etfs=15, risk_aversion=0.8):
+    def __init__(self, max_etfs=GA_MAX_SECURITIES, risk_aversion=MIP_DEFAULT_RISK_AVERSION):
         self.max_etfs = max_etfs
         self.risk_aversion = risk_aversion
 
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import pulp
-        from src.portfolio_utils import (
+        from src.returns import (
             calculate_log_returns as calculate_returns,
             calculate_expected_returns,
             calculate_variances,
@@ -484,7 +509,7 @@ def _slsqp_refine_topk(result_json, data):
 
     Returns (best_fitness, selected_etfs, optimised_weights).
     """
-    from src.portfolio_utils import optimise_weights, calculate_log_returns
+    from src.weights import optimise_weights
 
     top_solutions = result_json.get('top_solutions', [])
     if not top_solutions:
@@ -525,12 +550,17 @@ class CppGAAdapter(OptimiserAdapter):
 
     name = "Island GA (C++)"
 
-    def __init__(self, binary_path='./cpp/optimisation',
-                 num_generations=200, total_population_size=2000,
-                 num_elites=50, migration_interval=10, migration_rate=0.1,
-                 min_etfs=3, max_etfs=15, min_return=None,
+    def __init__(self, binary_path=None,
+                 num_generations=ISLAND_GA_NUM_GENERATIONS,
+                 total_population_size=ISLAND_GA_POPULATION_SIZE,
+                 num_elites=ISLAND_GA_NUM_ELITES,
+                 migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
+                 migration_rate=ISLAND_GA_MIGRATION_RATE,
+                 min_etfs=GA_MIN_SECURITIES, max_etfs=GA_MAX_SECURITIES,
+                 min_return=None,
                  num_islands=4, use_svd=False, svd_components=200):
-        self.binary_path = binary_path
+        from src.config import CPP_BINARY_PATH
+        self.binary_path = binary_path or CPP_BINARY_PATH
         self.num_generations = num_generations
         self.pop_size = total_population_size // num_islands
         self.num_elites = num_elites
@@ -546,7 +576,8 @@ class CppGAAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import tempfile
-        from src.portfolio_utils import calculate_log_returns, write_binary_data
+        from src.returns import calculate_log_returns
+        from src.binary_io import write_binary_data
 
         start_time = time.time()
 
@@ -579,7 +610,7 @@ class CppGAAdapter(OptimiserAdapter):
                 '--num-elites', str(self.num_elites),
                 '--migration-interval', str(self.migration_interval),
                 '--migration-rate', str(self.migration_rate),
-                '--risk-free-rate', '0.0',
+                '--risk-free-rate', str(RISK_FREE_RATE),
             ]
             if self.min_return is not None:
                 cmd += ['--min-return', str(self.min_return)]
@@ -641,10 +672,12 @@ class CppMonteCarloAdapter(OptimiserAdapter):
 
     name = "Monte Carlo (C++)"
 
-    def __init__(self, binary_path='./cpp/optimisation',
-                 min_etfs=3, max_etfs=15, min_return=None,
+    def __init__(self, binary_path=None,
+                 min_etfs=GA_MIN_SECURITIES, max_etfs=GA_MAX_SECURITIES,
+                 min_return=None,
                  num_threads=None, mc_log_interval=5000):
-        self.binary_path = binary_path
+        from src.config import CPP_BINARY_PATH
+        self.binary_path = binary_path or CPP_BINARY_PATH
         self.min_etfs = min_etfs
         self.max_etfs = max_etfs
         self.min_return = min_return
@@ -654,7 +687,8 @@ class CppMonteCarloAdapter(OptimiserAdapter):
     def run(self, data: pd.DataFrame, time_budget: float,
             seed: int, run_id: int) -> BenchmarkResult:
         import tempfile
-        from src.portfolio_utils import calculate_log_returns, write_binary_data
+        from src.returns import calculate_log_returns
+        from src.binary_io import write_binary_data
 
         start_time = time.time()
 
@@ -681,7 +715,7 @@ class CppMonteCarloAdapter(OptimiserAdapter):
                 '--min-etfs', str(self.min_etfs),
                 '--max-etfs', str(self.max_etfs),
                 '--num-islands', str(self.num_threads),
-                '--risk-free-rate', '0.0',
+                '--risk-free-rate', str(RISK_FREE_RATE),
                 '--mc-log-interval', str(self.mc_log_interval),
             ]
             if self.min_return is not None:

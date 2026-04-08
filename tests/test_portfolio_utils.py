@@ -10,26 +10,35 @@ import pandas as pd
 from unittest.mock import MagicMock
 
 from tests import requires_integration
-from src.portfolio_utils import (
-    load_prices_csv,
+from src.data_loading import load_prices_csv
+from src.returns import (
     calculate_log_returns,
-    calculate_covariance_matrix,
     calculate_expected_returns,
     calculate_variances,
+    prepare_portfolio_inputs,
+)
+from src.covariance import (
+    calculate_covariance_matrix,
+    check_observation_ratio,
+    shrink_correlation_matrix,
+)
+from src.metrics import (
     sharpe_ratio,
-    negative_sharpe_ratio,
+    sharpe_loss,
     maximum_drawdown,
     downside_deviation,
     sortino_ratio,
     calmar_ratio,
-    optimise_weights,
     sharpe_ratio_variance,
     deflated_sharpe_ratio,
     warn_if_sharpe_suspicious,
-    check_observation_ratio,
-    shrink_correlation_matrix,
-    SHARPE_WARN_THRESHOLD,
-    SHARPE_CRITICAL_THRESHOLD,
+)
+from src.weights import (
+    optimise_weights,
+    calculate_portfolio_variance,
+    calculate_portfolio_return,
+    calculate_risk_contribution,
+    risk_budget_objective,
 )
 
 
@@ -163,7 +172,7 @@ class TestSharpeRatio(unittest.TestCase):
         er = np.array([0.10, 0.12])
         cov = np.array([[0.04, 0.01], [0.01, 0.04]])
         sr = sharpe_ratio(weights, er, cov)
-        nsr = negative_sharpe_ratio(weights, er, cov)
+        nsr = sharpe_loss(weights, er, cov)
         self.assertAlmostEqual(sr, -nsr)
 
     def test_zero_volatility(self):
@@ -330,7 +339,7 @@ class TestEqualWeightSharpe(unittest.TestCase):
         self.cov_matrix = np.diag([0.04] * n)  # 20% vol each, uncorrelated
 
     def test_normal_selection(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         sel = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0], dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
                                      self.cov_matrix, 3, 8)
@@ -338,28 +347,28 @@ class TestEqualWeightSharpe(unittest.TestCase):
         self.assertTrue(np.isfinite(result))
 
     def test_too_few_selected(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         sel = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
                                      self.cov_matrix, 3, 8)
         self.assertEqual(result, -1e4)
 
     def test_too_many_selected(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         sel = np.ones(10, dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
                                      self.cov_matrix, 3, 8)
         self.assertEqual(result, -1e4)
 
     def test_none_selected(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         sel = np.zeros(10, dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
                                      self.cov_matrix, 0, 8)
         self.assertEqual(result, 0.0)
 
     def test_zero_variance_returns_zero(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         zero_cov = np.zeros((10, 10))
         sel = np.array([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
@@ -367,7 +376,7 @@ class TestEqualWeightSharpe(unittest.TestCase):
         self.assertEqual(result, 0.0)
 
     def test_matches_manual_sharpe(self):
-        from src.portfolio_utils import equal_weight_fitness
+        from src.metrics import equal_weight_fitness
         sel = np.array([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=bool)
         result = equal_weight_fitness(sel, self.expected_returns,
                                      self.cov_matrix, 2, 8)
@@ -475,8 +484,7 @@ class TestObservationRatioGuard(unittest.TestCase):
             check_observation_ratio(5, 10)
 
     def test_warns_when_ratio_low(self):
-        import logging
-        with self.assertLogs('src.portfolio_utils', level='WARNING') as cm:
+        with self.assertLogs('src.covariance', level='WARNING') as cm:
             check_observation_ratio(50, 10)
         self.assertTrue(any('T/N ratio' in msg for msg in cm.output))
 
@@ -541,6 +549,97 @@ class TestShrinkCorrelationMatrix(unittest.TestCase):
         shrunk = shrink_correlation_matrix(self.corr, self.returns)
         eigenvalues = np.linalg.eigvalsh(shrunk)
         self.assertTrue(np.all(eigenvalues > 0))
+
+
+class TestPreparePortfolioInputs(unittest.TestCase):
+    def test_returns_correct_types_and_shapes(self):
+        prices = pd.DataFrame(
+            np.random.RandomState(42).randn(100, 4).cumsum(axis=0) + 100,
+            columns=['A', 'B', 'C', 'D'],
+        )
+        log_ret, er, cov = prepare_portfolio_inputs(prices)
+        self.assertIsInstance(log_ret, pd.DataFrame)
+        self.assertIsInstance(er, np.ndarray)
+        self.assertEqual(log_ret.shape, prices.shape)
+        self.assertEqual(len(er), 4)
+        self.assertEqual(cov.shape, (4, 4))
+
+    def test_cov_is_symmetric(self):
+        prices = pd.DataFrame(
+            np.random.RandomState(7).randn(200, 3).cumsum(axis=0) + 50,
+            columns=['X', 'Y', 'Z'],
+        )
+        _, _, cov = prepare_portfolio_inputs(prices)
+        cov_arr = cov.values if hasattr(cov, 'values') else cov
+        np.testing.assert_array_almost_equal(cov_arr, cov_arr.T)
+
+
+class TestCalculatePortfolioVariance(unittest.TestCase):
+    def test_against_manual(self):
+        w = np.array([0.6, 0.4])
+        cov = np.array([[0.04, 0.01], [0.01, 0.09]])
+        result = calculate_portfolio_variance(w, cov)
+        expected = w @ cov @ w
+        self.assertAlmostEqual(result, expected, places=10)
+
+    def test_zero_weights(self):
+        w = np.array([0.0, 0.0])
+        cov = np.array([[0.04, 0.01], [0.01, 0.09]])
+        self.assertAlmostEqual(calculate_portfolio_variance(w, cov), 0.0)
+
+    def test_accepts_dataframe(self):
+        w = np.array([0.5, 0.5])
+        cov_df = pd.DataFrame([[0.04, 0.01], [0.01, 0.04]],
+                               columns=['A', 'B'], index=['A', 'B'])
+        result = calculate_portfolio_variance(w, cov_df)
+        self.assertGreater(result, 0)
+
+
+class TestCalculatePortfolioReturn(unittest.TestCase):
+    def test_against_manual(self):
+        w = np.array([0.6, 0.4])
+        er = np.array([0.10, 0.15])
+        result = calculate_portfolio_return(w, er)
+        self.assertAlmostEqual(result, 0.6 * 0.10 + 0.4 * 0.15, places=10)
+
+    def test_returns_float(self):
+        result = calculate_portfolio_return(np.array([1.0]), np.array([0.05]))
+        self.assertIsInstance(result, float)
+
+
+class TestCalculateRiskContribution(unittest.TestCase):
+    def test_contributions_sum_to_total_risk(self):
+        w = np.array([0.4, 0.3, 0.3])
+        V = np.matrix([[0.04, 0.01, 0.005],
+                        [0.01, 0.09, 0.02],
+                        [0.005, 0.02, 0.06]])
+        rc = calculate_risk_contribution(w, V)
+        total_risk = np.sqrt(float(np.matrix(w) * V * np.matrix(w).T))
+        self.assertAlmostEqual(float(np.sum(rc)), total_risk, places=10)
+
+    def test_zero_variance_returns_zeros(self):
+        w = np.array([0.5, 0.5])
+        V = np.matrix([[0.0, 0.0], [0.0, 0.0]])
+        rc = calculate_risk_contribution(w, V)
+        np.testing.assert_array_almost_equal(np.array(rc).flatten(), [0.0, 0.0])
+
+
+class TestRiskBudgetObjective(unittest.TestCase):
+    def test_equal_weights_identity_cov_gives_zero(self):
+        n = 4
+        V = np.matrix(np.eye(n))
+        w = np.ones(n) / n
+        target = [1 / n] * n
+        result = risk_budget_objective(w, [V, target])
+        self.assertAlmostEqual(result, 0.0, places=8)
+
+    def test_unequal_weights_nonzero_objective(self):
+        n = 3
+        V = np.matrix(np.eye(n))
+        w = np.array([0.8, 0.1, 0.1])
+        target = [1 / n] * n
+        result = risk_budget_objective(w, [V, target])
+        self.assertGreater(result, 0.0)
 
 
 if __name__ == '__main__':

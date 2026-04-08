@@ -42,11 +42,22 @@ MAX_STALENESS_DAYS = 30          # last trade must be within 30 calendar days
 MIN_ANNUAL_VOLATILITY = 0.001    # 0.1% annualised vol minimum
 MAX_CONSECUTIVE_SAME_PRICE = 20  # flag if 20+ identical consecutive closes
 MAX_EXTREME_RETURN_PCT = 0.05    # flag if >5% of days have >10 std dev returns
+DATA_QUALITY_MIN_OBS = 30                      # minimum observations for vol/return checks
+DATA_QUALITY_MIN_OBS_EXTREME = 60              # minimum observations for extreme-return check
+DATA_QUALITY_EXTREME_RETURN_MULTIPLIER = 10    # flag returns > N * robust_std
 
 # ─── Covariance estimation ─────────────────────────────────────────────────
 COV_SHRINKAGE_ENABLED = True        # Use Ledoit-Wolf shrinkage by default
 COV_MIN_OBS_RATIO = 10              # Warn if T/N < this
 COV_MIN_OBS_RATIO_ERROR = 1.0       # Error if T/N < this (singular matrix)
+COPULA_GARCH_SCALE = 10             # MUArch scale factor for numerical stability
+COPULA_DIAGNOSTIC_LAGS = 10         # Ljung-Box lag count for residual diagnostics
+
+# ─── General / tolerances ─────────────────────────────────────────────────────
+
+NUMERICAL_TOLERANCE = 1e-10
+RISK_FREE_RATE = 0.0
+STATISTICAL_SIGNIFICANCE_LEVEL = 0.05
 
 # ─── Data processing ─────────────────────────────────────────────────────────
 
@@ -54,16 +65,22 @@ TRADING_DAYS_PER_YEAR = 252
 DATA_MIN_COVERAGE = 0.95         # keep columns with >= 95% non-null rows
 DATA_FFILL_LIMIT = 5             # max consecutive NaN rows to forward-fill
 DATA_LOOKBACK_DAYS = 730         # 2 years of calendar days
+DATA_MIN_COVERAGE_PERMISSIVE = 0.10  # permissive coverage for load_data()
 
 # ─── Data paths ────────────────────────────────────────────────────────────
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 DB_PATH = os.path.join(DATA_DIR, 'portfolio.db')
 ETF_PRICES_CSV = os.path.join(DATA_DIR, 'ETF_Prices.csv')
 NZ_ETF_PRICES_CSV = os.path.join(DATA_DIR, 'NZ_ETF_Prices.csv')
 INVESTNOW_PRICES_CSV = os.path.join(DATA_DIR, 'time_series_20251016_113257.csv')
 EXPECTED_RETURNS_CSV = os.path.join(DATA_DIR, 'expected_returns.csv')
 VARIANCES_CSV = os.path.join(DATA_DIR, 'variances.csv')
+
+# ─── C++ binary ──────────────────────────────────────────────────────────
+
+CPP_BINARY_PATH = os.path.join(PROJECT_ROOT, 'cpp', 'optimisation')
 
 # ─── Pygad GA parameters ────────────────────────────────────────────────────
 
@@ -98,6 +115,8 @@ ISLAND_GA_MUTATION_RATE_INITIAL = 0.01   # High early exploration
 ISLAND_GA_MUTATION_RATE_FINAL = 0.002    # Low late exploitation
 ISLAND_GA_STAGNATION_LIMIT = 30   # Per-island early stopping on stagnation
 
+MC_NUM_TRIALS = 10_000_000         # Default Monte Carlo trial count
+
 # ─── Backtest parameters ────────────────────────────────────────────────────
 
 BACKTEST_NUM_PORTFOLIOS = 20
@@ -105,6 +124,9 @@ BACKTEST_NUM_CHILDREN = 100
 BACKTEST_NUM_DAYS_OOS = 252
 BACKTEST_MC_TRIALS = 100_000
 BACKTEST_MAX_WEIGHT_FLOOR = 0.3
+BACKTEST_MIN_METHODS_FOR_STATS = 3   # minimum methods for Friedman test
+SHARPE_WARN_THRESHOLD = 2.0          # in-sample Sharpe above this is suspicious
+SHARPE_CRITICAL_THRESHOLD = 3.0      # in-sample Sharpe above this is almost certainly overfit
 
 # ─── Rolling backtest parameters ───────────────────────────────────────────
 
@@ -123,7 +145,7 @@ PIPELINE_MAX_RETRIES = 5           # retries per batch (includes empty-result re
 PIPELINE_CIRCUIT_BREAKER_THRESHOLD = 10  # consecutive failed batches before trip
 PIPELINE_CIRCUIT_BREAKER_MAX_TRIPS = 3   # hard abort after this many trips
 PIPELINE_CIRCUIT_BREAKER_COOLDOWN = 300.0  # seconds to pause on trip before retry
-PIPELINE_MAX_RATE_LIMIT_DELAY = 60.0     # max adaptive inter-batch delay (seconds)
+PIPELINE_MAX_RATE_LIMIT_DELAY = 600.0    # max adaptive inter-batch delay (10 min)
 PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
 PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
 PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
@@ -141,8 +163,28 @@ FORECAST_GARCH_Q = 1
 FORECAST_GARCH_DIST = 'skewt'
 FORECAST_GARCH_VOL = 'Garch'
 GARCH_SCALE = 100           # Multiplier for GARCH fitting (daily returns ~ 0.001)
+FORECAST_MIN_PRICE_FLOOR = 0.0001  # Floor for ARIMA forecast price predictions
+
+# ─── Pipeline / download ──────────────────────────────────────────────────
+
+DOWNLOAD_THREADS = 2
+DOWNLOAD_TIMEOUT = 30
 
 # ─── MIP parameters ──────────────────────────────────────────────────────
 
 MIP_DEFAULT_RISK_AVERSION = 0.8
 MIP_DEFAULT_MAX_ETFS = 10
+
+# ─── Universe pre-filters ─────────────────────────────────────────────────
+# Regex matching unwanted suffixes: warrants (-WT), units (-UN),
+# preferred (-PA), rights (-RT), etc.
+TICKER_EXCLUDE_SUFFIXES = r'[-.](?:WT[A-Z]?|WS|UN|RT|RI|P[A-Z])$'
+
+# Name patterns for SPACs/shell companies (case-insensitive)
+TICKER_EXCLUDE_NAME_PATTERNS = [
+    r'Acquisition Corp',
+    r'Blank Check',
+    r'\bSPAC\b',
+    r'Special Purpose Acquisition',
+    r'Merger Corp',
+]

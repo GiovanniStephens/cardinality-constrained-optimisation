@@ -14,15 +14,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.portfolio_utils import (
-    calculate_log_returns,
-    calculate_expected_returns,
-    calculate_covariance_matrix,
-    equal_weight_fitness,
-    write_binary_data,
-)
+from src.returns import calculate_log_returns, calculate_expected_returns
+from src.covariance import calculate_covariance_matrix
+from src.metrics import equal_weight_fitness
+from src.binary_io import write_binary_data
 
-CPP_BINARY = os.path.join(os.path.dirname(__file__), '..', 'cpp', 'optimisation')
+from src.config import CPP_BINARY_PATH as CPP_BINARY, RISK_FREE_RATE
 
 
 def _make_test_data(num_days=300, num_assets=20, seed=42):
@@ -68,7 +65,7 @@ class TestCppEquivalence(unittest.TestCase):
                 '--min-etfs', '3',
                 '--max-etfs', '15',
                 '--num-islands', str(num_islands),
-                '--risk-free-rate', '0.0',
+                '--risk-free-rate', str(RISK_FREE_RATE),
             ]
             if extra_args:
                 cmd.extend(extra_args)
@@ -144,6 +141,126 @@ class TestCppEquivalence(unittest.TestCase):
         """C++ should report correct number of instruments."""
         result = self._run_cpp(mode='ga', seed=42, generations=1, pop_size=10)
         self.assertEqual(result['num_instruments'], len(self.tickers))
+
+
+@unittest.skipUnless(os.path.isfile(CPP_BINARY),
+                     f'C++ binary not found at {CPP_BINARY}')
+class TestMetalGpuEquivalence(unittest.TestCase):
+    """Verify Metal GPU fitness matches CPU FP64 results.
+
+    Uses --gpu flag. If the binary was compiled without Metal support
+    (HAS_METAL not defined), the flag is silently ignored and the tests
+    still pass (they just test the CPU path again).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.prices_df, cls.log_returns, cls.tickers = _make_test_data()
+        cls.expected_returns = calculate_expected_returns(cls.log_returns).values
+        cls.cov_matrix = calculate_covariance_matrix(cls.log_returns, shrinkage=False).values
+
+    def _run_cpp(self, mode='ga', extra_args=None, seed=42, time_budget=5,
+                 generations=2, pop_size=20, num_islands=1):
+        """Write binary data, run C++ binary, return parsed JSON."""
+        tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
+        tmp.close()
+        try:
+            write_binary_data(self.log_returns, tmp.name)
+            cmd = [
+                CPP_BINARY, '--binary',
+                '--data', tmp.name,
+                '--mode', mode,
+                '--seed', str(seed),
+                '--time-budget', str(time_budget),
+                '--pop-size', str(pop_size),
+                '--generations', str(generations),
+                '--min-etfs', '3',
+                '--max-etfs', '15',
+                '--num-islands', str(num_islands),
+                '--risk-free-rate', str(RISK_FREE_RATE),
+            ]
+            if extra_args:
+                cmd.extend(extra_args)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 0,
+                             f'C++ binary failed:\n{result.stderr}')
+            return json.loads(result.stdout), result.stderr
+        finally:
+            os.unlink(tmp.name)
+
+    def _python_fitness_for_tickers(self, selected_tickers):
+        """Compute equal-weight fitness in Python for a set of tickers."""
+        all_tickers = list(self.log_returns.columns)
+        selection = np.zeros(len(all_tickers), dtype=int)
+        for t in selected_tickers:
+            idx = all_tickers.index(t)
+            selection[idx] = 1
+        return equal_weight_fitness(
+            selection, self.expected_returns, self.cov_matrix,
+            min_count=3, max_count=15,
+        )
+
+    def test_gpu_fitness_matches_cpu(self):
+        """GPU and CPU should produce identical best fitness (after FP64 re-eval)."""
+        cpu_result, _ = self._run_cpp(mode='ga', seed=42, generations=5, pop_size=50)
+        gpu_result, gpu_stderr = self._run_cpp(
+            mode='ga', seed=42, generations=5, pop_size=50,
+            extra_args=['--gpu'])
+
+        self.assertEqual(
+            cpu_result['best_fitness'], gpu_result['best_fitness'],
+            f'CPU={cpu_result["best_fitness"]}, GPU={gpu_result["best_fitness"]}')
+        self.assertEqual(
+            cpu_result['selected_tickers'], gpu_result['selected_tickers'])
+        self.assertEqual(
+            cpu_result['total_trials'], gpu_result['total_trials'])
+
+    def test_gpu_fitness_matches_python(self):
+        """GPU best solution should match Python equal_weight_fitness."""
+        result, _ = self._run_cpp(
+            mode='ga', seed=42, generations=5, pop_size=50,
+            extra_args=['--gpu'])
+        cpp_fitness = result['best_fitness']
+        selected = result['selected_tickers']
+
+        if cpp_fitness <= -1e3:
+            self.skipTest('C++ found no valid solution')
+
+        py_fitness = self._python_fitness_for_tickers(selected)
+        self.assertAlmostEqual(
+            cpp_fitness, py_fitness, places=6,
+            msg=f'GPU fitness {cpp_fitness} != Python fitness {py_fitness}')
+
+    def test_gpu_top_solutions_match_python(self):
+        """All top-K GPU solutions should match Python fitness."""
+        result, _ = self._run_cpp(
+            mode='ga', seed=123, generations=5, pop_size=50,
+            extra_args=['--gpu'])
+        for sol in result.get('top_solutions', []):
+            cpp_fit = sol['fitness']
+            tickers = sol['tickers']
+            if cpp_fit <= -1e3 or len(tickers) < 3:
+                continue
+            py_fit = self._python_fitness_for_tickers(tickers)
+            self.assertAlmostEqual(
+                cpp_fit, py_fit, places=6,
+                msg=f'GPU top-K mismatch: C++={cpp_fit} Python={py_fit}')
+
+    def test_gpu_multi_island(self):
+        """GPU with multiple islands should produce valid results."""
+        result, _ = self._run_cpp(
+            mode='ga', seed=42, generations=5, pop_size=50,
+            num_islands=3, extra_args=['--gpu'])
+        self.assertGreater(result['best_fitness'], -1e3,
+                           'No valid solution found with multi-island GPU')
+        self.assertGreater(len(result['selected_tickers']), 0)
+
+        # Verify best solution matches Python
+        py_fitness = self._python_fitness_for_tickers(result['selected_tickers'])
+        self.assertAlmostEqual(
+            result['best_fitness'], py_fitness, places=6)
 
 
 if __name__ == '__main__':
