@@ -7,7 +7,6 @@ import pandas as pd
 from multiprocessing import Pool, Manager
 
 from src.portfolio_utils import (
-    load_prices_csv,
     calculate_log_returns,
     calculate_expected_returns,
     calculate_covariance_matrix,
@@ -17,11 +16,13 @@ from src.portfolio_utils import (
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
 from src.optimisers.base import BaseOptimiser
 from src.config import (
-    DATA_LOOKBACK_DAYS, DATA_MIN_COVERAGE, DATA_FFILL_LIMIT,
     ISLAND_GA_NUM_GENERATIONS, ISLAND_GA_POPULATION_SIZE,
     ISLAND_GA_NUM_ELITES, ISLAND_GA_MIGRATION_INTERVAL,
     ISLAND_GA_MIGRATION_RATE,
     ISLAND_GA_MIN_SECURITIES, ISLAND_GA_MAX_SECURITIES, ISLAND_GA_MIN_RETURN,
+    ISLAND_GA_MUTATION_RATE, ISLAND_GA_ADAPTIVE_MUTATION,
+    ISLAND_GA_MUTATION_RATE_INITIAL, ISLAND_GA_MUTATION_RATE_FINAL,
+    ISLAND_GA_STAGNATION_LIMIT,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,12 +127,36 @@ def elitism(population, fitness, num_elites):
     return population[elite_indices], elite_indices
 
 
+def repair_cardinality(offspring, min_etfs, max_etfs):
+    """Repair individuals to satisfy cardinality bounds.
+
+    Matches C++ behaviour: randomly drops excess or adds missing ETFs
+    so that min_etfs <= count <= max_etfs for every individual.
+    """
+    counts = offspring.sum(axis=1).astype(int)
+    for i in range(len(offspring)):
+        n = counts[i]
+        if n > max_etfs:
+            ones = np.where(offspring[i] == 1)[0]
+            to_clear = np.random.choice(ones, size=n - max_etfs, replace=False)
+            offspring[i, to_clear] = 0
+        elif n < min_etfs:
+            zeros = np.where(offspring[i] == 0)[0]
+            to_set = np.random.choice(zeros, size=min_etfs - n, replace=False)
+            offspring[i, to_set] = 1
+    return offspring
+
+
 def genetic_algorithm(island_id, num_islands, data, num_generations,
                       population_size, mutation_rate, num_elites,
                       migration_interval, migration_rate, return_dict,
                       convergence_log=None, start_time=None, time_budget=None,
                       min_etfs=ISLAND_GA_MIN_SECURITIES, max_etfs=ISLAND_GA_MAX_SECURITIES,
-                      min_return=ISLAND_GA_MIN_RETURN):
+                      min_return=ISLAND_GA_MIN_RETURN,
+                      adaptive_mutation=ISLAND_GA_ADAPTIVE_MUTATION,
+                      mutation_rate_initial=ISLAND_GA_MUTATION_RATE_INITIAL,
+                      mutation_rate_final=ISLAND_GA_MUTATION_RATE_FINAL,
+                      stagnation_limit=ISLAND_GA_STAGNATION_LIMIT):
     """Run a single island GA: evolve population with migration between islands."""
     num_etfs = data.shape[1]
     population = initialise_population(population_size, num_etfs, max_num_etfs=max_etfs)
@@ -141,6 +166,7 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
     T_obs = centered_returns.shape[0]
     best_overall_fitness = float('-inf')
     best_overall_individual = None
+    stagnation_counter = 0
     for generation in range(num_generations):
         if generation % migration_interval == 0 and generation != 0:
             source_island = (island_id - 1 + num_islands) % num_islands
@@ -164,9 +190,16 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
         if time_budget is not None and start_time is not None:
             if (time.time() - start_time) > time_budget:
                 break
+        # Adaptive mutation: linear decay from initial to final rate
+        if adaptive_mutation:
+            progress = generation / max(1, num_generations - 1)
+            current_mutation_rate = mutation_rate_initial * (1 - progress) + mutation_rate_final * progress
+        else:
+            current_mutation_rate = mutation_rate
         parents = select_parents(population, fitness, num_elites)
         offspring = crossover(parents, (population_size - num_elites, num_etfs))
-        offspring = mutate(offspring, mutation_rate)
+        offspring = mutate(offspring, current_mutation_rate)
+        offspring = repair_cardinality(offspring, min_etfs, max_etfs)
         population[:num_elites] = elites
         population[num_elites:] = offspring
         if (generation + 1) % migration_interval == 0:
@@ -177,6 +210,13 @@ def genetic_algorithm(island_id, num_islands, data, num_generations,
         if current_best_fitness > best_overall_fitness:
             best_overall_fitness = current_best_fitness
             best_overall_individual = population[np.argmax(fitness)].copy()
+            stagnation_counter = 0
+        else:
+            stagnation_counter += 1
+            if stagnation_limit and stagnation_counter >= stagnation_limit:
+                logger.debug("Island %d: early stop at generation %d (stagnation=%d)",
+                             island_id, generation, stagnation_limit)
+                break
     return best_overall_individual, best_overall_fitness
 
 
@@ -188,7 +228,11 @@ def _init_random_state():
 def run_parallel_ga(data, num_generations, total_population_size,
                     mutation_rate, num_elites, migration_interval,
                     migration_rate, min_etfs=ISLAND_GA_MIN_SECURITIES,
-                    max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN):
+                    max_etfs=ISLAND_GA_MAX_SECURITIES, min_return=ISLAND_GA_MIN_RETURN,
+                    adaptive_mutation=ISLAND_GA_ADAPTIVE_MUTATION,
+                    mutation_rate_initial=ISLAND_GA_MUTATION_RATE_INITIAL,
+                    mutation_rate_final=ISLAND_GA_MUTATION_RATE_FINAL,
+                    stagnation_limit=ISLAND_GA_STAGNATION_LIMIT):
     """Distribute island GAs across CPU cores and return the best solution."""
     num_islands = os.cpu_count()
     manager = Manager()
@@ -205,7 +249,9 @@ def run_parallel_ga(data, num_generations, total_population_size,
                  mutation_rate, num_elites, migration_interval,
                  migration_rate, return_dict,
                  None, None, None,
-                 min_etfs, max_etfs, min_return) for i in range(num_islands)]
+                 min_etfs, max_etfs, min_return,
+                 adaptive_mutation, mutation_rate_initial,
+                 mutation_rate_final, stagnation_limit) for i in range(num_islands)]
         results = pool.starmap(genetic_algorithm, args)
     elapsed = time.time() - start
     best_fitness = float('-inf')
@@ -236,7 +282,9 @@ class IslandGAOptimiser(BaseOptimiser):
                  migration_rate=ISLAND_GA_MIGRATION_RATE,
                  min_securities=ISLAND_GA_MIN_SECURITIES,
                  max_securities=ISLAND_GA_MAX_SECURITIES,
-                 min_return=ISLAND_GA_MIN_RETURN):
+                 min_return=ISLAND_GA_MIN_RETURN,
+                 adaptive_mutation=ISLAND_GA_ADAPTIVE_MUTATION,
+                 stagnation_limit=ISLAND_GA_STAGNATION_LIMIT):
         self.num_generations = num_generations
         self.population_size = population_size
         self.num_elites = num_elites
@@ -245,9 +293,11 @@ class IslandGAOptimiser(BaseOptimiser):
         self.min_securities = min_securities
         self.max_securities = max_securities
         self.min_return = min_return
+        self.adaptive_mutation = adaptive_mutation
+        self.stagnation_limit = stagnation_limit
 
     def optimise(self, prices: pd.DataFrame) -> OptimisationResult:
-        mutation_rate = 1 / prices.shape[1]
+        mutation_rate = max(1 / prices.shape[1], ISLAND_GA_MUTATION_RATE)
         start = time.time()
         best_solution, best_fitness = run_parallel_ga(
             prices,
@@ -260,6 +310,8 @@ class IslandGAOptimiser(BaseOptimiser):
             min_etfs=self.min_securities,
             max_etfs=self.max_securities,
             min_return=self.min_return,
+            adaptive_mutation=self.adaptive_mutation,
+            stagnation_limit=self.stagnation_limit,
         )
         elapsed = time.time() - start
 
@@ -301,86 +353,60 @@ def print_results(tickers, optimal_weights, amount_to_allocate=5000):
 
 if __name__ == '__main__':
     from src.logging_config import setup_logging
-    setup_logging(
+    setup_logging()
+
+    from src.portfolio_utils import load_training_data, save_optimisation_result
+
+    data = load_training_data(
+        exchange='US',
+        csv_fallback='data/time_series_20251016_113257.csv',
     )
-    # Load from database (falls back to CSV if DB is empty)
-    from src import db
-    conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    conn.close()
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_prices_csv('data/time_series_20251016_113257.csv', last_n_days=730)
-    else:
-        # Apply same filters: last 2 years, 95% coverage, ffill
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        cutoff = data.index[-1] - pd.Timedelta(days=DATA_LOOKBACK_DAYS)
-        data = data[data.index >= cutoff]
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
-    logger.info("Loaded price data: %d rows x %d columns", *data.shape)
-    num_generations = ISLAND_GA_NUM_GENERATIONS
-    total_population_size = ISLAND_GA_POPULATION_SIZE
+
     mutation_rate = 1 / data.shape[1]
-    num_elites = ISLAND_GA_NUM_ELITES
-    migration_interval = ISLAND_GA_MIGRATION_INTERVAL
-    migration_rate_val = ISLAND_GA_MIGRATION_RATE
 
     ga_start = time.time()
-    best_solution, best_fitness = run_parallel_ga(data,
-                                                  num_generations=num_generations,
-                                                  total_population_size=total_population_size,
-                                                  mutation_rate=mutation_rate,
-                                                  num_elites=num_elites,
-                                                  migration_interval=migration_interval,
-                                                  migration_rate=migration_rate_val)
+    best_solution, best_fitness = run_parallel_ga(
+        data,
+        num_generations=ISLAND_GA_NUM_GENERATIONS,
+        total_population_size=ISLAND_GA_POPULATION_SIZE,
+        mutation_rate=mutation_rate,
+        num_elites=ISLAND_GA_NUM_ELITES,
+        migration_interval=ISLAND_GA_MIGRATION_INTERVAL,
+        migration_rate=ISLAND_GA_MIGRATION_RATE,
+    )
     ga_elapsed = time.time() - ga_start
 
     if best_solution is not None:
         logger.info("Best Solution (ETF Selection Vector): %s", best_solution.astype(int))
         logger.info("Best Fitness (Sharpe Ratio from GA): %.6f", best_fitness)
-        selected_etfs = data.columns[best_solution == 1]
-        logger.info("Selected %d ETFs: %s", len(selected_etfs), list(selected_etfs))
+        selected_etfs = list(data.columns[best_solution == 1])
+        logger.info("Selected %d ETFs: %s", len(selected_etfs), selected_etfs)
         optimised_result = optimise_weights(best_solution, data)
         if optimised_result.success:
             print_results(selected_etfs, optimised_result.x, amount_to_allocate=20000)
             final_sharpe = -optimised_result.fun
             logger.info("Final Optimised Sharpe Ratio: %.4f", final_sharpe)
 
-            # Save to database
-            log_returns = calculate_log_returns(data[selected_etfs])
-            expected_rets = calculate_expected_returns(log_returns)
-            portfolio_return = float(np.dot(optimised_result.x, expected_rets))
-            cov_matrix = calculate_covariance_matrix(log_returns)
-            portfolio_vol = float(np.sqrt(np.dot(optimised_result.x.T,
-                                                 np.dot(cov_matrix, optimised_result.x))))
-
             from src import db
             conn = db.get_connection()
-            run_id = db.save_optimisation_run(conn,
+            run_id = save_optimisation_result(
+                conn, selected_etfs, optimised_result.x, data,
+                script_name='island_ga',
                 params={
-                    'script': 'island_ga',
                     'data_source': 'investnow',
-                    'num_generations': num_generations,
-                    'total_population_size': total_population_size,
+                    'num_generations': ISLAND_GA_NUM_GENERATIONS,
+                    'total_population_size': ISLAND_GA_POPULATION_SIZE,
                     'mutation_rate': mutation_rate,
-                    'num_elites': num_elites,
-                    'migration_interval': migration_interval,
-                    'migration_rate': migration_rate_val,
+                    'num_elites': ISLAND_GA_NUM_ELITES,
+                    'migration_interval': ISLAND_GA_MIGRATION_INTERVAL,
+                    'migration_rate': ISLAND_GA_MIGRATION_RATE,
                     'num_islands': os.cpu_count(),
-                    'min_securities': 8,
-                    'max_securities': 20,
+                    'min_securities': ISLAND_GA_MIN_SECURITIES,
+                    'max_securities': ISLAND_GA_MAX_SECURITIES,
                 },
-                results={
-                    'best_sharpe': final_sharpe,
-                    'portfolio_return': portfolio_return,
-                    'portfolio_volatility': portfolio_vol,
-                    'num_selected': len(selected_etfs),
-                    'elapsed_seconds': ga_elapsed,
-                },
-                holdings=list(zip(selected_etfs, optimised_result.x)),
-                exchange='NZX')
+                exchange='NZX',
+                elapsed_seconds=ga_elapsed,
+            )
             logger.info("Run saved to database (id=%d)", run_id)
             conn.close()
         else:

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Release)
 
-add_compile_options(-O3 -march=native -DNDEBUG)
+add_compile_options(-O3 -march=native -DNDEBUG -ffast-math -fno-finite-math-only)
 
 # Header-only dependencies live in the repo root
 include_directories(${CMAKE_SOURCE_DIR}/../eigen)

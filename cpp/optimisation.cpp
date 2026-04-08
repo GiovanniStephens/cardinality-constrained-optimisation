@@ -294,19 +294,60 @@ inline int popcount(const BitIndividual& ind) {
     return count;
 }
 
+// ─── Cardinality repair ────────────────────────────────────────────────────────
+
+void repairCardinality(BitIndividual& ind, int numGenes,
+                       int minETFs, int maxETFs, std::mt19937& rng,
+                       std::vector<int>& buf) {
+    int current = popcount(ind);
+    std::uniform_int_distribution<int> targetDist(minETFs, maxETFs);
+    int targetCount = targetDist(rng);
+
+    if (current == targetCount) return;
+
+    buf.clear();
+    if (current > targetCount) {
+        // Collect set bit indices, shuffle, clear excess
+        for (size_t w = 0; w < ind.size(); ++w) {
+            uint64_t bits = ind[w];
+            while (bits) {
+                int bit = __builtin_ctzll(bits);
+                int idx = static_cast<int>(w) * BITS_PER_WORD + bit;
+                if (idx < numGenes) buf.push_back(idx);
+                bits &= bits - 1;
+            }
+        }
+        std::shuffle(buf.begin(), buf.end(), rng);
+        for (int i = 0; i < current - targetCount; ++i)
+            clearBit(ind, buf[i]);
+    } else {
+        // Collect clear bit indices, shuffle, set deficit
+        for (int i = 0; i < numGenes; ++i) {
+            if (!getBit(ind, i)) buf.push_back(i);
+        }
+        std::shuffle(buf.begin(), buf.end(), rng);
+        for (int i = 0; i < targetCount - current; ++i)
+            setBit(ind, buf[i]);
+    }
+}
+
 // ─── GA operators (bitwise) ────────────────────────────────────────────────────
 
 std::vector<BitIndividual> initializePopulation(int size, int numGenes,
-                                                  int maxNumETFs, std::mt19937& rng) {
+                                                  int minETFs, int maxETFs,
+                                                  std::mt19937& rng) {
     int nw = numWords(numGenes);
-    double prob = static_cast<double>(maxNumETFs) / numGenes;
+    double prob = static_cast<double>(maxETFs) / numGenes;
     std::bernoulli_distribution dist(prob);
     std::vector<BitIndividual> population(size, BitIndividual(nw, 0));
+    std::vector<int> repairBuf;
+    repairBuf.reserve(numGenes);
 
     for (int i = 0; i < size; ++i) {
         for (int j = 0; j < numGenes; ++j) {
             if (dist(rng)) setBit(population[i], j);
         }
+        repairCardinality(population[i], numGenes, minETFs, maxETFs, rng, repairBuf);
     }
     return population;
 }
@@ -444,6 +485,7 @@ struct MigrationBuffer {
 struct IslandResult {
     double bestFitness = -std::numeric_limits<double>::infinity();
     BitIndividual bestIndividual;
+    long long evaluations = 0;  // actual fitness evaluations performed
 };
 
 // ─── Helper: extract tickers from a BitIndividual ──────────────────────────────
@@ -489,22 +531,36 @@ void run_island(int id, const Config& cfg,
     }
     std::mt19937 rng(islandSeed);
 
-    auto population = initializePopulation(cfg.pop_size, numGenes, cfg.max_etfs, rng);
+    auto population = initializePopulation(cfg.pop_size, numGenes, cfg.min_etfs, cfg.max_etfs, rng);
     Eigen::VectorXd fitness = Eigen::VectorXd::Zero(cfg.pop_size);
     BitIndividual bestIndividual(numWords(numGenes), 0);
     double bestFitness = -std::numeric_limits<double>::infinity();
     double mutationRate = 1.0 / numGenes;
 
-    int numElites = std::max(1, cfg.num_elites);
-    int numParents = std::max(2, numElites);
+    int numElites = std::max(0, cfg.num_elites);
+    // With 0 elites, use the full population as parents (no selection pressure)
+    int numParents = (numElites == 0) ? cfg.pop_size : std::max(2, numElites);
     int migrationCount = std::max(1, static_cast<int>(cfg.pop_size * cfg.migration_rate));
+    long long evaluations = 0;
+
+    // Pre-allocate buffers reused every generation (avoid per-generation heap allocs)
+    std::vector<int> parentIdx(cfg.pop_size);
+    std::vector<int> repairBuf;
+    repairBuf.reserve(numGenes);
+    std::vector<BitIndividual> newPop;
+    newPop.reserve(cfg.pop_size);
+    Eigen::VectorXd newFitness = Eigen::VectorXd::Zero(cfg.pop_size);
+
+    // First generation: evaluate all individuals
+    bool firstGeneration = true;
 
     for (int generation = 0; generation < cfg.num_generations; ++generation) {
         // Check time budget
         if (hasDeadline && std::chrono::steady_clock::now() >= deadline) break;
 
-        // Evaluate fitness
-        for (int i = 0; i < cfg.pop_size; ++i) {
+        // Evaluate fitness — skip elites after the first generation
+        int evalStart = (firstGeneration || numElites == 0) ? 0 : numElites;
+        for (int i = evalStart; i < cfg.pop_size; ++i) {
             double f;
             if (svMatrix != nullptr) {
                 f = calculateFitnessSVD(population[i], numGenes, *svMatrix,
@@ -518,57 +574,69 @@ void run_island(int id, const Config& cfg,
                                            cfg.risk_free_rate, cfg.min_return);
             }
             fitness(i) = f;
+            evaluations++;
             if (f > bestFitness) {
                 bestFitness = f;
                 bestIndividual = population[i];
             }
         }
+        firstGeneration = false;
 
-        // Log convergence to stderr
-        {
+        // Log convergence to stderr (every 50 generations to reduce I/O + lock overhead)
+        if (generation % 50 == 0) {
             std::lock_guard<std::mutex> lock(outputMutex);
             std::cerr << "Island " << id
                       << ": Generation " << generation
-                      << ": Best fitness = " << fitness.maxCoeff()
+                      << ": Best fitness = " << bestFitness
                       << std::endl;
         }
 
         // Migration (ring topology: read from island (id-1+N)%N)
         if (cfg.migration_interval > 0 && generation > 0
             && generation % cfg.migration_interval == 0) {
-            // Sort by fitness
-            std::vector<int> sortedIdx(cfg.pop_size);
-            std::iota(sortedIdx.begin(), sortedIdx.end(), 0);
-            std::sort(sortedIdx.begin(), sortedIdx.end(),
-                      [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+            // Partition: top migrationCount in front
+            std::iota(parentIdx.begin(), parentIdx.end(), 0);
+            auto cmp = [&fitness](int a, int b) { return fitness(a) > fitness(b); };
+            std::nth_element(parentIdx.begin(),
+                             parentIdx.begin() + migrationCount,
+                             parentIdx.end(), cmp);
+            // We also need the worst for replacement — partition from the end
+            std::nth_element(parentIdx.begin() + migrationCount,
+                             parentIdx.end() - migrationCount,
+                             parentIdx.end(), cmp);
 
             // Export top individuals
             std::vector<BitIndividual> emigrants;
             for (int i = 0; i < migrationCount && i < cfg.pop_size; ++i)
-                emigrants.push_back(population[sortedIdx[i]]);
+                emigrants.push_back(population[parentIdx[i]]);
             migration.deposit(id, emigrants);
 
-            // Import from source island
+            // Import from source island — replace worst individuals
             int source = (id - 1 + cfg.num_islands) % cfg.num_islands;
             auto immigrants = migration.withdraw(source);
             if (!immigrants.empty()) {
                 for (int i = 0; i < static_cast<int>(immigrants.size())
                                  && i < cfg.pop_size; ++i) {
-                    int worstIdx = sortedIdx[cfg.pop_size - 1 - i];
+                    int worstIdx = parentIdx[cfg.pop_size - 1 - i];
                     population[worstIdx] = immigrants[i];
+                    fitness(worstIdx) = -std::numeric_limits<double>::infinity();
                 }
             }
         }
 
-        // Selection: pick top parents by fitness
-        std::vector<int> parentIdx(cfg.pop_size);
+        // Selection: partition so top numParents are in parentIdx[0..numParents-1]
         std::iota(parentIdx.begin(), parentIdx.end(), 0);
-        std::sort(parentIdx.begin(), parentIdx.end(),
+        std::nth_element(parentIdx.begin(),
+                         parentIdx.begin() + numParents,
+                         parentIdx.end(),
+                         [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+        // Sort only the top numParents for deterministic elite ordering
+        std::sort(parentIdx.begin(), parentIdx.begin() + numParents,
                   [&fitness](int a, int b) { return fitness(a) > fitness(b); });
 
-        // Elitism: preserve top individuals
-        std::vector<BitIndividual> newPop;
-        newPop.reserve(cfg.pop_size);
+        // Build new population, reusing pre-allocated vector
+        newPop.clear();
+        // Elitism: preserve top individuals, carry forward their fitness
         for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
             newPop.push_back(population[parentIdx[i]]);
 
@@ -583,6 +651,16 @@ void run_island(int id, const Config& cfg,
             newPop.push_back(std::move(child));
         }
 
+        // Repair offspring cardinality (elites already valid)
+        for (int i = numElites; i < static_cast<int>(newPop.size()); ++i)
+            repairCardinality(newPop[i], numGenes, cfg.min_etfs, cfg.max_etfs, rng, repairBuf);
+
+        // Carry forward elite fitness values into swap buffer, then swap
+        newFitness.setZero();
+        for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
+            newFitness(i) = fitness(parentIdx[i]);
+        fitness.swap(newFitness);
+
         population = std::move(newPop);
     }
 
@@ -596,6 +674,7 @@ void run_island(int id, const Config& cfg,
 
     result.bestFitness = bestFitness;
     result.bestIndividual = bestIndividual;
+    result.evaluations = evaluations;
 }
 
 // ─── Monte Carlo worker (bitwise) ─────────────────────────────────────────────
@@ -826,6 +905,7 @@ int main(int argc, char* argv[]) {
         for (auto& t : threads) t.join();
 
         for (int i = 0; i < numThreads; ++i) {
+            totalTrials += gaResults[i].evaluations;
             if (gaResults[i].bestFitness <= -1e3) continue;
             Solution sol;
             sol.fitness = gaResults[i].bestFitness;
@@ -841,8 +921,9 @@ int main(int argc, char* argv[]) {
     int topK = std::min(cfg.top_k, static_cast<int>(allSolutions.size()));
 
     // Output JSON to stdout (full double precision)
+    // Use computeStart (excludes data loading) for elapsed_seconds
     auto elapsed = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - globalStart).count();
+        std::chrono::steady_clock::now() - computeStart).count();
 
     std::cout << std::setprecision(15);
     std::cout << "{" << std::endl;
@@ -850,8 +931,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  \"elapsed_seconds\": " << elapsed << "," << std::endl;
     std::cout << "  \"num_threads\": " << numThreads << "," << std::endl;
     std::cout << "  \"num_instruments\": " << numETFs << "," << std::endl;
-    if (totalTrials > 0)
-        std::cout << "  \"total_trials\": " << totalTrials << "," << std::endl;
+    std::cout << "  \"total_trials\": " << totalTrials << "," << std::endl;
     std::cout << "  \"best_fitness\": "
               << (allSolutions.empty() ? -1e9 : allSolutions[0].fitness) << "," << std::endl;
 
