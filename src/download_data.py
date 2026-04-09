@@ -7,15 +7,12 @@ for working with previously scraped lists.
 """
 
 import argparse
-import json
 import logging
 import os
 import random
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 from curl_cffi.requests import Session as CffiSession
@@ -245,61 +242,6 @@ def filter_unwanted_tickers(df, ticker_column='Tickers', name_column='Name',
         name_re = re.compile(combined_pattern, re.IGNORECASE)
         remove_mask |= df[name_column].str.contains(name_re, na=False)
 
-    removed = df[remove_mask].copy()
-    filtered = df[~remove_mask].copy()
-    return filtered, removed
-
-
-def filter_delisted_tickers(df, api_key, ticker_column='Tickers'):
-    """Cross-reference tickers against FMP's delisted companies list.
-
-    Requires an FMP API key (free tier is sufficient — 250 calls/day).
-    Fetches all pages from the ``/stable/delisted-companies`` endpoint
-    and removes any ticker present in the delisted set.
-
-    :param df: DataFrame with at least a ticker column.
-    :param api_key: Financial Modeling Prep API key.
-    :param ticker_column: column containing ticker symbols.
-    :returns: (filtered_df, removed_df) — both DataFrames.
-    """
-    if df.empty:
-        return df.copy(), df.iloc[:0].copy()
-
-    # Paginate through all delisted tickers
-    delisted_symbols = set()
-    page = 0
-    page_size = 1000
-    base_url = 'https://financialmodelingprep.com/stable/delisted-companies'
-
-    while True:
-        url = f'{base_url}?page={page}&limit={page_size}&apikey={api_key}'
-        try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode())
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as e:
-            logger.warning("FMP delisted API request failed (page %d): %s", page, e)
-            break
-
-        if not data or not isinstance(data, list):
-            break
-
-        for entry in data:
-            sym = entry.get('symbol')
-            if sym:
-                delisted_symbols.add(sym)
-
-        if len(data) < page_size:
-            break
-        page += 1
-
-    logger.info("FMP delisted cross-reference: fetched %d delisted symbols",
-                len(delisted_symbols))
-
-    if not delisted_symbols:
-        return df.copy(), df.iloc[:0].copy()
-
-    remove_mask = df[ticker_column].isin(delisted_symbols)
     removed = df[remove_mask].copy()
     filtered = df[~remove_mask].copy()
     return filtered, removed
@@ -863,13 +805,6 @@ def main():
                         help='Skip the regex pre-filter that removes '
                              'warrants, units, preferred shares, rights, '
                              'and SPACs.')
-    parser.add_argument('--filter-delisted', action='store_true',
-                        help='Cross-reference tickers against FMP delisted '
-                             'companies list (requires --fmp-api-key or '
-                             'FMP_API_KEY env var).')
-    parser.add_argument('--fmp-api-key', default=None,
-                        help='Financial Modeling Prep API key. '
-                             'Falls back to FMP_API_KEY env var.')
     parser.add_argument('--clear-cache', action='store_true',
                         help='Clear the known-bad ticker cache and exit.')
     args = parser.parse_args()
@@ -1026,21 +961,6 @@ def main():
                             name_hits)
     else:
         logger.info("--skip-prefilter: skipping ticker pre-filter")
-
-    # ── Filter delisted tickers via FMP API (opt-in) ───────────────────────
-
-    if args.filter_delisted:
-        fmp_key = args.fmp_api_key or os.environ.get('FMP_API_KEY')
-        if not fmp_key:
-            logger.error("--filter-delisted requires --fmp-api-key or "
-                         "FMP_API_KEY env var")
-            return
-        before = len(tickers_df)
-        tickers_df, delisted_removed = filter_delisted_tickers(
-            tickers_df, fmp_key, ticker_column=args.ticker_column)
-        if len(delisted_removed):
-            logger.info("FMP delisted filter removed %d tickers "
-                        "(%d remain)", len(delisted_removed), len(tickers_df))
 
     # ── Filter known-bad tickers ────────────────────────────────────────────
 

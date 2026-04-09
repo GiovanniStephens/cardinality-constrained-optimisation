@@ -1,7 +1,6 @@
 import os
 import tempfile
 import unittest
-import unittest.mock
 from unittest.mock import patch
 
 import pandas as pd
@@ -341,117 +340,6 @@ class TestFilterUnwantedTickers(unittest.TestCase):
         filtered, removed = dd.filter_unwanted_tickers(df)
         self.assertEqual(filtered['Tickers'].tolist(), ['MSFT'])
         self.assertEqual(sorted(removed['Tickers'].tolist()), ['ABR.PA', 'FOO.WT'])
-
-
-class TestFilterDelistedTickers(unittest.TestCase):
-    """Tests for the FMP delisted cross-reference filter."""
-
-    def _make_df(self, tickers):
-        return pd.DataFrame({'Tickers': tickers})
-
-    @patch('urllib.request.urlopen')
-    def test_removes_delisted_tickers(self, mock_urlopen):
-        """Tickers present in FMP delisted response are removed."""
-        import json
-        fmp_response = json.dumps([
-            {'symbol': 'DEAD', 'companyName': 'Dead Inc', 'exchange': 'NYSE',
-             'ipoDate': '2010-01-01', 'delistedDate': '2020-06-01'},
-            {'symbol': 'GONE', 'companyName': 'Gone Ltd', 'exchange': 'NASDAQ',
-             'ipoDate': '2015-03-01', 'delistedDate': '2022-01-15'},
-        ]).encode()
-        mock_resp = unittest.mock.MagicMock()
-        mock_resp.read.return_value = fmp_response
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = unittest.mock.MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        df = self._make_df(['AAPL', 'DEAD', 'MSFT', 'GONE'])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
-        self.assertEqual(sorted(removed['Tickers'].tolist()), ['DEAD', 'GONE'])
-
-    @patch('urllib.request.urlopen')
-    def test_preserves_all_when_none_delisted(self, mock_urlopen):
-        """No tickers removed when none match the delisted set."""
-        import json
-        fmp_response = json.dumps([
-            {'symbol': 'ZZZZ', 'companyName': 'Zzz Corp', 'exchange': 'NYSE',
-             'ipoDate': '2010-01-01', 'delistedDate': '2023-01-01'},
-        ]).encode()
-        mock_resp = unittest.mock.MagicMock()
-        mock_resp.read.return_value = fmp_response
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = unittest.mock.MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        df = self._make_df(['AAPL', 'MSFT', 'GOOG'])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(len(filtered), 3)
-        self.assertEqual(len(removed), 0)
-
-    @patch('urllib.request.urlopen')
-    def test_handles_api_error_gracefully(self, mock_urlopen):
-        """API failure returns original DataFrame unchanged."""
-        import urllib.error
-        mock_urlopen.side_effect = urllib.error.URLError('connection refused')
-
-        df = self._make_df(['AAPL', 'MSFT'])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(len(filtered), 2)
-        self.assertEqual(len(removed), 0)
-
-    @patch('urllib.request.urlopen')
-    def test_handles_empty_response(self, mock_urlopen):
-        """Empty API response returns original DataFrame unchanged."""
-        import json
-        mock_resp = unittest.mock.MagicMock()
-        mock_resp.read.return_value = json.dumps([]).encode()
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = unittest.mock.MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-
-        df = self._make_df(['AAPL', 'MSFT'])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(len(filtered), 2)
-        self.assertEqual(len(removed), 0)
-
-    def test_empty_dataframe(self):
-        """Empty input returns empty output without calling API."""
-        df = self._make_df([])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(len(filtered), 0)
-        self.assertEqual(len(removed), 0)
-
-    @patch('urllib.request.urlopen')
-    def test_paginates_multiple_pages(self, mock_urlopen):
-        """Fetches multiple pages when first page is full."""
-        import json
-        # Page 0: full page (1000 entries) — triggers pagination
-        page0 = [{'symbol': f'SYM{i}', 'companyName': f'Co {i}',
-                   'exchange': 'NYSE', 'ipoDate': '2010-01-01',
-                   'delistedDate': '2020-01-01'} for i in range(1000)]
-        # Page 1: partial page (1 entry) — stops pagination
-        page1 = [{'symbol': 'TARGET', 'companyName': 'Target Delisted',
-                   'exchange': 'NYSE', 'ipoDate': '2010-01-01',
-                   'delistedDate': '2023-06-01'}]
-
-        def mock_open(req, timeout=None):
-            url = req.full_url if hasattr(req, 'full_url') else str(req)
-            data = page0 if 'page=0' in url else page1
-            resp = unittest.mock.MagicMock()
-            resp.read.return_value = json.dumps(data).encode()
-            resp.__enter__ = lambda s: s
-            resp.__exit__ = unittest.mock.MagicMock(return_value=False)
-            return resp
-
-        mock_urlopen.side_effect = mock_open
-
-        df = self._make_df(['AAPL', 'TARGET', 'SYM0', 'MSFT'])
-        filtered, removed = dd.filter_delisted_tickers(df, api_key='test_key')
-        self.assertEqual(sorted(filtered['Tickers'].tolist()), ['AAPL', 'MSFT'])
-        self.assertEqual(sorted(removed['Tickers'].tolist()), ['SYM0', 'TARGET'])
-        # Should have called API twice (page 0 + page 1)
-        self.assertEqual(mock_urlopen.call_count, 2)
 
 
 if __name__ == '__main__':
