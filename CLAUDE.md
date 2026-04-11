@@ -167,10 +167,11 @@ The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silico
 
 ## Data
 
-- **ETF_Prices.csv** (98 MB): daily adjusted close for ~1792 ETFs (2014-2025)
-- **time_series_20251016_113257.csv** (13 MB): InvestNow NZ managed fund data
+- **Prices.csv** (~287 MB): daily adjusted close for equities + ETFs (2014-2025)
+- **Securities.csv**: ticker metadata (name, country, asset type) from FinanceDatabase
 - **expected_returns.csv** / **variances.csv**: ARIMA/GARCH forecast outputs
-- NZ-specific and leveraged ETF subsets also available
+- **known_bad_tickers.csv**: cached tickers that failed download validation
+- **portfolio.db**: SQLite database (gitignored, created by `src/db.py`)
 - Data files are gitignored where large; do not commit raw price CSVs without checking size
 
 ## Conventions

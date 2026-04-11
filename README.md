@@ -1,14 +1,14 @@
 # Cardinality-Constrained Portfolio Optimisation
 
-Select N ETFs from a universe of 1700+ to maximise the Sharpe Ratio, subject to constraints on holdings count, weights, and optionally return/risk targets. The core idea: use a genetic algorithm to choose *which* ETFs to hold (the cardinality problem), then use SLSQP to optimise *how much* of each to hold (the weight problem).
+Select N instruments from a universe of ~25,000 equities and ETFs to maximise the Sharpe Ratio, subject to constraints on holdings count, weights, and optionally return/risk targets. The core idea: use a genetic algorithm to choose *which* instruments to hold (the cardinality problem), then use SLSQP to optimise *how much* of each to hold (the weight problem).
 
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 
-# 1. Download ETF price data from Yahoo Finance
-python -m src.download_data
+# 1. Download price data from Yahoo Finance (equities + ETFs)
+python -m src.download_data --asset-types equities etfs
 
 # 2. (Optional) Forecast returns and variances
 python -m src.forecast
@@ -26,21 +26,35 @@ python -m src.backtest
 .
 ├── src/
 │   ├── optimisers/              # All optimisation algorithms (BaseOptimiser ABC)
+│   │   ├── base.py              # BaseOptimiser ABC
 │   │   ├── pygad_ga.py          # PyGAD GA + SLSQP + copula/CCC correlation
 │   │   ├── island_ga.py         # Parallel island-model GA
 │   │   ├── monte_carlo.py       # Random search (10M+ trials)
 │   │   └── mip.py               # Mixed integer programming (PuLP)
-│   ├── backtest.py              # Out-of-sample backtesting framework
+│   ├── backtest.py              # Forward-walk backtesting orchestrator
+│   ├── backtest_types.py        # Dataclasses for backtest results
+│   ├── backtest_windows.py      # Window generation, data slicing
+│   ├── backtest_simulation.py   # Portfolio simulation (buy-and-hold)
+│   ├── backtest_statistics.py   # Hypothesis tests (t-test, Friedman)
 │   ├── forecast.py              # ARIMA return + GARCH variance forecasts
 │   ├── download_data.py         # Fetches prices from Yahoo Finance
-│   ├── portfolio_utils.py       # Shared analytics + OptimisationResult
-│   ├── config.py                # Centralised algorithm/pipeline/universe configuration
-│   ├── db.py                    # SQLite database module
-│   ├── pipeline.py              # Orchestrates download, quality checks, forecasting
+│   ├── data_loading.py          # DB-first / CSV-fallback price loading
 │   ├── data_quality.py          # Data validation and bad-ticker flagging
+│   ├── pipeline.py              # Orchestrates download, quality checks, forecasting
+│   ├── portfolio_utils.py       # OptimisationResult + DB save helper
+│   ├── config.py                # Centralised algorithm/pipeline/universe configuration
+│   ├── db.py                    # SQLite database module (schema, migrations)
+│   ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance
+│   ├── metrics.py               # Sharpe, Sortino, Calmar, drawdown, DSR
+│   ├── weights.py               # SLSQP weight optimisation, risk-parity
+│   ├── returns.py               # Log returns, expected returns, variances
+│   ├── binary_io.py             # Binary data format for C++ optimiser
 │   └── logging_config.py        # Centralised logging setup
 ├── cpp/
-│   └── optimisation.cpp         # C++ parallel island GA
+│   ├── optimisation.cpp         # C++ parallel island GA (CPU + Metal GPU)
+│   ├── metal_fitness.h          # PIMPL header for GPU evaluator
+│   ├── metal_fitness.mm         # ObjC++ Metal compute shader implementation
+│   └── CMakeLists.txt           # Build config (auto-detects Metal on macOS)
 ├── benchmark/                   # Benchmarking framework
 │   ├── adapters.py              # Adapter wrappers for all optimisation methods
 │   ├── runner.py                # Orchestrates parallel benchmark runs
@@ -50,8 +64,8 @@ python -m src.backtest
 │
 └── data/
     ├── portfolio.db             # SQLite database (gitignored)
-    ├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs (98 MB)
-    ├── NZ_ETF_Prices.csv        # NZ ETF prices (smaller dataset)
+    ├── Prices.csv               # Daily adjusted close prices (~287 MB)
+    ├── Securities.csv           # Ticker metadata from FinanceDatabase
     ├── expected_returns.csv     # Output from forecast (ARIMA)
     ├── variances.csv            # Output from forecast (GARCH)
     └── ...
@@ -74,12 +88,12 @@ Given the selected ETFs, `scipy.optimize.minimize` finds weights that maximise t
 
 ```
 src.download_data         src.forecast             src.optimisers.pygad_ga
-Yahoo Finance  ──>  ETF_Prices.csv  ──>  expected_returns.csv  ──>  Portfolio
+Yahoo Finance  ──>  Prices.csv      ──>  expected_returns.csv  ──>  Portfolio
                                     ──>  variances.csv              selection
                                          (optional)                 + weights
 ```
 
-1. **`src.download_data`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025). Filters ETFs with <90% data availability.
+1. **`src.download_data`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025). Supports equities, ETFs, and funds. Filters instruments with <90% data availability.
 
 2. **`src.forecast`** -- Generates forward-looking inputs:
    - **Returns**: Auto-ARIMA per ETF, projects price 252 days out, computes log return.
@@ -171,7 +185,7 @@ Each portfolio is run forward for 252 days out-of-sample without rebalancing. Pe
 
 ### Backtest Results
 
-Configuration: 100 portfolios, 1000 GA children, 252 OOS days, max 10 holdings, max 20% weight.
+> **Note:** These results are from an earlier configuration (100 portfolios, 1000 GA children, max 10 holdings, max 20% weight). Current defaults differ — see `src/config.py` for active parameters.
 
 | Portfolio Type | Sharpe Mean | Sharpe Std |
 |---|---|---|
@@ -229,6 +243,7 @@ Tests cover data loading, return calculations, Sharpe Ratio computation, weight 
 ```
 arch            # GARCH volatility models
 copulae         # Copula-based correlation estimation
+curl_cffi       # HTTP client (yfinance backend)
 financedatabase # Instrument universe sourcing
 matplotlib      # Plotting
 muarch          # Multivariate ARCH models
@@ -244,6 +259,8 @@ seaborn         # Statistical visualisation
 tqdm            # Progress bars
 yfinance        # Yahoo Finance data download
 ```
+
+See `pyproject.toml` for exact version constraints.
 
 ## Todo
 

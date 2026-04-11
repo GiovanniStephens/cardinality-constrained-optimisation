@@ -80,13 +80,15 @@ def equal_weight_fitness(selection_mask, expected_returns, cov_matrix,
 
 
 def maximum_drawdown(portfolio_returns):
-    """
-    Calculates the out-of-sample maximum drawdown
-    from the simulation.
+    """Maximum peak-to-trough decline from cumulative log returns.
 
-    :portfolio_returns: The input portfolio returns. List of floats.
-    :return: The maximum drawdown, which is the percentage drawdown
-             from the highest peak to the lowest low.
+    Computes the largest percentage drop from a running peak of the
+    compounded equity curve: MDD = min_t (V_t / max_{s<=t} V_s - 1),
+    where V_t = exp(sum of log returns up to t).
+
+    :param portfolio_returns: list of per-period log returns.
+    :return: maximum drawdown as a negative float (e.g. -0.25 = 25% drawdown).
+        Returns 0 if the equity curve never declines.
     """
     if not portfolio_returns:
         raise ValueError("portfolio_returns cannot be empty")
@@ -105,13 +107,18 @@ def maximum_drawdown(portfolio_returns):
 
 
 def downside_deviation(portfolio_returns, mar=0):
-    """
-    Calculates the downside deviation of the portfolio
-    returns.
+    """Semi-deviation of returns below a minimum acceptable return (MAR).
 
-    :portfolio_returns: The input portfolio returns. List of floats.
-    :mar: threshold below which one would calculate the deviation.
-    :return: downside deviation.
+    DD = sqrt( (1/N) * sum_{r_i < MAR} (r_i - MAR)^2 )
+
+    Only periods where the return falls below *mar* contribute to the
+    sum; all N periods are used in the denominator (full-length
+    normalisation, consistent with Sortino & Price 1994).
+
+    :param portfolio_returns: list of per-period log returns.
+    :param mar: minimum acceptable return threshold (default 0).
+    :return: downside deviation as a non-negative float. Returns 0.0 if
+        *portfolio_returns* is empty.
     """
     if not portfolio_returns:
         return 0.0
@@ -123,14 +130,17 @@ def downside_deviation(portfolio_returns, mar=0):
 
 
 def sortino_ratio(r, downside_deviation, MAR=0):
-    """
-    Calculates the Sortino ratio given the inputs.
+    """Sortino ratio: excess return per unit of downside risk.
 
-    :r: float for the portfolio returns (annualised)
-    :downside_deviation: the standard deviation of the
-                         returns below MAR.
-    :MAR: The threshold under which the deviation is calculated.
-    :return: float for the Sortino Ratio.
+    Sortino = (R - MAR) / DD
+
+    Unlike the Sharpe ratio, only downside volatility is penalised,
+    making this more appropriate when return distributions are skewed.
+
+    :param r: annualised portfolio return.
+    :param downside_deviation: downside deviation (see :func:`downside_deviation`).
+    :param MAR: minimum acceptable return threshold (default 0).
+    :return: Sortino ratio as a float. Returns 0.0 if downside_deviation is 0.
     """
     if downside_deviation == 0:
         return 0.0
@@ -138,12 +148,18 @@ def sortino_ratio(r, downside_deviation, MAR=0):
 
 
 def calmar_ratio(r, downside_drawdown):
-    """
-    Calculates that the portfolio Calmar ratio would be.
+    """Calmar ratio: annualised return divided by maximum drawdown.
 
-    :r: float for the portfolio returns (annualised)
-    :downside_deviation: The maximum drawdown over a period in % terms.
-    :return: a float for the Calmar ratio
+    Calmar = R / |MDD|
+
+    Measures return per unit of tail risk. Higher values indicate better
+    risk-adjusted performance relative to the worst historical decline.
+
+    :param r: annualised portfolio return.
+    :param downside_drawdown: maximum drawdown (negative float from
+        :func:`maximum_drawdown`). The absolute value is used.
+    :return: Calmar ratio as a non-negative float. Returns 0.0 if
+        drawdown is 0.
     """
     if downside_drawdown == 0:
         return 0.0
