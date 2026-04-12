@@ -42,6 +42,7 @@ python -m src.backtest
 │   ├── data_quality.py          # Data validation and bad-ticker flagging
 │   ├── pipeline.py              # Orchestrates download, quality checks, forecasting
 │   ├── portfolio_utils.py       # OptimisationResult + DB save helper
+│   ├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
 │   ├── config.py                # Centralised algorithm/pipeline/universe configuration
 │   ├── db.py                    # SQLite database module (schema, migrations)
 │   ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance
@@ -115,6 +116,7 @@ These parameters in `src/config.py` control the optimisation behaviour:
 | `GA_TARGET_RETURN` | 0.15 | Minimum annualised return constraint |
 | `GA_MAX_WEIGHT` | 0.45 | Maximum allocation to any single ETF |
 | `GA_MIN_WEIGHT` | 0.05 | Minimum allocation to any single ETF |
+| `GROUP_CONSTRAINTS` | See config.py | Group allocation caps by country/sector (see [Group Allocation Constraints](#group-allocation-constraints)) |
 
 Backtest configuration (also in `src/config.py`):
 
@@ -123,6 +125,48 @@ Backtest configuration (also in `src/config.py`):
 | `BACKTEST_NUM_PORTFOLIOS` | 20 | Number of portfolios to generate per group |
 | `BACKTEST_NUM_CHILDREN` | 100 | GA population size |
 | `BACKTEST_NUM_DAYS_OOS` | 252 | Out-of-sample period (~1 trading year) |
+
+## Group Allocation Constraints
+
+Beyond position count and weight bounds, the optimiser supports **group allocation constraints** that cap how much of the portfolio can be allocated to any single country, sector, or other grouping dimension. These are enforced as additional linear constraints in the SLSQP weight optimisation step.
+
+Configured in `src/config.py` via `GROUP_CONSTRAINTS`. Supported dimensions:
+
+| Dimension | Source | Applies to |
+|-----------|--------|------------|
+| `country` | `tickers.country` column | Stocks (company domicile) and ETFs with country metadata |
+| `sector` | `tickers.sector` column | Equities (FinanceDatabase sectors) |
+| `asset_type` | `tickers.asset_type` column | All instruments (`stock`, `etf`) |
+| `category_group` | `tickers.category_group` column | ETFs (e.g. `Fixed Income`, `Equities`) |
+
+### Active Constraints
+
+| Dimension | Group | Max | Rationale |
+|-----------|-------|-----|-----------|
+| `country` | United States | 60% | Prevent US dominance from recent outperformance |
+| `country` | Each non-US country | 20% | Prevent single non-US country concentration |
+| `sector` | Each of 11 GICS sectors | 50% | Prevent sector concentration (especially tech) |
+
+Tickers with NULL metadata for a dimension are unconstrained in that dimension. Run `python -m src.db backfill` to populate sector and category_group metadata from FinanceDatabase.
+
+### Customising Constraints
+
+```python
+# src/config.py
+GROUP_CONSTRAINTS = {
+    'country': {
+        'United States': (0.0, 0.40),   # min 0%, max 40% US
+    },
+    'sector': {
+        'Information Technology': (0.0, 0.30),  # max 30% tech
+    },
+    'category_group': {
+        'Fixed Income': (0.10, 0.40),   # 10-40% bonds
+    },
+}
+```
+
+Set `GROUP_CONSTRAINTS = {}` to disable all group constraints.
 
 ## Why Cardinality-Constrained?
 

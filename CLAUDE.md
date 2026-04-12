@@ -38,6 +38,7 @@ src/                         # Python source package
 ├── weights.py               # SLSQP weight optimisation, risk-parity, portfolio variance
 ├── data_loading.py          # DB-first / CSV-fallback price data loading
 ├── binary_io.py             # Binary data format for C++ optimiser
+├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── download_data.py         # Yahoo Finance data downloader
 ├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
@@ -52,6 +53,7 @@ tests/                       # Unit and integration tests
 ├── test_portfolio_utils.py  # Tests for portfolio utilities
 ├── test_securities.py       # Tests for security universe/download
 ├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
+├── test_group_constraints.py # Tests for group allocation constraints
 ├── test_data_quality.py     # Tests for data validation
 ├── test_pipeline.py         # Tests for pipeline orchestration
 ├── test_cpp_equivalence.py  # Tests for C++/Python parity + Metal GPU equivalence
@@ -323,3 +325,15 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 - **Positions**: 10–20 (cardinality constraint)
 - **Rebalancing**: Quarterly
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
+
+### Group Allocation Constraints
+
+Configured in `src/config.py` `GROUP_CONSTRAINTS`. Enforced as linear constraints in SLSQP weight optimisation. Implementation in `src/group_constraints.py` + `src/weights.py`.
+
+| Dimension | Group | Max | Rationale |
+|-----------|-------|-----|-----------|
+| `country` | United States | 60% | Prevent US dominance from recent outperformance |
+| `country` | Each non-US country | 20% | Prevent single non-US country concentration |
+| `sector` | Each of 11 GICS sectors | 50% | Prevent sector concentration (especially tech) |
+
+Supported dimensions: `country`, `sector`, `asset_type`, `category_group`. Tickers with NULL metadata are unconstrained. Run `python -m src.db backfill` to populate metadata from FinanceDatabase.
