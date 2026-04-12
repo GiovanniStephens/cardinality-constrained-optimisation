@@ -390,7 +390,7 @@ if __name__ == '__main__':
                 conn, selected_etfs, optimised_result.x, data,
                 script_name='island_ga',
                 params={
-                    'data_source': 'investnow',
+                    'data_source': 'us_db',
                     'num_generations': ISLAND_GA_NUM_GENERATIONS,
                     'total_population_size': ISLAND_GA_POPULATION_SIZE,
                     'mutation_rate': mutation_rate,
@@ -401,7 +401,7 @@ if __name__ == '__main__':
                     'min_securities': ISLAND_GA_MIN_SECURITIES,
                     'max_securities': ISLAND_GA_MAX_SECURITIES,
                 },
-                exchange='NZX',
+                exchange='US',
                 elapsed_seconds=ga_elapsed,
             )
             logger.info("Run saved to database (id=%d)", run_id)

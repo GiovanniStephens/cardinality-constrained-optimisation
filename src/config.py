@@ -64,7 +64,7 @@ STATISTICAL_SIGNIFICANCE_LEVEL = 0.05
 TRADING_DAYS_PER_YEAR = 252
 DATA_MIN_COVERAGE = 0.95         # keep columns with >= 95% non-null rows
 DATA_FFILL_LIMIT = 5             # max consecutive NaN rows to forward-fill
-DATA_LOOKBACK_DAYS = 730         # 2 years of calendar days
+DATA_LOOKBACK_DAYS = 1825        # 5 years of calendar days (~1260 trading days)
 DATA_MIN_COVERAGE_PERMISSIVE = 0.10  # permissive coverage for load_data()
 
 # ─── Data paths ────────────────────────────────────────────────────────────
@@ -116,6 +116,31 @@ ISLAND_GA_MUTATION_RATE_FINAL = 0.002    # Low late exploitation
 ISLAND_GA_STAGNATION_LIMIT = 30   # Per-island early stopping on stagnation
 
 MC_NUM_TRIALS = 10_000_000         # Default Monte Carlo trial count
+
+# ─── Group allocation constraints (optional) ────────────────────────────────
+# Dict of group dimension -> {group_name: (min_weight, max_weight)}.
+# Weight fractions are of total portfolio (0.0 to 1.0).
+# Empty dict = no constraints (default). Only listed groups are constrained.
+
+# Non-US country caps: 20% each to prevent single-country dominance
+_NON_US_COUNTRY_CAPS = {
+    c: (0.0, 0.20) for c in INCLUDED_COUNTRIES if c != 'United States'
+}
+
+# Standard FinanceDatabase equity sectors — cap at 50% each
+CONSTRAINED_SECTORS = [
+    'Information Technology', 'Health Care', 'Financials',
+    'Consumer Discretionary', 'Industrials', 'Communication Services',
+    'Consumer Staples', 'Energy', 'Materials', 'Real Estate', 'Utilities',
+]
+
+GROUP_CONSTRAINTS = {
+    'country': {
+        'United States': (0.0, 0.60),   # max 60% US
+        **_NON_US_COUNTRY_CAPS,
+    },
+    'sector': {s: (0.0, 0.50) for s in CONSTRAINED_SECTORS},
+}
 
 # ─── Backtest parameters ────────────────────────────────────────────────────
 
