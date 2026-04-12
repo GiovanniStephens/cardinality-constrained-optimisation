@@ -78,7 +78,9 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
                      max_weight=1.0, min_return=None, *,
                      expected_returns=None, cov_matrix=None,
                      target_return=None, target_risk=None,
-                     initial_weights=None, risk_parity=False):
+                     initial_weights=None, risk_parity=False,
+                     group_constraints=None, group_membership=None,
+                     selected_tickers=None):
     """SLSQP weight optimisation for a portfolio.
 
     Can be called in two modes:
@@ -111,6 +113,10 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         equal weights.
     :param risk_parity: if True, minimise risk-budget deviation instead of
         negative Sharpe ratio.
+    :param group_constraints: optional GROUP_CONSTRAINTS dict from config.
+    :param group_membership: optional membership dict from load_membership().
+    :param selected_tickers: optional list of ticker symbols (required when
+        group_constraints is non-empty).
     :return: scipy.optimize.OptimizeResult with optimised weights in .x
     """
     from scipy.optimize import minimize
@@ -159,6 +165,14 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
             'fun': lambda x, _cov=cov: target_risk -
             np.sqrt(np.dot(x.T, np.dot(_cov, x))),
         })
+
+    # ── Group allocation constraints ──────────────────────────────────────
+    if group_constraints and group_membership and selected_tickers:
+        from src.group_constraints import build_slsqp_constraints
+        constraints.extend(
+            build_slsqp_constraints(selected_tickers, group_membership,
+                                    group_constraints)
+        )
 
     # ── Objective ─────────────────────────────────────────────────────────
     if risk_parity:
