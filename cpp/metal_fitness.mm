@@ -152,6 +152,8 @@ struct MetalFitnessImpl {
     id<MTLComputePipelineState> pipeline;
     id<MTLBuffer>              centeredReturnsBuf;  // float, T×M col-major
     id<MTLBuffer>              expectedReturnsBuf;  // float, M
+    // NOTE: bitVecBuf and outBuf are allocated per-call in evaluateBatch
+    // to maintain thread safety across islands.
     int T;
     int M;
     int wpi32;  // words per individual (uint32)
@@ -288,23 +290,20 @@ void MetalFitnessEvaluator::evaluateBatch(
         size_t bitBufSize = static_cast<size_t>(evalCount) * impl_->wpi32 * sizeof(uint32_t);
         size_t outBufSize = static_cast<size_t>(evalCount) * sizeof(float);
 
-        // Per-call buffers for bit vectors and output (thread-safe: each island
-        // gets its own command buffer and buffers, no contention).
+        // Allocate shared-mode buffer + memcpy (avoids the implicit copy in
+        // newBufferWithBytes which can be slower for large buffers).
         id<MTLBuffer> bitVecBuf = [impl_->device
-            newBufferWithBytes:bitVecsFlat
-                        length:bitBufSize
-                       options:MTLResourceStorageModeShared];
-
+            newBufferWithLength:bitBufSize
+                        options:MTLResourceStorageModeShared];
         id<MTLBuffer> outBuf = [impl_->device
             newBufferWithLength:outBufSize
                         options:MTLResourceStorageModeShared];
-
         if (!bitVecBuf || !outBuf) {
             std::cerr << "Metal: Buffer allocation failed in evaluateBatch." << std::endl;
-            for (int i = 0; i < evalCount; ++i)
-                outFitness[i] = -1e4;
+            for (int i = 0; i < evalCount; ++i) outFitness[i] = -1e4;
             return;
         }
+        memcpy([bitVecBuf contents], bitVecsFlat, bitBufSize);
 
         // Set up params
         MetalParams params;
@@ -318,28 +317,20 @@ void MetalFitnessEvaluator::evaluateBatch(
 
         // Encode and dispatch
         id<MTLCommandBuffer> cmdBuf = [impl_->queue commandBuffer];
-        if (!cmdBuf) {
-            std::cerr << "Metal: Command buffer creation failed." << std::endl;
-            for (int i = 0; i < evalCount; ++i)
-                outFitness[i] = -1e4;
-            return;
-        }
         id<MTLComputeCommandEncoder> encoder = [cmdBuf computeCommandEncoder];
-        if (!encoder) {
-            std::cerr << "Metal: Compute encoder creation failed." << std::endl;
-            for (int i = 0; i < evalCount; ++i)
-                outFitness[i] = -1e4;
+        if (!cmdBuf || !encoder) {
+            std::cerr << "Metal: Command buffer/encoder creation failed." << std::endl;
+            for (int i = 0; i < evalCount; ++i) outFitness[i] = -1e4;
             return;
         }
 
         [encoder setComputePipelineState:impl_->pipeline];
         [encoder setBuffer:impl_->centeredReturnsBuf offset:0 atIndex:0];
         [encoder setBuffer:impl_->expectedReturnsBuf offset:0 atIndex:1];
-        [encoder setBuffer:bitVecBuf                 offset:0 atIndex:2];
+        [encoder setBuffer:bitVecBuf                  offset:0 atIndex:2];
         [encoder setBuffer:outBuf                    offset:0 atIndex:3];
         [encoder setBytes:&params length:sizeof(MetalParams) atIndex:4];
 
-        // evalCount threadgroups × THREADS_PER_GROUP threads each
         MTLSize threadgroupSize = MTLSizeMake(THREADS_PER_GROUP, 1, 1);
         MTLSize gridSize = MTLSizeMake(static_cast<NSUInteger>(evalCount), 1, 1);
         [encoder dispatchThreadgroups:gridSize threadsPerThreadgroup:threadgroupSize];
@@ -348,12 +339,10 @@ void MetalFitnessEvaluator::evaluateBatch(
         [cmdBuf commit];
         [cmdBuf waitUntilCompleted];
 
-        // Check for errors
         if ([cmdBuf status] == MTLCommandBufferStatusError) {
             std::cerr << "Metal: Command buffer error: "
                       << [[[cmdBuf error] localizedDescription] UTF8String] << std::endl;
-            for (int i = 0; i < evalCount; ++i)
-                outFitness[i] = -1e4;
+            for (int i = 0; i < evalCount; ++i) outFitness[i] = -1e4;
             return;
         }
 

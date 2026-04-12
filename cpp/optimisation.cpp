@@ -15,7 +15,12 @@
 #include <atomic>
 #include <numeric>
 #include <cassert>
+#include <barrier>
 #include "csv.hpp"
+
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
 
 #ifdef HAS_METAL
 #include "metal_fitness.h"
@@ -38,13 +43,18 @@ struct Config {
     int num_elites = 10;
     int migration_interval = 10;
     double migration_rate = 0.1;
-    int top_k = 5;
+    int top_k = 100;
     double missing_threshold = 0.02; // fraction of rows allowed to be NaN
     int mc_log_interval = 5000;      // MC: log every N trials per thread
     bool binary_input = false;       // if true, read binary format instead of CSV
     bool use_svd = false;            // if true, use truncated SVD for fitness
     int svd_components = 200;        // number of SVD components to keep
     bool use_gpu = false;            // if true, use Metal GPU for fitness
+    // Adaptive mutation: linear decay from mutation_initial to mutation_final
+    double mutation_initial = 0.02;  // 2% early exploration
+    double mutation_final   = 0.005; // 0.5% late exploitation (higher floor than before)
+    // Stagnation restart: reinitialise island after N gens without improvement
+    int stagnation_restart = 200;    // 0 = disable restart
 };
 
 Config parse_args(int argc, char* argv[]) {
@@ -67,13 +77,16 @@ Config parse_args(int argc, char* argv[]) {
                 << "  --num-elites N         GA: elites per island (default: 10)\n"
                 << "  --migration-interval N GA: generations between migrations (default: 10)\n"
                 << "  --migration-rate R     GA: fraction of population to migrate (default: 0.1)\n"
-                << "  --top-k N              Top K solutions to output (default: 5)\n"
+                << "  --top-k N              Top K solutions to output (default: 100)\n"
                 << "  --missing-threshold R  Max fraction of NaN rows per column (default: 0.02)\n"
                 << "  --mc-log-interval N    MC: log every N trials per thread (default: 5000)\n"
                 << "  --binary               Read binary format instead of CSV\n"
                 << "  --svd                  Use truncated SVD for approximate fitness\n"
                 << "  --svd-components N     Number of SVD components (default: 200)\n"
-                << "  --gpu                  Use Metal GPU for fitness evaluation\n";
+                << "  --gpu                  Use Metal GPU for fitness evaluation\n"
+                << "  --mutation-initial R   Adaptive mutation: initial rate (default: 0.02)\n"
+                << "  --mutation-final R     Adaptive mutation: final rate (default: 0.005)\n"
+                << "  --stagnation-restart N Reinitialise island after N stagnant gens (default: 200, 0=off)\n";
             std::exit(0);
         }
         // Boolean flags (no value)
@@ -100,6 +113,9 @@ Config parse_args(int argc, char* argv[]) {
         else if (arg == "--missing-threshold") cfg.missing_threshold = std::stod(val);
         else if (arg == "--mc-log-interval") cfg.mc_log_interval = std::stoi(val);
         else if (arg == "--svd-components") cfg.svd_components = std::stoi(val);
+        else if (arg == "--mutation-initial") cfg.mutation_initial = std::stod(val);
+        else if (arg == "--mutation-final") cfg.mutation_final = std::stod(val);
+        else if (arg == "--stagnation-restart") cfg.stagnation_restart = std::stoi(val);
     }
     if (cfg.num_islands < 0)
         cfg.num_islands = static_cast<int>(std::thread::hardware_concurrency());
@@ -304,10 +320,33 @@ inline int popcount(const BitIndividual& ind) {
     return count;
 }
 
+// ─── Lightweight RNG for parallel GA operators ─────────────────────────────────
+// SplitMix64: 64-bit state, passes BigCrush. Used per-offspring in dispatch_apply
+// to avoid contention on the island's mt19937.
+
+struct SplitMix64 {
+    using result_type = uint64_t;
+    uint64_t state;
+
+    explicit SplitMix64(uint64_t s) : state(s) {}
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return UINT64_MAX; }
+
+    result_type operator()() {
+        state += 0x9e3779b97f4a7c15ULL;
+        uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }
+};
+
 // ─── Cardinality repair ────────────────────────────────────────────────────────
 
+template<typename RNG>
 void repairCardinality(BitIndividual& ind, int numGenes,
-                       int minETFs, int maxETFs, std::mt19937& rng,
+                       int minETFs, int maxETFs, RNG& rng,
                        std::vector<int>& buf) {
     int current = popcount(ind);
     std::uniform_int_distribution<int> targetDist(minETFs, maxETFs);
@@ -363,21 +402,29 @@ std::vector<BitIndividual> initializePopulation(int size, int numGenes,
 }
 
 // Uniform crossover: for each 64-bit word, generate a random mask and blend
+template<typename RNG>
 BitIndividual crossoverOne(const BitIndividual& p1, const BitIndividual& p2,
-                            std::mt19937& rng) {
+                            RNG& rng) {
     BitIndividual child(p1.size());
     for (size_t w = 0; w < p1.size(); ++w) {
-        // Generate full 64-bit random mask from two 32-bit rng calls
-        uint64_t mask = static_cast<uint64_t>(rng()) |
-                        (static_cast<uint64_t>(rng()) << 32);
+        uint64_t mask;
+        if constexpr (sizeof(typename RNG::result_type) >= 8) {
+            // 64-bit RNG (e.g. SplitMix64): single call suffices
+            mask = rng();
+        } else {
+            // 32-bit RNG (e.g. mt19937): combine two calls
+            mask = static_cast<uint64_t>(rng()) |
+                   (static_cast<uint64_t>(rng()) << 32);
+        }
         child[w] = (p1[w] & mask) | (p2[w] & ~mask);
     }
     return child;
 }
 
 // Phase 3: Poisson mutation — O(1) expected per individual instead of O(numGenes)
+template<typename RNG>
 void mutateOne(BitIndividual& ind, double mutationRate, int numGenes,
-               std::mt19937& rng) {
+               RNG& rng) {
     double lambda = mutationRate * numGenes;  // ≈ 1.0
     std::poisson_distribution<int> poissonDist(lambda);
     std::uniform_int_distribution<int> posDist(0, numGenes - 1);
@@ -490,12 +537,50 @@ struct MigrationBuffer {
     }
 };
 
+// ─── Hall of Fame: top-N unique solutions per island ───────────────────────────
+
+struct HallOfFameEntry {
+    double fitness;
+    BitIndividual individual;
+};
+
+struct HallOfFame {
+    int capacity;
+    std::vector<HallOfFameEntry> entries;
+
+    explicit HallOfFame(int cap = 20) : capacity(cap) { entries.reserve(cap + 1); }
+
+    void tryInsert(double fitness, const BitIndividual& ind) {
+        if (fitness <= -1e3) return;  // skip infeasible
+        // Check if we have room or this beats the worst
+        if (static_cast<int>(entries.size()) >= capacity
+            && fitness <= entries.back().fitness) return;
+        // Dedup: reject exact duplicates
+        for (const auto& e : entries) {
+            if (e.individual == ind) return;
+        }
+        // Insert and maintain sorted order (descending by fitness)
+        entries.push_back({fitness, ind});
+        // Insertion sort from the back
+        for (int i = static_cast<int>(entries.size()) - 1; i > 0; --i) {
+            if (entries[i].fitness > entries[i - 1].fitness)
+                std::swap(entries[i], entries[i - 1]);
+            else
+                break;
+        }
+        // Trim to capacity
+        if (static_cast<int>(entries.size()) > capacity)
+            entries.pop_back();
+    }
+};
+
 // ─── Island result ─────────────────────────────────────────────────────────────
 
 struct IslandResult {
     double bestFitness = -std::numeric_limits<double>::infinity();
     BitIndividual bestIndividual;
     long long evaluations = 0;  // actual fitness evaluations performed
+    HallOfFame hallOfFame;
 };
 
 // ─── Helper: extract tickers from a BitIndividual ──────────────────────────────
@@ -546,13 +631,24 @@ void run_island(int id, const Config& cfg,
     Eigen::VectorXd fitness = Eigen::VectorXd::Zero(cfg.pop_size);
     BitIndividual bestIndividual(numWords(numGenes), 0);
     double bestFitness = -std::numeric_limits<double>::infinity();
-    double mutationRate = 1.0 / numGenes;
+
+    // Adaptive mutation: linear decay from initial to final rate
+    double mutationInitial = std::max(cfg.mutation_initial, 1.0 / numGenes);
+    double mutationFinal = std::max(cfg.mutation_final, 0.5 / numGenes);
+    double mutationRate = mutationInitial;
+
+    // Stagnation tracking for restart
+    int stagnationCounter = 0;
+    int totalRestarts = 0;
 
     int numElites = std::max(0, cfg.num_elites);
     // With 0 elites, use the full population as parents (no selection pressure)
     int numParents = (numElites == 0) ? cfg.pop_size : std::max(2, numElites);
     int migrationCount = std::max(1, static_cast<int>(cfg.pop_size * cfg.migration_rate));
     long long evaluations = 0;
+
+    // Hall of fame: track top-K unique solutions across all generations
+    HallOfFame hallOfFame(cfg.top_k);
 
     // Pre-allocate buffers reused every generation (avoid per-generation heap allocs)
     std::vector<int> parentIdx(cfg.pop_size);
@@ -610,13 +706,7 @@ void run_island(int id, const Config& cfg,
             gpu->evaluateBatch(flatBits.data(), evalCount, gpuResults.data());
 
             for (int i = 0; i < evalCount; ++i) {
-                double f = gpuResults[i];
-                fitness(evalStart + i) = f;
-                evaluations++;
-                if (f > bestFitness) {
-                    bestFitness = f;
-                    bestIndividual = population[evalStart + i];
-                }
+                fitness(evalStart + i) = gpuResults[i];
             }
         } else
 #endif
@@ -636,14 +726,75 @@ void run_island(int id, const Config& cfg,
                                                cfg.risk_free_rate, cfg.min_return);
                 }
                 fitness(i) = f;
-                evaluations++;
-                if (f > bestFitness) {
-                    bestFitness = f;
-                    bestIndividual = population[i];
-                }
             }
         }
         firstGeneration = false;
+
+        // Adaptive mutation: linear decay from initial to final rate
+        {
+            double progress = static_cast<double>(generation)
+                            / std::max(1, cfg.num_generations - 1);
+            mutationRate = mutationInitial * (1.0 - progress)
+                         + mutationFinal * progress;
+        }
+
+        // Track stagnation for restart (bestFitness/bestIndividual already
+        // updated in the eval loop above)
+        double prevBest = bestFitness;
+        for (int i = evalStart; i < cfg.pop_size; ++i) {
+            if (fitness(i) > bestFitness) {
+                bestFitness = fitness(i);
+                bestIndividual = population[i];
+            }
+        }
+        evaluations += evalCount;  // count batch
+
+        // Insert generation's best into hall of fame
+        hallOfFame.tryInsert(bestFitness, bestIndividual);
+
+        // Insert top elites into hall of fame for diversity
+        {
+            std::vector<int> topIdx(cfg.pop_size);
+            std::iota(topIdx.begin(), topIdx.end(), 0);
+            int nInsert = std::min(5, cfg.pop_size);
+            std::partial_sort(topIdx.begin(), topIdx.begin() + nInsert, topIdx.end(),
+                              [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+            for (int i = 0; i < nInsert; ++i) {
+                hallOfFame.tryInsert(fitness(topIdx[i]), population[topIdx[i]]);
+            }
+        }
+
+        if (bestFitness > prevBest) {
+            stagnationCounter = 0;
+        } else {
+            stagnationCounter++;
+        }
+
+        // Stagnation restart: reinitialise island (keep best individual)
+        if (cfg.stagnation_restart > 0
+            && stagnationCounter >= cfg.stagnation_restart) {
+            totalRestarts++;
+            {
+                std::lock_guard<std::mutex> lock(outputMutex);
+                std::cerr << "Island " << id
+                          << ": Restart #" << totalRestarts
+                          << " at generation " << generation
+                          << " (stagnant " << stagnationCounter << " gens)"
+                          << ", best = " << bestFitness
+                          << std::endl;
+            }
+            // Reinitialise population but inject the best-ever individual
+            population = initializePopulation(cfg.pop_size, numGenes,
+                                               cfg.min_etfs, cfg.max_etfs, rng);
+            population[0] = bestIndividual;
+            fitness.setZero();
+            fitness(0) = bestFitness;
+            firstGeneration = false;  // elite slot 0 is valid
+            stagnationCounter = 0;
+            // Boost mutation temporarily after restart
+            mutationRate = mutationInitial;
+            continue;  // skip selection/crossover this generation
+        }
 
         // Log convergence to stderr (every 50 generations to reduce I/O + lock overhead)
         if (generation % 50 == 0) {
@@ -651,6 +802,9 @@ void run_island(int id, const Config& cfg,
             std::cerr << "Island " << id
                       << ": Generation " << generation
                       << ": Best fitness = " << bestFitness
+                      << " (mut=" << std::fixed << std::setprecision(4)
+                      << mutationRate << ", restarts=" << totalRestarts << ")"
+                      << std::defaultfloat
                       << std::endl;
         }
 
@@ -703,8 +857,36 @@ void run_island(int id, const Config& cfg,
         for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
             newPop.push_back(population[parentIdx[i]]);
 
-        // Crossover: fill remaining slots
-        int offspringCount = cfg.pop_size - numElites;
+        // Crossover + mutation + repair
+        int offspringCount = std::max(0, cfg.pop_size - numElites);
+#ifdef __APPLE__
+        {
+            // Pre-generate one seed per offspring from master RNG (serial, fast)
+            std::vector<uint64_t> offspringSeeds(offspringCount);
+            for (auto& s : offspringSeeds) s = rng();
+            // Pre-size newPop so dispatch workers can write by index
+            newPop.resize(numElites + offspringCount);
+            // Capture pointers to avoid block deep-copy of vectors
+            const auto* popPtr = &population;
+            const int* pidxPtr = parentIdx.data();
+            auto* outPtr = &newPop;
+            const uint64_t* seedPtr = offspringSeeds.data();
+            dispatch_apply(static_cast<size_t>(offspringCount),
+                dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                ^(size_t i) {
+                    SplitMix64 localRng(seedPtr[i]);
+                    int p1 = localRng() % numParents;
+                    int p2 = localRng() % numParents;
+                    BitIndividual child = crossoverOne(
+                        (*popPtr)[pidxPtr[p1]], (*popPtr)[pidxPtr[p2]], localRng);
+                    mutateOne(child, mutationRate, numGenes, localRng);
+                    std::vector<int> repBuf;
+                    repairCardinality(child, numGenes, cfg.min_etfs, cfg.max_etfs,
+                                      localRng, repBuf);
+                    (*outPtr)[numElites + i] = std::move(child);
+                });
+        }
+#else
         for (int i = 0; i < offspringCount; ++i) {
             int p1 = rng() % numParents;
             int p2 = rng() % numParents;
@@ -713,10 +895,9 @@ void run_island(int id, const Config& cfg,
             mutateOne(child, mutationRate, numGenes, rng);
             newPop.push_back(std::move(child));
         }
-
-        // Repair offspring cardinality (elites already valid)
         for (int i = numElites; i < static_cast<int>(newPop.size()); ++i)
             repairCardinality(newPop[i], numGenes, cfg.min_etfs, cfg.max_etfs, rng, repairBuf);
+#endif
 
         // Carry forward elite fitness values into swap buffer, then swap
         newFitness.setZero();
@@ -738,7 +919,273 @@ void run_island(int id, const Config& cfg,
     result.bestFitness = bestFitness;
     result.bestIndividual = bestIndividual;
     result.evaluations = evaluations;
+    result.hallOfFame = std::move(hallOfFame);
 }
+
+// ─── GPU-coordinated Island GA ────────────────────────────────────────────────
+// All islands synchronize at barriers for a single batched GPU dispatch per
+// generation, eliminating command-queue serialization and enabling CPU/GPU
+// overlap.
+
+#ifdef HAS_METAL
+void run_island_gpu_coordinated(
+        int id, const Config& cfg,
+        const Eigen::MatrixXd& centeredReturns,
+        const Eigen::VectorXd& expectedReturns,
+        int numGenes, int T,
+        MigrationBuffer& migration,
+        std::chrono::steady_clock::time_point deadline,
+        bool hasDeadline,
+        std::mutex& outputMutex,
+        IslandResult& result,
+        // Shared GPU coordination state
+        std::barrier<>& preGpuBarrier,
+        std::barrier<>& postGpuBarrier,
+        std::vector<uint32_t>& allFlatBits,  // shared flat buffer
+        std::vector<double>& allFitness,      // shared fitness buffer
+        int wpi,                               // words per individual (uint32)
+        std::atomic<bool>& timeExpired,
+        MetalFitnessEvaluator* gpu) {
+
+    // Per-island seeded RNG
+    unsigned int islandSeed;
+    if (cfg.seed >= 0) {
+        islandSeed = static_cast<unsigned int>(cfg.seed + id);
+    } else {
+        std::random_device rd;
+        islandSeed = rd();
+    }
+    std::mt19937 rng(islandSeed);
+
+    auto population = initializePopulation(cfg.pop_size, numGenes, cfg.min_etfs, cfg.max_etfs, rng);
+    Eigen::VectorXd fitness = Eigen::VectorXd::Zero(cfg.pop_size);
+    BitIndividual bestIndividual(numWords(numGenes), 0);
+    double bestFitness = -std::numeric_limits<double>::infinity();
+
+    double mutationInitial = std::max(cfg.mutation_initial, 1.0 / numGenes);
+    double mutationFinal = std::max(cfg.mutation_final, 0.5 / numGenes);
+    double mutationRate = mutationInitial;
+
+    int stagnationCounter = 0;
+    int totalRestarts = 0;
+
+    int numElites = std::max(0, cfg.num_elites);
+    int numParents = (numElites == 0) ? cfg.pop_size : std::max(2, numElites);
+    int migrationCount = std::max(1, static_cast<int>(cfg.pop_size * cfg.migration_rate));
+    long long evaluations = 0;
+
+    HallOfFame hallOfFame(cfg.top_k);
+
+    std::vector<int> parentIdx(cfg.pop_size);
+    std::vector<int> repairBuf;
+    repairBuf.reserve(numGenes);
+    std::vector<BitIndividual> newPop;
+    newPop.reserve(cfg.pop_size);
+    Eigen::VectorXd newFitness = Eigen::VectorXd::Zero(cfg.pop_size);
+
+    int sliceOffset = id * cfg.pop_size;  // offset into shared buffers
+
+    for (int generation = 0; generation < cfg.num_generations; ++generation) {
+        if (timeExpired.load(std::memory_order_relaxed)) break;
+
+        // ── Phase 1: Flatten ENTIRE population into shared GPU buffer ──
+        // Always evaluate all individuals (including elites) to keep the
+        // shared buffer layout simple: island i occupies [i*pop .. (i+1)*pop).
+        uint32_t* mySlice = allFlatBits.data() + sliceOffset * wpi;
+        for (int i = 0; i < cfg.pop_size; ++i) {
+            const auto& ind = population[i];
+            uint32_t* dst = mySlice + i * wpi;
+            for (size_t w64 = 0; w64 < ind.size(); ++w64) {
+                uint64_t val = ind[w64];
+                dst[w64 * 2]     = static_cast<uint32_t>(val);
+                dst[w64 * 2 + 1] = static_cast<uint32_t>(val >> 32);
+            }
+        }
+
+        // ── Barrier: all islands done writing ──
+        preGpuBarrier.arrive_and_wait();
+
+        // ── Phase 2: Island 0 dispatches ONE GPU eval for all islands ──
+        if (id == 0) {
+            if (hasDeadline && std::chrono::steady_clock::now() >= deadline) {
+                timeExpired.store(true, std::memory_order_relaxed);
+            }
+            if (!timeExpired.load(std::memory_order_relaxed)) {
+                int totalPop = cfg.num_islands * cfg.pop_size;
+                gpu->evaluateBatch(allFlatBits.data(), totalPop,
+                                   allFitness.data());
+            }
+        }
+
+        // ── Barrier: GPU results ready ──
+        postGpuBarrier.arrive_and_wait();
+
+        if (timeExpired.load(std::memory_order_relaxed)) break;
+
+        // ── Phase 3: Each island reads its fitness slice ──
+        double* fitSlice = allFitness.data() + sliceOffset;
+        for (int i = 0; i < cfg.pop_size; ++i) {
+            fitness(i) = fitSlice[i];
+        }
+        evaluations += cfg.pop_size;
+
+        // ── Phase 4: CPU-only GA work (parallel across islands) ──
+
+        // Adaptive mutation
+        {
+            double progress = static_cast<double>(generation)
+                            / std::max(1, cfg.num_generations - 1);
+            mutationRate = mutationInitial * (1.0 - progress)
+                         + mutationFinal * progress;
+        }
+
+        // Best tracking + stagnation
+        double prevBest = bestFitness;
+        for (int i = 0; i < cfg.pop_size; ++i) {
+            if (fitness(i) > bestFitness) {
+                bestFitness = fitness(i);
+                bestIndividual = population[i];
+            }
+        }
+
+        // Insert generation's best into hall of fame
+        hallOfFame.tryInsert(bestFitness, bestIndividual);
+
+        // Insert top elites into hall of fame for diversity
+        {
+            std::vector<int> topIdx(cfg.pop_size);
+            std::iota(topIdx.begin(), topIdx.end(), 0);
+            int nInsert = std::min(5, cfg.pop_size);
+            std::partial_sort(topIdx.begin(), topIdx.begin() + nInsert, topIdx.end(),
+                              [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+            for (int i = 0; i < nInsert; ++i) {
+                hallOfFame.tryInsert(fitness(topIdx[i]), population[topIdx[i]]);
+            }
+        }
+
+        if (bestFitness > prevBest) {
+            stagnationCounter = 0;
+        } else {
+            stagnationCounter++;
+        }
+
+        // Stagnation restart
+        if (cfg.stagnation_restart > 0
+            && stagnationCounter >= cfg.stagnation_restart) {
+            totalRestarts++;
+            {
+                std::lock_guard<std::mutex> lock(outputMutex);
+                std::cerr << "Island " << id
+                          << ": Restart #" << totalRestarts
+                          << " at generation " << generation
+                          << " (stagnant " << stagnationCounter << " gens)"
+                          << ", best = " << bestFitness
+                          << std::endl;
+            }
+            population = initializePopulation(cfg.pop_size, numGenes,
+                                               cfg.min_etfs, cfg.max_etfs, rng);
+            population[0] = bestIndividual;
+            fitness.setZero();
+            fitness(0) = bestFitness;
+            stagnationCounter = 0;
+            mutationRate = mutationInitial;
+            continue;
+        }
+
+        // Log
+        if (generation % 50 == 0) {
+            std::lock_guard<std::mutex> lock(outputMutex);
+            std::cerr << "Island " << id
+                      << ": Generation " << generation
+                      << ": Best fitness = " << bestFitness
+                      << " (mut=" << std::fixed << std::setprecision(4)
+                      << mutationRate << ", restarts=" << totalRestarts << ")"
+                      << std::defaultfloat
+                      << std::endl;
+        }
+
+        // Migration
+        if (cfg.migration_interval > 0 && generation > 0
+            && generation % cfg.migration_interval == 0) {
+            std::iota(parentIdx.begin(), parentIdx.end(), 0);
+            auto cmp = [&fitness](int a, int b) { return fitness(a) > fitness(b); };
+            std::nth_element(parentIdx.begin(),
+                             parentIdx.begin() + migrationCount,
+                             parentIdx.end(), cmp);
+            std::nth_element(parentIdx.begin() + migrationCount,
+                             parentIdx.end() - migrationCount,
+                             parentIdx.end(), cmp);
+
+            std::vector<BitIndividual> emigrants;
+            for (int i = 0; i < migrationCount && i < cfg.pop_size; ++i)
+                emigrants.push_back(population[parentIdx[i]]);
+            migration.deposit(id, emigrants);
+
+            int source = (id - 1 + cfg.num_islands) % cfg.num_islands;
+            auto immigrants = migration.withdraw(source);
+            if (!immigrants.empty()) {
+                for (int i = 0; i < static_cast<int>(immigrants.size())
+                                 && i < cfg.pop_size; ++i) {
+                    int worstIdx = parentIdx[cfg.pop_size - 1 - i];
+                    population[worstIdx] = immigrants[i];
+                    fitness(worstIdx) = -std::numeric_limits<double>::infinity();
+                }
+            }
+        }
+
+        // Selection
+        std::iota(parentIdx.begin(), parentIdx.end(), 0);
+        std::nth_element(parentIdx.begin(),
+                         parentIdx.begin() + numParents,
+                         parentIdx.end(),
+                         [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+        std::sort(parentIdx.begin(), parentIdx.begin() + numParents,
+                  [&fitness](int a, int b) { return fitness(a) > fitness(b); });
+
+        // Build new population
+        newPop.clear();
+        for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
+            newPop.push_back(population[parentIdx[i]]);
+
+        int offspringCount = std::max(0, cfg.pop_size - numElites);
+        {
+            std::vector<uint64_t> offspringSeeds(offspringCount);
+            for (auto& s : offspringSeeds) s = rng();
+            newPop.resize(numElites + offspringCount);
+            const auto* popPtr = &population;
+            const int* pidxPtr = parentIdx.data();
+            auto* outPtr = &newPop;
+            const uint64_t* seedPtr = offspringSeeds.data();
+            dispatch_apply(static_cast<size_t>(offspringCount),
+                dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
+                ^(size_t i) {
+                    SplitMix64 localRng(seedPtr[i]);
+                    int p1 = localRng() % numParents;
+                    int p2 = localRng() % numParents;
+                    BitIndividual child = crossoverOne(
+                        (*popPtr)[pidxPtr[p1]], (*popPtr)[pidxPtr[p2]], localRng);
+                    mutateOne(child, mutationRate, numGenes, localRng);
+                    std::vector<int> repBuf;
+                    repairCardinality(child, numGenes, cfg.min_etfs, cfg.max_etfs,
+                                      localRng, repBuf);
+                    (*outPtr)[numElites + i] = std::move(child);
+                });
+        }
+
+        newFitness.setZero();
+        for (int i = 0; i < numElites && i < cfg.pop_size; ++i)
+            newFitness(i) = fitness(parentIdx[i]);
+        fitness.swap(newFitness);
+
+        population = std::move(newPop);
+    }
+
+    result.bestFitness = bestFitness;
+    result.bestIndividual = bestIndividual;
+    result.evaluations = evaluations;
+    result.hallOfFame = std::move(hallOfFame);
+}
+#endif  // HAS_METAL
 
 // ─── Monte Carlo worker (bitwise) ─────────────────────────────────────────────
 
@@ -990,29 +1437,52 @@ int main(int argc, char* argv[]) {
         }
         for (auto& t : threads) t.join();
 
-#ifdef HAS_METAL
-        // Re-evaluate best solutions with FP64 for precise final reporting
-        if (gpuEvaluator) {
-            for (int i = 0; i < numThreads; ++i) {
-                if (gaResults[i].bestFitness > -1e3) {
-                    gaResults[i].bestFitness = calculateFitnessExact(
-                        gaResults[i].bestIndividual, numETFs,
-                        centeredReturns, expectedReturns, T,
-                        cfg.min_etfs, cfg.max_etfs,
-                        cfg.risk_free_rate, cfg.min_return);
-                }
+        // Merge halls of fame from all islands
+        std::vector<HallOfFameEntry> mergedHof;
+        for (int i = 0; i < numThreads; ++i) {
+            totalTrials += gaResults[i].evaluations;
+            for (auto& e : gaResults[i].hallOfFame.entries)
+                mergedHof.push_back(std::move(e));
+        }
+        // Sort descending by fitness
+        std::sort(mergedHof.begin(), mergedHof.end(),
+                  [](const HallOfFameEntry& a, const HallOfFameEntry& b) {
+                      return a.fitness > b.fitness;
+                  });
+        // Dedup across islands (exact bit-vector match)
+        std::vector<HallOfFameEntry> dedupHof;
+        for (auto& e : mergedHof) {
+            bool dup = false;
+            for (const auto& d : dedupHof) {
+                if (d.individual == e.individual) { dup = true; break; }
             }
+            if (!dup) dedupHof.push_back(std::move(e));
+        }
+
+#ifdef HAS_METAL
+        // Re-evaluate with FP64 for precise final reporting
+        if (gpuEvaluator) {
+            for (auto& e : dedupHof) {
+                e.fitness = calculateFitnessExact(
+                    e.individual, numETFs,
+                    centeredReturns, expectedReturns, T,
+                    cfg.min_etfs, cfg.max_etfs,
+                    cfg.risk_free_rate, cfg.min_return);
+            }
+            // Re-sort after FP64 re-evaluation
+            std::sort(dedupHof.begin(), dedupHof.end(),
+                      [](const HallOfFameEntry& a, const HallOfFameEntry& b) {
+                          return a.fitness > b.fitness;
+                      });
         }
 #endif
 
-        for (int i = 0; i < numThreads; ++i) {
-            totalTrials += gaResults[i].evaluations;
-            if (gaResults[i].bestFitness <= -1e3) continue;
+        for (auto& e : dedupHof) {
+            if (e.fitness <= -1e3) continue;
             Solution sol;
-            sol.fitness = gaResults[i].bestFitness;
-            sol.selectedTickers = extractTickers(gaResults[i].bestIndividual,
-                                                  numETFs, tickers);
-            allSolutions.push_back(sol);
+            sol.fitness = e.fitness;
+            sol.selectedTickers = extractTickers(e.individual, numETFs, tickers);
+            allSolutions.push_back(std::move(sol));
         }
     }
 
