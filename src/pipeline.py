@@ -365,6 +365,10 @@ def run_pipeline(
     null_threshold=0.9,
     names=None,
     countries=None,
+    sectors=None,
+    industries=None,
+    category_groups=None,
+    categories=None,
     max_retries=None,
     subset=None,
     stage_only=False,
@@ -455,6 +459,8 @@ def run_pipeline(
         exchange=exchange, asset_type=asset_type,
         start=start, end=end, batch_size=batch_size,
         null_threshold=null_threshold, names=names, countries=countries,
+        sectors=sectors, industries=industries,
+        category_groups=category_groups, categories=categories,
         max_retries=max_retries, rate_limit_delay=rate_limit_delay,
     )
     if result is None:

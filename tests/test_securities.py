@@ -342,5 +342,168 @@ class TestFilterUnwantedTickers(unittest.TestCase):
         self.assertEqual(sorted(removed['Tickers'].tolist()), ['ABR.PA', 'FOO.WT'])
 
 
+class TestValidateTickers(unittest.TestCase):
+    """Tests for the yfinance ticker validation pass."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_result(self, tickers, dates=None):
+        """Helper to build a fake download result DataFrame."""
+        if dates is None:
+            dates = pd.date_range('2024-07-01', periods=5, freq='B')
+        return pd.DataFrame(
+            {t: range(len(dates)) for t in tickers}, index=dates
+        )
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_valid_tickers_from_successful_batch(self, mock_dl):
+        """Tickers present in result columns are returned as valid."""
+        mock_dl.return_value = self._make_result(['AAPL', 'MSFT'])
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'MSFT', 'GOOG'],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            validation_windows=[('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=None,
+        )
+        self.assertIn('AAPL', valid)
+        self.assertIn('MSFT', valid)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_invalid_tickers_from_successful_batch(self, mock_dl):
+        """Tickers NOT in result columns are returned as invalid."""
+        mock_dl.return_value = self._make_result(['AAPL'])
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'BADTICKER'],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            validation_windows=[('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=None,
+        )
+        self.assertIn('AAPL', valid)
+        self.assertIn('BADTICKER', invalid)
+        self.assertNotIn('BADTICKER', valid)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_failed_batch_tickers_are_unvalidated(self, mock_dl):
+        """When batch returns None, tickers go to unvalidated (not invalid)."""
+        mock_dl.return_value = None  # all retries fail
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'MSFT'],
+            batch_size=10, delay=0, max_retries=1, timeout=10,
+            validation_windows=[('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=None,
+        )
+        self.assertEqual(len(valid), 0)
+        self.assertEqual(len(invalid), 0)
+        self.assertIn('AAPL', unvalidated)
+        self.assertIn('MSFT', unvalidated)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_two_windows_union(self, mock_dl):
+        """Ticker valid in window 2 but not window 1 → still valid."""
+        # Window 1: only AAPL has data
+        result_w1 = self._make_result(['AAPL'],
+                                       pd.date_range('2019-07-01', periods=5, freq='B'))
+        # Window 2: GOOG also has data
+        result_w2 = self._make_result(['GOOG'],
+                                       pd.date_range('2024-07-01', periods=5, freq='B'))
+
+        def side_effect(tickers, start, end, timeout):
+            if start == '2019-07-01':
+                returned = [t for t in tickers if t == 'AAPL']
+                if returned:
+                    return self._make_result(returned,
+                                              pd.date_range('2019-07-01', periods=5, freq='B'))
+                return self._make_result([], pd.date_range('2019-07-01', periods=5, freq='B'))
+            else:
+                returned = [t for t in tickers if t == 'GOOG']
+                if returned:
+                    return self._make_result(returned,
+                                              pd.date_range('2024-07-01', periods=5, freq='B'))
+                return self._make_result([], pd.date_range('2024-07-01', periods=5, freq='B'))
+
+        mock_dl.side_effect = side_effect
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'GOOG'],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            validation_windows=[('2019-07-01', '2019-07-08'),
+                                ('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=None,
+        )
+        self.assertIn('AAPL', valid)
+        self.assertIn('GOOG', valid)
+        self.assertEqual(len(invalid), 0)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_uses_cache_when_fresh(self, mock_dl):
+        """Loads from JSON cache instead of calling yfinance."""
+        import json
+        from datetime import datetime as dt_cls
+        cache_path = os.path.join(self.tmpdir, 'validated_tickers.json')
+        cache_data = {
+            'timestamp': dt_cls.now().isoformat(),
+            'valid': ['AAPL', 'MSFT'],
+            'invalid': ['BADTICKER'],
+            'unvalidated': [],
+        }
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'MSFT', 'BADTICKER'],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            cache_dir=self.tmpdir, max_cache_hours=168,
+        )
+        self.assertIn('AAPL', valid)
+        self.assertIn('MSFT', valid)
+        self.assertIn('BADTICKER', invalid)
+        # Should not have called yfinance at all
+        mock_dl.assert_not_called()
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_refreshes_stale_cache(self, mock_dl):
+        """Re-validates when cache is older than max_cache_hours."""
+        import json
+        from datetime import datetime as dt_cls, timedelta
+        cache_path = os.path.join(self.tmpdir, 'validated_tickers.json')
+        old_ts = (dt_cls.now() - timedelta(hours=200)).isoformat()
+        cache_data = {
+            'timestamp': old_ts,
+            'valid': ['AAPL'],
+            'invalid': ['BADTICKER'],
+            'unvalidated': [],
+        }
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+
+        mock_dl.return_value = self._make_result(['AAPL', 'MSFT'])
+        valid, invalid, unvalidated = dd.validate_tickers(
+            ['AAPL', 'MSFT'],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            validation_windows=[('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=168,
+        )
+        # Should have called yfinance because cache is stale
+        mock_dl.assert_called()
+        self.assertIn('AAPL', valid)
+        self.assertIn('MSFT', valid)
+
+    def test_empty_ticker_list(self):
+        """Returns empty sets for empty ticker list."""
+        valid, invalid, unvalidated = dd.validate_tickers(
+            [],
+            batch_size=10, delay=0, max_retries=0, timeout=10,
+            validation_windows=[('2024-07-01', '2024-07-08')],
+            cache_dir=self.tmpdir, max_cache_hours=None,
+        )
+        self.assertEqual(len(valid), 0)
+        self.assertEqual(len(invalid), 0)
+        self.assertEqual(len(unvalidated), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

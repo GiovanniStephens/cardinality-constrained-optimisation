@@ -137,8 +137,8 @@ BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. 
 
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
-PIPELINE_BATCH_SIZE = 200
-PIPELINE_RATE_LIMIT_DELAY = 4.0    # seconds between batches (Yahoo throttles below this)
+PIPELINE_BATCH_SIZE = 20             # was 50 — full 11yr download needs smaller batches
+PIPELINE_RATE_LIMIT_DELAY = 2.0    # was 4.0 — smaller batches tolerate shorter delays
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space
 PIPELINE_MAX_RETRIES = 5           # retries per batch (includes empty-result retries)
@@ -149,6 +149,37 @@ PIPELINE_MAX_RATE_LIMIT_DELAY = 600.0    # max adaptive inter-batch delay (10 mi
 PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
 PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
 PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
+
+# ─── Ticker validation pass ──────────────────────────────────────────────
+# Pre-download validation: download 1 week of data per ticker to check if
+# yfinance can serve it. Dramatically reduces wasted retries on invalid tickers.
+#
+# Recommended asset types: equities + etfs (~42k tickers, ~2h).
+# Funds (~58k) are NOT recommended — most use foreign exchange suffixes
+# (.F, .MU, .L, .MC, .MX, .VI) that Yahoo barely supports, causing
+# individual "possibly delisted" probes that take 17+ hours.
+#
+# Examples of excluded funds (from FinanceDatabase):
+#   ES0137434009.MC  CAIXABANK VALOR 97/50 EUROSTOXX (Spanish guarantee fund)
+#   0P0000CV0Z.F     APO Vivace INKA R (German alt fund, Frankfurt)
+#   0P00011UY5.F     ProfitlichSchmidlin Fonds UI I (German allocation fund)
+#   ES0118844002.MC  BANKINTER IBEX 2025 II GARANTIZ (Spanish guarantee fund)
+#   I+CORPB-MG1.MX   unnamed Mexican corporate bond fund
+#   FJKLWX           The First Trust Combined Series (US closed-end trust)
+#   JXBCX            JPMorgan Access Balanced Fund (US balanced fund)
+#   OBIOX            Oberweis International Opportunities Fund (US intl equity)
+#   GFACX            American Funds Growth Fund of America C (US growth fund)
+#   PXEAX            Pax Global Environmental Markets Fund A (US ESG fund)
+#
+# US-listed funds (5-letter tickers like FJKLWX, JXBCX) work fine on Yahoo;
+# the problem is the ~50k foreign-exchange funds that dominate the list.
+VALIDATION_WINDOWS = [('2024-07-01', '2024-07-08')]
+VALIDATION_BATCH_SIZE = 50           # was 500 — Yahoo throttles large ticker-count requests
+VALIDATION_MAX_RETRIES = 1          # low retries — just identifying valid tickers
+VALIDATION_DELAY = 2.0              # was 4.0 — smaller batches can go faster
+VALIDATION_TIMEOUT = 60             # seconds per validation batch
+VALIDATION_CACHE_FILE = 'validated_tickers.json'
+VALIDATION_CACHE_HOURS = 168        # 1 week — re-validate weekly
 
 # ─── Forecast parameters ──────────────────────────────────────────────────
 

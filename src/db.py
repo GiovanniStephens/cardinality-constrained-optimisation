@@ -209,7 +209,7 @@ DEFAULT_EXCHANGES = [
 
 # Current schema version.  Bump this and add a migration function below
 # when the schema changes.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 # ─── Migrations ──────────────────────────────────────────────────────────────
@@ -236,8 +236,18 @@ def _migrate_to_1(conn):
     pass
 
 
+def _migrate_to_2(conn):
+    """Add sector/industry/category columns to tickers for group constraints."""
+    for col in ('sector', 'industry', 'category_group', 'category'):
+        try:
+            conn.execute(f"ALTER TABLE tickers ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
 MIGRATIONS = {
     1: _migrate_to_1,
+    2: _migrate_to_2,
 }
 
 
@@ -320,12 +330,17 @@ def _get_exchange_id(conn, code):
 
 
 def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
-                    countries=None):
+                    countries=None, sectors=None, industries=None,
+                    category_groups=None, categories=None):
     """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
 
     asset_type: one of 'etf', 'stock', 'fund', 'managed_fund'.
     names: optional dict {symbol: name_string} to populate the name column.
     countries: optional dict {symbol: country_string} to populate the country column.
+    sectors: optional dict {symbol: sector_string}.
+    industries: optional dict {symbol: industry_string}.
+    category_groups: optional dict {symbol: category_group_string}.
+    categories: optional dict {symbol: category_string}.
     """
     now = _now()
     # Fetch existing
@@ -370,13 +385,134 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
              for s in existing if s in countries and countries[s]],
         )
 
+    # Backfill sector/industry/category_group/category
+    for col, mapping in [('sector', sectors), ('industry', industries),
+                         ('category_group', category_groups),
+                         ('category', categories)]:
+        if mapping:
+            conn.executemany(
+                f"UPDATE tickers SET {col} = ?, updated_at = ? "
+                f"WHERE id = ? AND {col} IS NULL",
+                [(mapping[s], now, existing[s])
+                 for s in existing if s in mapping and mapping[s]],
+            )
+
     return existing
+
+
+def load_ticker_metadata(conn, symbols, exchange='US'):
+    """Load metadata for a list of ticker symbols.
+
+    Returns {symbol: {'country': ..., 'asset_type': ..., 'sector': ...,
+                      'category_group': ...}}.
+    Missing fields are None.
+    """
+    exchange_id = _get_exchange_id(conn, exchange)
+    placeholders = ','.join('?' for _ in symbols)
+    rows = conn.execute(
+        f"SELECT symbol, country, asset_type, sector, category_group "
+        f"FROM tickers WHERE symbol IN ({placeholders}) AND exchange_id = ?",
+        list(symbols) + [exchange_id],
+    ).fetchall()
+    return {
+        r['symbol']: {
+            'country': r['country'],
+            'asset_type': r['asset_type'],
+            'sector': r['sector'],
+            'category_group': r['category_group'],
+        }
+        for r in rows
+    }
+
+
+def backfill_metadata(conn, exchange='US'):
+    """Backfill sector/category_group from FinanceDatabase for tickers missing them.
+
+    Updates tickers in-place. Can be run standalone: ``python -m src.db backfill``.
+    """
+    import financedatabase as fd
+
+    exchange_id = _get_exchange_id(conn, exchange)
+    now = _now()
+
+    # Find tickers needing backfill
+    rows = conn.execute(
+        "SELECT id, symbol, asset_type FROM tickers "
+        "WHERE exchange_id = ? AND (sector IS NULL OR category_group IS NULL)",
+        (exchange_id,),
+    ).fetchall()
+    if not rows:
+        logger.info("backfill_metadata: nothing to backfill")
+        return 0
+
+    symbols_by_type = {}
+    for r in rows:
+        symbols_by_type.setdefault(r['asset_type'], []).append(
+            (r['id'], r['symbol'])
+        )
+
+    updated = 0
+
+    # Equities: sector from FinanceDatabase
+    if 'stock' in symbols_by_type:
+        try:
+            eq_df = fd.Equities().select()
+            for tid, sym in symbols_by_type['stock']:
+                if sym in eq_df.index:
+                    row = eq_df.loc[sym]
+                    sector = row.get('sector') if hasattr(row, 'get') else None
+                    industry = row.get('industry') if hasattr(row, 'get') else None
+                    if sector:
+                        conn.execute(
+                            "UPDATE tickers SET sector = ?, updated_at = ? "
+                            "WHERE id = ? AND sector IS NULL",
+                            (sector, now, tid),
+                        )
+                        updated += 1
+                    if industry:
+                        conn.execute(
+                            "UPDATE tickers SET industry = ?, updated_at = ? "
+                            "WHERE id = ? AND industry IS NULL",
+                            (industry, now, tid),
+                        )
+        except Exception as e:
+            logger.warning("backfill_metadata: equities lookup failed: %s", e)
+
+    # ETFs: category_group/category from FinanceDatabase
+    if 'etf' in symbols_by_type:
+        try:
+            etf_df = fd.ETFs().select()
+            for tid, sym in symbols_by_type['etf']:
+                if sym in etf_df.index:
+                    row = etf_df.loc[sym]
+                    cg = row.get('category_group') if hasattr(row, 'get') else None
+                    cat = row.get('category') if hasattr(row, 'get') else None
+                    if cg:
+                        conn.execute(
+                            "UPDATE tickers SET category_group = ?, updated_at = ? "
+                            "WHERE id = ? AND category_group IS NULL",
+                            (cg, now, tid),
+                        )
+                        updated += 1
+                    if cat:
+                        conn.execute(
+                            "UPDATE tickers SET category = ?, updated_at = ? "
+                            "WHERE id = ? AND category IS NULL",
+                            (cat, now, tid),
+                        )
+        except Exception as e:
+            logger.warning("backfill_metadata: ETFs lookup failed: %s", e)
+
+    conn.commit()
+    logger.info("backfill_metadata: updated %d tickers", updated)
+    return updated
 
 
 # ─── Data storage ─────────────────────────────────────────────────────────────
 
 def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
-                names=None, countries=None):
+                names=None, countries=None, sectors=None, industries=None,
+                category_groups=None, categories=None):
     """
     Save a wide-format DataFrame of prices to the database.
 
@@ -384,6 +520,10 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     exchange: 'US', 'NZX', 'ASX'
     names: optional dict {symbol: name_string} to populate ticker names.
     countries: optional dict {symbol: country_string} to populate ticker countries.
+    sectors: optional dict {symbol: sector_string}.
+    industries: optional dict {symbol: industry_string}.
+    category_groups: optional dict {symbol: category_group_string}.
+    categories: optional dict {symbol: category_string}.
     Returns data_source id.
     """
     import time as _time
@@ -394,7 +534,10 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     if dupes:
         raise ValueError(f"DataFrame has duplicate column names: {dupes}")
     ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type,
-                                 names=names, countries=countries)
+                                 names=names, countries=countries,
+                                 sectors=sectors, industries=industries,
+                                 category_groups=category_groups,
+                                 categories=categories)
 
     # Normalise index to date strings
     df = prices_df.copy()
@@ -565,6 +708,19 @@ def get_latest_prices_date(conn, exchange=None, asset_type=None):
 
     row = conn.execute(query, params).fetchone()
     return row[0] if row else None
+
+
+def get_tickers_with_prices(conn, exchange=None):
+    """Return the set of ticker symbols that have at least one price row."""
+    query = ("SELECT DISTINCT t.symbol FROM tickers t "
+             "JOIN prices p ON t.id = p.ticker_id")
+    params = []
+    if exchange:
+        exchange_id = _get_exchange_id(conn, exchange)
+        query += " WHERE t.exchange_id = ?"
+        params.append(exchange_id)
+    rows = conn.execute(query, params).fetchall()
+    return {r[0] for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1238,10 @@ if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == 'migrate':
         conn = get_connection()
         migrate_csvs(conn)
+        conn.close()
+    elif len(sys.argv) > 1 and sys.argv[1] == 'backfill':
+        conn = get_connection()
+        backfill_metadata(conn)
         conn.close()
     else:
         # Create empty database with schema

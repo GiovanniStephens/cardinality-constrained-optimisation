@@ -686,5 +686,67 @@ class TestCountryColumn(unittest.TestCase):
         self.assertNotIn('TM', result.columns)
 
 
+class TestMigrateTo2(unittest.TestCase):
+    """Test schema migration v2: sector/industry/category columns."""
+
+    def test_columns_exist_after_migration(self):
+        conn = db.get_connection(':memory:')
+        cols = [row[1] for row in
+                conn.execute("PRAGMA table_info(tickers)").fetchall()]
+        for col in ('sector', 'industry', 'category_group', 'category'):
+            self.assertIn(col, cols, f"Column {col} missing after migration")
+        conn.close()
+
+    def test_metadata_stored_via_save_prices(self):
+        conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        prices = pd.DataFrame({'SPY': [100.0, 101.0, 102.0]}, index=dates)
+        db.save_prices(conn, prices, exchange='US', asset_type='etf',
+                       sectors={'SPY': 'Technology'},
+                       category_groups={'SPY': 'Equity'})
+        row = conn.execute(
+            "SELECT sector, category_group FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertEqual(row['sector'], 'Technology')
+        self.assertEqual(row['category_group'], 'Equity')
+        conn.close()
+
+
+class TestLoadTickerMetadata(unittest.TestCase):
+    """Test load_ticker_metadata function."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        prices = pd.DataFrame({
+            'SPY': [100.0, 101.0, 102.0],
+            'TLT': [50.0, 51.0, 52.0],
+        }, index=dates)
+        db.save_prices(self.conn, prices, exchange='US', asset_type='etf',
+                       countries={'SPY': 'United States', 'TLT': 'United States'},
+                       sectors={'SPY': 'Technology'},
+                       category_groups={'SPY': 'Equity', 'TLT': 'Fixed Income'})
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_returns_correct_structure(self):
+        meta = db.load_ticker_metadata(self.conn, ['SPY', 'TLT'], exchange='US')
+        self.assertIn('SPY', meta)
+        self.assertIn('TLT', meta)
+        self.assertEqual(meta['SPY']['country'], 'United States')
+        self.assertEqual(meta['SPY']['asset_type'], 'etf')
+        self.assertEqual(meta['SPY']['sector'], 'Technology')
+        self.assertEqual(meta['SPY']['category_group'], 'Equity')
+
+    def test_missing_fields_are_none(self):
+        meta = db.load_ticker_metadata(self.conn, ['TLT'], exchange='US')
+        self.assertIsNone(meta['TLT']['sector'])
+
+    def test_unknown_symbol_not_in_result(self):
+        meta = db.load_ticker_metadata(self.conn, ['UNKNOWN'], exchange='US')
+        self.assertNotIn('UNKNOWN', meta)
+
+
 if __name__ == '__main__':
     unittest.main()

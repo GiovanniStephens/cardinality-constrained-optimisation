@@ -14,6 +14,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from pathlib import Path
 
 from curl_cffi.requests import Session as CffiSession
 import financedatabase as fd
@@ -178,12 +179,17 @@ def build_security_universe(asset_types=None, countries=None, sectors=None,
     def _append(df, asset_type):
         if df.empty:
             return
-        all_securities.append(pd.DataFrame({
+        row = {
             'Tickers': df.index,
             'Name': df['name'] if 'name' in df.columns else '',
             'Country': df['country'] if 'country' in df.columns else '',
             'AssetType': asset_type,
-        }))
+        }
+        # Carry through sector/industry (equities) and category_group/category (ETFs)
+        for col in ('sector', 'industry', 'category_group', 'category'):
+            if col in df.columns:
+                row[col] = df[col]
+        all_securities.append(pd.DataFrame(row))
 
     if 'equities' in asset_types:
         _append(get_equities(countries=countries, sectors=sectors,
@@ -328,6 +334,187 @@ def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
 
 
 
+def validate_tickers(tickers, batch_size=None, delay=None, max_retries=None,
+                     timeout=None, validation_windows=None,
+                     cache_dir=None, max_cache_hours=None):
+    """Quick validation pass: download 1 week of data per ticker to identify
+    which tickers yfinance can actually serve.
+
+    Uses two date windows (mid-2019, mid-2024) to catch both older and
+    newer listings. A ticker with data in EITHER window is valid.
+
+    Failed batches (possible rate-limit) are treated conservatively:
+    all their tickers remain as 'unvalidated' and proceed to full download.
+
+    :param tickers: list of ticker symbols to validate.
+    :param batch_size: tickers per validation batch (default: config).
+    :param delay: seconds between batches (default: config).
+    :param max_retries: retries for failed batches (default: config).
+    :param timeout: seconds per batch download (default: config).
+    :param validation_windows: list of (start, end) date pairs (default: config).
+    :param cache_dir: directory for cache file (default: config.DATA_DIR).
+    :param max_cache_hours: use cached results if fresher than this; None
+        disables caching (default: config).
+    :returns: (valid_set, invalid_set, unvalidated_set)
+        valid: confirmed to have data on yfinance
+        invalid: in a successful batch but returned no data
+        unvalidated: in a failed batch (kept for full download)
+    """
+    import json
+    from datetime import datetime as dt_cls
+    from src import config as cfg
+
+    batch_size = batch_size or cfg.VALIDATION_BATCH_SIZE
+    delay = delay if delay is not None else cfg.VALIDATION_DELAY
+    max_retries = max_retries if max_retries is not None else cfg.VALIDATION_MAX_RETRIES
+    timeout = timeout or cfg.VALIDATION_TIMEOUT
+    validation_windows = validation_windows or cfg.VALIDATION_WINDOWS
+    cache_dir = cache_dir or cfg.DATA_DIR
+    if max_cache_hours is None:
+        max_cache_hours = cfg.VALIDATION_CACHE_HOURS
+
+    cache_path = os.path.join(cache_dir, cfg.VALIDATION_CACHE_FILE)
+    tickers_set = set(tickers)
+
+    # ── Helper: save cache incrementally ────────────────────────────────
+    save_interval = 10  # save every N batches
+    batches_since_save = 0
+
+    def _save_cache(v, inv, unv, force=False):
+        nonlocal batches_since_save
+        batches_since_save += 1
+        if not force and batches_since_save < save_interval:
+            return
+        batches_since_save = 0
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_data = {
+                'timestamp': dt_cls.now().isoformat(),
+                'valid': sorted(v),
+                'invalid': sorted(inv - v),
+                'unvalidated': sorted(unv - v),
+            }
+            with open(cache_path, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+        except OSError:
+            pass
+
+    # ── Load progress from cache (resume or fresh hit) ───────────────────
+    valid = set()
+    invalid = set()
+    unvalidated = set()
+
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path) as f:
+                cached = json.load(f)
+            cache_ts = dt_cls.fromisoformat(cached['timestamp'])
+            age_hours = (dt_cls.now() - cache_ts).total_seconds() / 3600
+
+            cached_valid = set(cached.get('valid', []))
+            cached_invalid = set(cached.get('invalid', []))
+            cached_unvalidated = set(cached.get('unvalidated', []))
+            categorised = cached_valid | cached_invalid | cached_unvalidated
+            unchecked = tickers_set - categorised
+
+            # Fresh + complete cache → return immediately
+            if max_cache_hours and age_hours < max_cache_hours and not unchecked:
+                valid = cached_valid & tickers_set
+                invalid = cached_invalid & tickers_set
+                unvalidated = tickers_set - valid - invalid
+                logger.info("Validation cache hit (%.1fh old): %d valid, "
+                            "%d invalid, %d unvalidated",
+                            age_hours, len(valid), len(invalid), len(unvalidated))
+                return valid, invalid, unvalidated
+
+            # Stale complete cache → re-validate from scratch
+            if not unchecked and (not max_cache_hours or age_hours >= max_cache_hours):
+                logger.info("Validation cache stale (%.1fh old), re-validating",
+                            age_hours)
+            else:
+                # Partial cache → resume from where we left off
+                valid = cached_valid
+                invalid = cached_invalid
+                unvalidated = cached_unvalidated
+                logger.info("Resuming validation: %d valid, %d invalid, "
+                            "%d unvalidated from cache, %d unchecked remain",
+                            len(valid), len(invalid), len(unvalidated),
+                            len(unchecked))
+        except (json.JSONDecodeError, KeyError, ValueError):
+            logger.warning("Validation cache corrupt, starting fresh")
+
+    # ── Validate across windows ──────────────────────────────────────────
+
+    for window_idx, (win_start, win_end) in enumerate(validation_windows, 1):
+        # Only skip tickers confirmed valid or unvalidated (failed batch);
+        # re-check invalid tickers — they may exist in a different window
+        skip = valid | unvalidated
+        remaining = [t for t in tickers if t not in skip]
+        if not remaining:
+            break
+
+        logger.info("Validation window %d/%d (%s to %s): %d tickers to check",
+                     window_idx, len(validation_windows), win_start, win_end,
+                     len(remaining))
+
+        batches = [remaining[i:i + batch_size]
+                   for i in range(0, len(remaining), batch_size)]
+
+        for batch_idx, batch in enumerate(tqdm(batches, desc=f"Validating (window {window_idx})",
+                                                unit="batch")):
+            result = _download_batch_with_timeout(batch, win_start, win_end, timeout)
+
+            if result is not None and not result.empty:
+                # Successful batch — categorise tickers
+                returned_tickers = set(result.columns)
+                valid |= returned_tickers
+                # Tickers in this batch with no data → invalid (for this window)
+                batch_invalid = set(batch) - returned_tickers
+                invalid |= batch_invalid
+                # Remove from unvalidated if previously there
+                unvalidated -= returned_tickers
+            elif result is not None and result.empty:
+                # Batch succeeded but empty — all tickers invalid
+                invalid |= set(batch)
+            else:
+                # Batch failed (None) — retry once
+                retried = False
+                for retry in range(max_retries):
+                    time.sleep(delay)
+                    result = _download_batch_with_timeout(batch, win_start, win_end, timeout)
+                    if result is not None and not result.empty:
+                        returned_tickers = set(result.columns)
+                        valid |= returned_tickers
+                        invalid |= set(batch) - returned_tickers
+                        unvalidated -= returned_tickers
+                        retried = True
+                        break
+                    elif result is not None and result.empty:
+                        invalid |= set(batch)
+                        retried = True
+                        break
+                if not retried:
+                    # All retries failed — conservatively keep as unvalidated
+                    unvalidated |= set(batch)
+
+            _save_cache(valid, invalid, unvalidated)
+
+            if batch_idx < len(batches) - 1:
+                time.sleep(delay)
+
+    # Tickers valid in any window should not be in invalid
+    invalid -= valid
+    unvalidated -= valid
+
+    # ── Save final cache ─────────────────────────────────────────────────
+    _save_cache(valid, invalid, unvalidated, force=True)
+    logger.info("Validation cache saved to %s", cache_path)
+
+    logger.info("Validation complete: %d valid, %d invalid, %d unvalidated",
+                 len(valid), len(invalid), len(unvalidated))
+    return valid, invalid, unvalidated
+
+
 def _retry_with_splitting(tickers, start, end, timeout_seconds,
                           min_batch_size, delay_state):
     """Split a failed batch into halves and retry. Returns (df_or_None, failed_tickers).
@@ -431,9 +618,10 @@ def download_and_save(
     batch_size=500, null_threshold=0.9,
     names=None, countries=None, max_retries=3,
     on_batch_complete=None, on_batch_failed=None,
-    rate_limit_delay=0.0, batch_timeout=None,
+    rate_limit_delay=None, batch_timeout=None,
     circuit_breaker_threshold=None, max_rate_limit_delay=None,
     circuit_breaker_max_trips=None, circuit_breaker_cooldown=None,
+    sectors=None, industries=None, category_groups=None, categories=None,
 ):
     """
     Download prices in batches and persist each batch to the database immediately.
@@ -468,6 +656,8 @@ def download_and_save(
     from src import db, config
 
     # Apply config defaults
+    if rate_limit_delay is None:
+        rate_limit_delay = config.PIPELINE_RATE_LIMIT_DELAY
     if batch_timeout is None:
         batch_timeout = config.PIPELINE_BATCH_TIMEOUT
     if circuit_breaker_threshold is None:
@@ -652,9 +842,26 @@ def download_and_save(
         batch_countries = None
         if countries:
             batch_countries = {t: countries[t] for t in batch_df.columns if t in countries}
+        batch_sectors = None
+        if sectors:
+            batch_sectors = {t: sectors[t] for t in batch_df.columns if t in sectors}
+        batch_industries = None
+        if industries:
+            batch_industries = {t: industries[t] for t in batch_df.columns if t in industries}
+        batch_cat_groups = None
+        if category_groups:
+            batch_cat_groups = {t: category_groups[t] for t in batch_df.columns
+                                if t in category_groups}
+        batch_categories = None
+        if categories:
+            batch_categories = {t: categories[t] for t in batch_df.columns
+                                if t in categories}
 
         db.save_prices(conn, batch_df, exchange=exchange, asset_type=asset_type,
-                       names=batch_names, countries=batch_countries)
+                       names=batch_names, countries=batch_countries,
+                       sectors=batch_sectors, industries=batch_industries,
+                       category_groups=batch_cat_groups,
+                       categories=batch_categories)
         saved_tickers_list = list(batch_df.columns)
         total_saved += len(saved_tickers_list)
 
@@ -805,6 +1012,12 @@ def main():
                         help='Skip the regex pre-filter that removes '
                              'warrants, units, preferred shares, rights, '
                              'and SPACs.')
+    parser.add_argument('--validate-first', action='store_true',
+                        help='Run a quick validation pass to identify valid '
+                             'tickers before the full download. Downloads 1 week '
+                             'of data per ticker to check availability.')
+    parser.add_argument('--skip-validation-cache', action='store_true',
+                        help='Ignore cached validation results and re-validate.')
     parser.add_argument('--clear-cache', action='store_true',
                         help='Clear the known-bad ticker cache and exit.')
     args = parser.parse_args()
@@ -962,6 +1175,42 @@ def main():
     else:
         logger.info("--skip-prefilter: skipping ticker pre-filter")
 
+    # ── Validate tickers via quick yfinance check (opt-in) ────────────────
+
+    if args.validate_first:
+        ticker_list = tickers_df[args.ticker_column].tolist()
+        # Skip tickers already in DB with price data — no need to validate
+        conn = db.get_connection()
+        existing = db.get_tickers_with_prices(conn, exchange=args.exchange)
+        conn.close()
+        to_validate = [t for t in ticker_list if t not in existing]
+        if len(ticker_list) - len(to_validate) > 0:
+            logger.info("Skipping validation for %d tickers already in DB",
+                         len(ticker_list) - len(to_validate))
+        cache_hours = None if args.skip_validation_cache else config.VALIDATION_CACHE_HOURS
+        valid, invalid, unvalidated = validate_tickers(
+            to_validate,
+            cache_dir=str(Path(config.DATA_DIR)),
+            max_cache_hours=cache_hours,
+        )
+        if invalid:
+            # Remove invalid tickers from universe
+            tickers_df = tickers_df[~tickers_df[args.ticker_column].isin(invalid)]
+            logger.info("Validation removed %d invalid tickers (%d valid, "
+                         "%d unvalidated, %d remain)",
+                         len(invalid), len(valid), len(unvalidated), len(tickers_df))
+            # Pre-seed known-bad cache so future runs skip these even
+            # without --validate-first
+            conn = db.get_connection()
+            db.save_known_bad_tickers(conn, list(invalid), exchange=args.exchange)
+            db.save_known_bad_tickers(conn, list(invalid), exchange=args.exchange)
+            # Called twice → failure_count=2 → auto-filtered by known-bad cache
+            conn.close()
+            logger.info("Pre-seeded %d invalid tickers into known-bad cache",
+                         len(invalid))
+        else:
+            logger.info("Validation: all tickers appear valid or unvalidated")
+
     # ── Filter known-bad tickers ────────────────────────────────────────────
 
     if not args.ignore_cache:
@@ -1015,6 +1264,10 @@ def main():
         preflight = preflight_check(db.DB_PATH, staging_path,
                                     num_tickers, est_days)
 
+        if args.validate_first:
+            logger.info("DRY RUN — would validate %d tickers across %d date "
+                         "windows before download",
+                         num_tickers, len(config.VALIDATION_WINDOWS))
         logger.info("DRY RUN — would download %d tickers, %s to %s",
                      num_tickers, start, args.end)
         logger.info("  Estimated staging DB: %.2f GB", preflight['estimated_staging_gb'])
@@ -1059,12 +1312,30 @@ def main():
             countries = None
             if 'Country' in group.columns:
                 countries = dict(zip(group[args.ticker_column], group['Country']))
+            sectors = None
+            if 'sector' in group.columns:
+                sectors = dict(zip(group[args.ticker_column], group['sector']))
+                sectors = {k: v for k, v in sectors.items() if pd.notna(v)}
+            industries_map = None
+            if 'industry' in group.columns:
+                industries_map = dict(zip(group[args.ticker_column], group['industry']))
+                industries_map = {k: v for k, v in industries_map.items() if pd.notna(v)}
+            cat_groups = None
+            if 'category_group' in group.columns:
+                cat_groups = dict(zip(group[args.ticker_column], group['category_group']))
+                cat_groups = {k: v for k, v in cat_groups.items() if pd.notna(v)}
+            cat_map = None
+            if 'category' in group.columns:
+                cat_map = dict(zip(group[args.ticker_column], group['category']))
+                cat_map = {k: v for k, v in cat_map.items() if pd.notna(v)}
             logger.info("Running pipeline for %d %s tickers...",
                         len(ticker_list), db_type)
             manifest = run_pipeline(
                 ticker_list, exchange=args.exchange, asset_type=db_type,
                 start=start, end=args.end, null_threshold=args.null_threshold,
                 names=names, countries=countries,
+                sectors=sectors or None, industries=industries_map or None,
+                category_groups=cat_groups or None, categories=cat_map or None,
                 subset=args.subset,
                 stage_only=args.stage_only,
                 skip_validation=args.skip_validation,
