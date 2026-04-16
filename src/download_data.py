@@ -42,14 +42,30 @@ _USER_AGENTS = [
 
 _proxy_url = None   # Set from CLI: --proxy or --use-tor
 _tor_enabled = False  # Tor-specific: enables NEWNYM circuit rotation
+_proxy_session_counter = int(time.time()) % 100_000  # Timestamp-seeded to avoid burned ranges
+_proxy_session_counter_lock = threading.Lock()
 
 
 def _make_session():
-    """Create a curl_cffi Session with a random User-Agent header."""
+    """Create a curl_cffi Session with a random User-Agent header.
+
+    For rotating residential proxies: if the proxy URL contains a username
+    ending in digits (e.g. ``mdgihswf-11``), the trailing number is replaced
+    with a per-session counter so each batch gets a distinct exit IP.
+    """
+    global _proxy_session_counter
     session = CffiSession()
     session.headers['User-Agent'] = random.choice(_USER_AGENTS)
     if _proxy_url:
-        session.proxies = {'http': _proxy_url, 'https': _proxy_url}
+        url = _proxy_url
+        # Rotate proxy username suffix for residential proxies
+        # e.g. http://user-11:pass@host → http://user-42:pass@host
+        if re.match(r'https?://[^:]*-\d+:', url):
+            with _proxy_session_counter_lock:
+                _proxy_session_counter += 1
+                counter = _proxy_session_counter
+            url = re.sub(r'(-)\d+:', rf'\g<1>{counter}:', url, count=1)
+        session.proxies = {'http': url, 'https': url}
     return session
 
 
@@ -346,9 +362,11 @@ def _download_batch(tickers, start, end, session=None):
 
 def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
     """Wrap _download_batch with a timeout. Returns None on timeout."""
-    session = _make_session()
+    # Don't pass a pre-built session — curl_cffi sessions are not safe to
+    # share across threads.  _download_batch will call _make_session()
+    # inside the executor thread instead.
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_download_batch, tickers, start, end, session)
+        future = executor.submit(_download_batch, tickers, start, end)
         try:
             return future.result(timeout=timeout_seconds)
         except FuturesTimeout:
