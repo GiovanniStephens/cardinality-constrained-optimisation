@@ -40,7 +40,9 @@ src/                         # Python source package
 ├── binary_io.py             # Binary data format for C++ optimiser
 ├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
-├── download_data.py         # Yahoo Finance data downloader
+├── universe.py              # Security universe building (FinanceDatabase queries, ticker filtering)
+├── download_data.py         # Yahoo Finance download primitives, validation, sequential download, CLI
+├── download_workers.py      # Multi-worker concurrent download (threads, subprocesses, DB writer)
 ├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
 ├── data_quality.py          # Data validation and bad-ticker flagging
 └── logging_config.py        # Centralised logging setup

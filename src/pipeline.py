@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 
 from src import config, db
 from src.data_quality import validate_universe
-from src.download_data import concurrent_download_and_save, download_and_save
+from src.download_data import download_and_save
+from src.download_workers import concurrent_download_and_save
 
 logger = logging.getLogger(__name__)
 

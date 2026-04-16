@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 import tempfile
 import unittest
@@ -615,12 +616,12 @@ class TestConcurrentDownload(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download_data._download_batch')
     def test_concurrent_download_basic(self, mock_dl):
         """Run with 2 workers, verify all tickers saved."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
 
-        def fake_download(tickers, start, end, timeout):
+        def fake_download(tickers, start, end, session=None):
             return pd.DataFrame(
                 {t: range(5) for t in tickers}, index=dates)
 
@@ -641,7 +642,7 @@ class TestConcurrentDownload(unittest.TestCase):
         self.assertEqual(result['saved_tickers'], 10)
         self.assertEqual(sorted(saved_tickers), sorted(tickers))
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download_data._download_batch')
     def test_concurrent_download_worker_failure_isolation(self, mock_dl):
         """One worker's batches fail, the other continues."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
@@ -649,7 +650,7 @@ class TestConcurrentDownload(unittest.TestCase):
         # Fail tickers starting with T0-T4 (worker 0's partition)
         fail_tickers = {f'T{i}' for i in range(5)}
 
-        def fake_download(tickers, start, end, timeout):
+        def fake_download(tickers, start, end, session=None):
             if any(t in fail_tickers for t in tickers):
                 return None
             return pd.DataFrame(
@@ -666,6 +667,105 @@ class TestConcurrentDownload(unittest.TestCase):
         # Worker 1's tickers should all be saved
         self.assertEqual(result['saved_tickers'], 5)
         self.assertGreater(len(result['failed_batches']), 0)
+
+
+class TestSubprocessWorker(unittest.TestCase):
+    """Tests for subprocess-based worker and singleton reset."""
+
+    def test_reset_yf_singleton_destroys_instance(self):
+        """_reset_yf_singleton should destroy the singleton instance."""
+        import yfinance.data as yd
+
+        # Ensure singleton exists
+        _ = yd.YfData()
+        self.assertIn(yd.YfData, yd.SingletonMeta._instances)
+
+        dd._reset_yf_singleton()
+
+        self.assertNotIn(yd.YfData, yd.SingletonMeta._instances)
+
+    def test_subprocess_worker_sends_sentinel(self):
+        """_subprocess_worker always sends a None sentinel, even with empty tickers."""
+        result_queue = multiprocessing.Queue()
+
+        dd._subprocess_worker(
+            worker_id=0, tickers=[], proxy_url=None,
+            proxy_counter_start=0, result_queue=result_queue,
+            start='2024-01-01', end='2024-02-01', batch_size=5,
+            null_threshold=0.9, names=None, countries=None,
+            sectors=None, industries=None, category_groups=None,
+            categories=None, max_retries=1, rate_limit_delay=0,
+            batch_timeout=10, circuit_breaker_threshold=100,
+            max_rate_limit_delay=60, circuit_breaker_max_trips=3,
+            circuit_breaker_cooldown=10, tor_enabled=False,
+            session_rotate_interval=50,
+        )
+
+        sentinel = result_queue.get(timeout=5)
+        self.assertIsNone(sentinel)
+
+    def test_proxy_triggers_subprocess_path(self):
+        """When _proxy_url is set and n_workers > 1, subprocess path is used."""
+        from src import download_workers as dw
+        old_proxy = dd._proxy_url
+        try:
+            dd._proxy_url = 'http://user-1:pass@proxy.example.com:8080'
+
+            # Patch _concurrent_subprocess_download to verify it's called
+            with patch.object(dw, '_concurrent_subprocess_download',
+                              return_value={'total_tickers': 0,
+                                            'saved_tickers': 0,
+                                            'failed_batches': [],
+                                            'circuit_breaker_tripped': False,
+                                            'circuit_breaker_trip_count': 0}
+                              ) as mock_sub:
+                tmpdir = tempfile.mkdtemp()
+                db_path = os.path.join(tmpdir, 'test.db')
+                conn = db.get_connection(db_path)
+                try:
+                    dd.concurrent_download_and_save(
+                        ['A', 'B'], conn, exchange='US', n_workers=2,
+                        batch_size=5, rate_limit_delay=0, batch_timeout=10,
+                        circuit_breaker_threshold=100,
+                    )
+                    mock_sub.assert_called_once()
+                finally:
+                    conn.close()
+                    import shutil
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+        finally:
+            dd._proxy_url = old_proxy
+
+    def test_no_proxy_uses_thread_path(self):
+        """When _proxy_url is None, thread path is used even with multiple workers."""
+        from src import download_workers as dw
+        old_proxy = dd._proxy_url
+        try:
+            dd._proxy_url = None
+
+            with patch.object(dw, '_concurrent_thread_download',
+                              return_value={'total_tickers': 0,
+                                            'saved_tickers': 0,
+                                            'failed_batches': [],
+                                            'circuit_breaker_tripped': False,
+                                            'circuit_breaker_trip_count': 0}
+                              ) as mock_thread:
+                tmpdir = tempfile.mkdtemp()
+                db_path = os.path.join(tmpdir, 'test.db')
+                conn = db.get_connection(db_path)
+                try:
+                    dd.concurrent_download_and_save(
+                        ['A', 'B'], conn, exchange='US', n_workers=2,
+                        batch_size=5, rate_limit_delay=0, batch_timeout=10,
+                        circuit_breaker_threshold=100,
+                    )
+                    mock_thread.assert_called_once()
+                finally:
+                    conn.close()
+                    import shutil
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+        finally:
+            dd._proxy_url = old_proxy
 
 
 if __name__ == '__main__':
