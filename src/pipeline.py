@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from src import config, db
 from src.data_quality import validate_universe
-from src.download_data import download_and_save
+from src.download_data import concurrent_download_and_save, download_and_save
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +242,7 @@ def _run_preflight(prod_db_path, staging_db_path, tickers, start, end, manifest)
 
 
 def _run_download(tickers, conn_staging, checkpoint, checkpoint_path,
-                  manifest, **download_kwargs):
+                  manifest, n_workers=1, **download_kwargs):
     """Download into staging DB with checkpointing. Returns download result or None on interrupt."""
     def _on_batch_complete(saved_tickers_list, batch_num):
         checkpoint['completed_tickers'].extend(saved_tickers_list)
@@ -256,12 +256,21 @@ def _run_download(tickers, conn_staging, checkpoint, checkpoint_path,
         save_checkpoint(checkpoint_path, checkpoint)
 
     try:
-        result = download_and_save(
-            tickers, conn_staging,
-            on_batch_complete=_on_batch_complete,
-            on_batch_failed=_on_batch_failed,
-            **download_kwargs,
-        )
+        if n_workers > 1:
+            result = concurrent_download_and_save(
+                tickers, conn_staging,
+                n_workers=n_workers,
+                on_batch_complete=_on_batch_complete,
+                on_batch_failed=_on_batch_failed,
+                **download_kwargs,
+            )
+        else:
+            result = download_and_save(
+                tickers, conn_staging,
+                on_batch_complete=_on_batch_complete,
+                on_batch_failed=_on_batch_failed,
+                **download_kwargs,
+            )
     except KeyboardInterrupt:
         logger.warning("Download interrupted. Checkpoint saved at %s",
                         checkpoint_path)
@@ -379,6 +388,7 @@ def run_pipeline(
     staging_db_path=None,
     rate_limit_delay=None,
     prod_db_path=None,
+    n_workers=None,
 ):
     """
     Full staged pipeline: preflight -> stage -> validate -> promote.
@@ -397,6 +407,9 @@ def run_pipeline(
         rate_limit_delay = config.PIPELINE_RATE_LIMIT_DELAY
     if prod_db_path is None:
         prod_db_path = db.DB_PATH
+    if n_workers is None:
+        n_workers = config.PIPELINE_DEFAULT_WORKERS
+    n_workers = max(1, min(n_workers, config.PIPELINE_MAX_WORKERS))
 
     data_dir = os.path.dirname(prod_db_path)
     if staging_db_path is None:
@@ -456,6 +469,7 @@ def run_pipeline(
 
     result = _run_download(
         tickers, conn_staging, checkpoint, checkpoint_path, manifest,
+        n_workers=n_workers,
         exchange=exchange, asset_type=asset_type,
         start=start, end=end, batch_size=batch_size,
         null_threshold=null_threshold, names=names, countries=countries,

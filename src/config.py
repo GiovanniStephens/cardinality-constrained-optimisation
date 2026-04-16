@@ -174,6 +174,8 @@ PIPELINE_MAX_RATE_LIMIT_DELAY = 600.0    # max adaptive inter-batch delay (10 mi
 PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
 PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
 PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
+PIPELINE_DEFAULT_WORKERS = 1              # sequential by default (1 = use download_and_save)
+PIPELINE_MAX_WORKERS = 8                  # cap for --workers
 
 # ─── Ticker validation pass ──────────────────────────────────────────────
 # Pre-download validation: download 1 week of data per ticker to check if
@@ -244,3 +246,9 @@ TICKER_EXCLUDE_NAME_PATTERNS = [
     r'Special Purpose Acquisition',
     r'Merger Corp',
 ]
+
+# ─── Tor proxy rotation ─────────────────────────────────────────────────
+TOR_SOCKS_PROXY = 'socks5://127.0.0.1:9050'
+TOR_CONTROL_PORT = 9051
+TOR_CONTROL_PASSWORD = ''           # empty = cookie auth (default Homebrew config)
+TOR_ROTATE_EVERY_N_BATCHES = 1     # new circuit every N batches (1 = every batch)

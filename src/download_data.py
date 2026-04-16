@@ -9,9 +9,11 @@ for working with previously scraped lists.
 import argparse
 import logging
 import os
+import queue
 import random
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
@@ -38,11 +40,33 @@ _USER_AGENTS = [
 ]
 
 
+_proxy_url = None   # Set from CLI: --proxy or --use-tor
+_tor_enabled = False  # Tor-specific: enables NEWNYM circuit rotation
+
+
 def _make_session():
     """Create a curl_cffi Session with a random User-Agent header."""
     session = CffiSession()
     session.headers['User-Agent'] = random.choice(_USER_AGENTS)
+    if _proxy_url:
+        session.proxies = {'http': _proxy_url, 'https': _proxy_url}
     return session
+
+
+def _rotate_tor_circuit():
+    """Request a new Tor circuit (new exit IP) via the ControlPort."""
+    try:
+        from stem import Signal
+        from stem.control import Controller
+        from src.config import TOR_CONTROL_PORT, TOR_CONTROL_PASSWORD
+        with Controller.from_port(port=TOR_CONTROL_PORT) as controller:
+            if TOR_CONTROL_PASSWORD:
+                controller.authenticate(password=TOR_CONTROL_PASSWORD)
+            else:
+                controller.authenticate()
+            controller.signal(Signal.NEWNYM)
+    except Exception as e:
+        logger.warning("Tor circuit rotation failed: %s", e)
 
 # Maps FinanceDatabase asset type labels to DB-canonical names.
 # DB migration uses 'stock' for equities (see db._migrate_ticker_list).
@@ -480,6 +504,8 @@ def validate_tickers(tickers, batch_size=None, delay=None, max_retries=None,
                 # Batch failed (None) — retry once
                 retried = False
                 for retry in range(max_retries):
+                    if _tor_enabled:
+                        _rotate_tor_circuit()
                     time.sleep(delay)
                     result = _download_batch_with_timeout(batch, win_start, win_end, timeout)
                     if result is not None and not result.empty:
@@ -498,6 +524,11 @@ def validate_tickers(tickers, batch_size=None, delay=None, max_retries=None,
                     unvalidated |= set(batch)
 
             _save_cache(valid, invalid, unvalidated)
+
+            if _tor_enabled:
+                from src.config import TOR_ROTATE_EVERY_N_BATCHES
+                if (batch_idx + 1) % TOR_ROTATE_EVERY_N_BATCHES == 0:
+                    _rotate_tor_circuit()
 
             if batch_idx < len(batches) - 1:
                 time.sleep(delay)
@@ -715,6 +746,8 @@ def download_and_save(
                 # Empty result likely means Yahoo silently rate-limited
                 if attempt < max_retries:
                     hit_rate_limit = True
+                    if _tor_enabled:
+                        _rotate_tor_circuit()
                     current_delay = min(current_delay * 2, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
@@ -729,6 +762,8 @@ def download_and_save(
                                  or 'rate' in error_msg)
                 if is_rate_limit:
                     hit_rate_limit = True
+                    if _tor_enabled:
+                        _rotate_tor_circuit()
                     current_delay = min(current_delay * 2, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Rate limited on batch %d (attempt %d/%d), "
@@ -881,6 +916,11 @@ def download_and_save(
         if on_batch_complete:
             on_batch_complete(saved_tickers_list, batch_num)
 
+        if _tor_enabled:
+            from src.config import TOR_ROTATE_EVERY_N_BATCHES
+            if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
+                _rotate_tor_circuit()
+
         if current_delay > 0 and batch_num < len(batches):
             jittered = current_delay * random.uniform(0.8, 1.2)
             time.sleep(jittered)
@@ -901,6 +941,386 @@ def download_and_save(
         'failed_batches': failed_batches,
         'circuit_breaker_tripped': circuit_breaker_tripped,
         'circuit_breaker_trip_count': circuit_breaker_trip_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Concurrent download (multi-worker)
+# ---------------------------------------------------------------------------
+
+def _partition_tickers(tickers, n_workers):
+    """Split tickers into N contiguous sublists.
+
+    Contiguous (not round-robin) so each worker's retries are isolated.
+    If there are fewer tickers than workers, returns one partition per ticker.
+    """
+    n = min(n_workers, len(tickers))
+    if n <= 0:
+        return []
+    base, extra = divmod(len(tickers), n)
+    partitions = []
+    start = 0
+    for i in range(n):
+        size = base + (1 if i < extra else 0)
+        partitions.append(tickers[start:start + size])
+        start += size
+    return partitions
+
+
+def _worker_download(worker_id, tickers, start, end, batch_size,
+                     null_threshold, result_queue, names, countries,
+                     sectors, industries, category_groups, categories,
+                     max_retries, rate_limit_delay, batch_timeout,
+                     circuit_breaker_threshold, max_rate_limit_delay,
+                     circuit_breaker_max_trips, circuit_breaker_cooldown):
+    """Per-worker download loop. Puts results onto result_queue.
+
+    Always sends a sentinel (None) when done, even on exception, so the
+    DB writer thread never hangs waiting for a worker that crashed.
+    """
+    from src import config
+
+    try:
+        batches = [
+            tickers[i:i + batch_size]
+            for i in range(0, len(tickers), batch_size)
+        ]
+
+        consecutive_failures = 0
+        current_delay = rate_limit_delay
+        circuit_breaker_trip_count = 0
+
+        for batch_num, batch in enumerate(batches, 1):
+            batch_df = None
+            hit_rate_limit = False
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    batch_df = _download_batch_with_timeout(
+                        batch, start, end, batch_timeout)
+                    if batch_df is not None and not batch_df.empty:
+                        break
+                    if attempt < max_retries:
+                        hit_rate_limit = True
+                        if _tor_enabled:
+                            _rotate_tor_circuit()
+                        current_delay = min(current_delay * 2, max_rate_limit_delay)
+                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        logger.warning("Worker %d batch %d attempt %d/%d: no data, "
+                                       "backing off %.0fs",
+                                       worker_id, batch_num, attempt, max_retries,
+                                       jittered)
+                        time.sleep(jittered)
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    is_rate_limit = ('429' in error_msg or 'too many' in error_msg
+                                     or 'rate' in error_msg)
+                    if is_rate_limit:
+                        hit_rate_limit = True
+                        if _tor_enabled:
+                            _rotate_tor_circuit()
+                        current_delay = min(current_delay * 2, max_rate_limit_delay)
+                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        logger.warning("Worker %d rate limited batch %d "
+                                       "(attempt %d/%d), backing off %.0fs",
+                                       worker_id, batch_num, attempt,
+                                       max_retries, jittered)
+                        time.sleep(jittered)
+                    else:
+                        logger.warning("Worker %d batch %d attempt %d/%d failed: %s",
+                                       worker_id, batch_num, attempt, max_retries, e)
+                        if attempt < max_retries:
+                            jittered = current_delay * random.uniform(0.8, 1.2)
+                            time.sleep(jittered)
+
+            if batch_df is None or batch_df.empty:
+                # Try sub-batch splitting before giving up
+                min_sub = config.PIPELINE_MIN_SUB_BATCH_SIZE
+                if len(batch) > min_sub:
+                    delay_state = [current_delay, max_rate_limit_delay,
+                                   rate_limit_delay]
+                    split_df, still_failed = _retry_with_splitting(
+                        list(batch), start, end, batch_timeout,
+                        min_sub, delay_state)
+                    current_delay = delay_state[0]
+                    if split_df is not None and not split_df.empty:
+                        batch_df = split_df
+                        if still_failed:
+                            result_queue.put(('failed', still_failed, batch_num))
+                    else:
+                        batch_df = None
+
+                if batch_df is None or batch_df.empty:
+                    result_queue.put(('failed', list(batch), batch_num))
+                    consecutive_failures += 1
+
+                    if consecutive_failures >= circuit_breaker_threshold:
+                        circuit_breaker_trip_count += 1
+                        if circuit_breaker_trip_count >= circuit_breaker_max_trips:
+                            logger.error("Worker %d: circuit breaker tripped %d "
+                                         "times, aborting.",
+                                         worker_id, circuit_breaker_trip_count)
+                            break
+                        else:
+                            logger.warning("Worker %d: circuit breaker trip %d/%d, "
+                                           "cooling down %.0fs",
+                                           worker_id, circuit_breaker_trip_count,
+                                           circuit_breaker_max_trips,
+                                           circuit_breaker_cooldown)
+                            time.sleep(circuit_breaker_cooldown)
+                            consecutive_failures = 0
+                            current_delay = max_rate_limit_delay
+                    continue
+
+            # Reset on success
+            consecutive_failures = 0
+            if not hit_rate_limit:
+                current_delay = max(rate_limit_delay, current_delay * 0.5)
+
+            # Filter out tickers with too many nulls
+            threshold = int(len(batch_df) * null_threshold)
+            batch_df = batch_df.dropna(axis=1, thresh=threshold)
+            if batch_df.empty:
+                continue
+
+            # Build per-batch metadata
+            metadata = {}
+            if names:
+                metadata['names'] = {t: names[t] for t in batch_df.columns
+                                     if t in names}
+            if countries:
+                metadata['countries'] = {t: countries[t] for t in batch_df.columns
+                                         if t in countries}
+            if sectors:
+                metadata['sectors'] = {t: sectors[t] for t in batch_df.columns
+                                       if t in sectors}
+            if industries:
+                metadata['industries'] = {t: industries[t]
+                                          for t in batch_df.columns
+                                          if t in industries}
+            if category_groups:
+                metadata['category_groups'] = {t: category_groups[t]
+                                               for t in batch_df.columns
+                                               if t in category_groups}
+            if categories:
+                metadata['categories'] = {t: categories[t]
+                                          for t in batch_df.columns
+                                          if t in categories}
+
+            saved_list = list(batch_df.columns)
+            result_queue.put(('data', batch_df, metadata, saved_list, batch_num))
+
+            if _tor_enabled:
+                from src.config import TOR_ROTATE_EVERY_N_BATCHES
+                if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
+                    _rotate_tor_circuit()
+
+            if current_delay > 0 and batch_num < len(batches):
+                jittered = current_delay * random.uniform(0.8, 1.2)
+                time.sleep(jittered)
+    finally:
+        # Always send sentinel so the DB writer thread never hangs
+        result_queue.put(None)
+
+
+def _db_writer(result_queue, conn, exchange, asset_type,
+               on_batch_complete, on_batch_failed, pbar, n_workers):
+    """Single-threaded consumer that writes results to the database.
+
+    Returns (total_saved, failed_batches_list).
+    """
+    from src import db
+
+    total_saved = 0
+    failed_batches = []
+    sentinels_received = 0
+    t_start = time.time()
+
+    while sentinels_received < n_workers:
+        item = result_queue.get()
+        if item is None:
+            sentinels_received += 1
+            continue
+
+        msg_type = item[0]
+        if msg_type == 'data':
+            _, batch_df, metadata, saved_list, batch_num = item
+            db.save_prices(
+                conn, batch_df, exchange=exchange, asset_type=asset_type,
+                names=metadata.get('names'),
+                countries=metadata.get('countries'),
+                sectors=metadata.get('sectors'),
+                industries=metadata.get('industries'),
+                category_groups=metadata.get('category_groups'),
+                categories=metadata.get('categories'),
+            )
+            total_saved += len(saved_list)
+            if on_batch_complete:
+                on_batch_complete(saved_list, batch_num)
+            if pbar:
+                pbar.update(1)
+                elapsed = time.time() - t_start
+                pbar.set_postfix(
+                    saved=total_saved,
+                    failed=len(failed_batches),
+                    rate=f"{total_saved / elapsed:.0f}/s" if elapsed > 0
+                         else "N/A",
+                )
+
+        elif msg_type == 'failed':
+            _, failed_tickers, batch_num = item
+            failed_batches.append({
+                'batch_num': batch_num,
+                'tickers': failed_tickers,
+            })
+            if on_batch_failed:
+                on_batch_failed(failed_tickers, batch_num)
+            if pbar:
+                pbar.update(1)
+
+    return total_saved, failed_batches
+
+
+def concurrent_download_and_save(
+    tickers, conn, exchange, n_workers, asset_type='etf',
+    start='2014-04-30', end='2025-04-30',
+    batch_size=500, null_threshold=0.9,
+    names=None, countries=None, max_retries=3,
+    on_batch_complete=None, on_batch_failed=None,
+    rate_limit_delay=None, batch_timeout=None,
+    circuit_breaker_threshold=None, max_rate_limit_delay=None,
+    circuit_breaker_max_trips=None, circuit_breaker_cooldown=None,
+    sectors=None, industries=None, category_groups=None, categories=None,
+):
+    """Download prices concurrently with N workers and a single DB writer thread.
+
+    Same interface as download_and_save() plus n_workers parameter.
+    Workers put results on a bounded queue; a single DB writer thread
+    consumes them to avoid SQLite WAL contention.
+
+    The DB writer opens its own connection to the same database (extracted
+    from the caller's connection) because SQLite connections cannot be shared
+    across threads.
+    """
+    from src import db, config
+
+    if rate_limit_delay is None:
+        rate_limit_delay = config.PIPELINE_RATE_LIMIT_DELAY
+    if batch_timeout is None:
+        batch_timeout = config.PIPELINE_BATCH_TIMEOUT
+    if circuit_breaker_threshold is None:
+        circuit_breaker_threshold = config.PIPELINE_CIRCUIT_BREAKER_THRESHOLD
+    if max_rate_limit_delay is None:
+        max_rate_limit_delay = config.PIPELINE_MAX_RATE_LIMIT_DELAY
+    if circuit_breaker_max_trips is None:
+        circuit_breaker_max_trips = config.PIPELINE_CIRCUIT_BREAKER_MAX_TRIPS
+    if circuit_breaker_cooldown is None:
+        circuit_breaker_cooldown = config.PIPELINE_CIRCUIT_BREAKER_COOLDOWN
+
+    # Deduplicate
+    seen = set()
+    deduped = []
+    for t in tickers:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+    if len(deduped) < len(tickers):
+        logger.info("Removed %d duplicate tickers", len(tickers) - len(deduped))
+    tickers = deduped
+
+    partitions = _partition_tickers(tickers, n_workers)
+    actual_workers = len(partitions)
+
+    # Count total batches across all workers for progress bar
+    total_batches = sum(
+        (len(p) + batch_size - 1) // batch_size for p in partitions
+    )
+
+    result_q = queue.Queue(maxsize=actual_workers * 2)
+
+    use_tqdm = sys.stderr.isatty()
+    pbar = None
+    if use_tqdm:
+        pbar = tqdm(total=total_batches, desc="Downloading", unit="batch",
+                    file=sys.stderr)
+
+    # Extract DB path from caller's connection — the writer thread needs
+    # its own connection because SQLite objects are thread-bound.
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+
+    # Start DB writer thread
+    writer_result = [None]  # mutable container for thread return value
+
+    def _writer_thread():
+        writer_conn = db.get_connection(db_path)
+        try:
+            writer_result[0] = _db_writer(
+                result_q, writer_conn, exchange, asset_type,
+                on_batch_complete, on_batch_failed, pbar, actual_workers)
+        except Exception:
+            logger.error("DB writer thread crashed", exc_info=True)
+        finally:
+            writer_conn.close()
+
+    writer = threading.Thread(target=_writer_thread, daemon=True)
+    writer.start()
+
+    # Launch workers
+    common_kwargs = dict(
+        start=start, end=end, batch_size=batch_size,
+        null_threshold=null_threshold, result_queue=result_q,
+        names=names, countries=countries,
+        sectors=sectors, industries=industries,
+        category_groups=category_groups, categories=categories,
+        max_retries=max_retries, rate_limit_delay=rate_limit_delay,
+        batch_timeout=batch_timeout,
+        circuit_breaker_threshold=circuit_breaker_threshold,
+        max_rate_limit_delay=max_rate_limit_delay,
+        circuit_breaker_max_trips=circuit_breaker_max_trips,
+        circuit_breaker_cooldown=circuit_breaker_cooldown,
+    )
+
+    with ThreadPoolExecutor(max_workers=actual_workers) as pool:
+        futures = []
+        for wid, partition in enumerate(partitions):
+            f = pool.submit(_worker_download, wid, partition, **common_kwargs)
+            futures.append(f)
+
+        # Wait for all workers, propagate exceptions as warnings
+        for f in futures:
+            try:
+                f.result()
+            except Exception as e:
+                logger.error("Worker raised exception: %s", e)
+
+    writer.join()
+
+    if pbar:
+        pbar.close()
+
+    if writer_result[0] is None:
+        logger.error("DB writer thread failed — no results recorded")
+        return {
+            'total_tickers': len(tickers),
+            'saved_tickers': 0,
+            'failed_batches': [],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+
+    total_saved, failed_batches = writer_result[0]
+
+    if failed_batches:
+        total_failed_tickers = sum(len(fb['tickers']) for fb in failed_batches)
+        logger.warning("Download summary: %d batches failed (%d tickers).",
+                       len(failed_batches), total_failed_tickers)
+
+    return {
+        'total_tickers': len(tickers),
+        'saved_tickers': total_saved,
+        'failed_batches': failed_batches,
+        'circuit_breaker_tripped': False,
+        'circuit_breaker_trip_count': 0,
     }
 
 
@@ -1018,11 +1438,37 @@ def main():
                              'of data per ticker to check availability.')
     parser.add_argument('--skip-validation-cache', action='store_true',
                         help='Ignore cached validation results and re-validate.')
+    parser.add_argument('--proxy', default=None,
+                        help='SOCKS5 or HTTP proxy URL for downloads '
+                             '(e.g. socks5://user:pass@host:port).')
+    parser.add_argument('--use-tor', action='store_true',
+                        help='Route downloads through Tor SOCKS5 proxy with '
+                             'automatic circuit rotation for IP diversity. '
+                             'Requires: brew install tor && brew services start tor')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Concurrent download workers (default: 1). '
+                             'Use with --proxy for best results.')
     parser.add_argument('--clear-cache', action='store_true',
                         help='Clear the known-bad ticker cache and exit.')
     args = parser.parse_args()
 
     from src import db, config
+
+    # ── Proxy setup ─────────────────────────────────────────────────────
+    if args.proxy or args.use_tor:
+        global _proxy_url, _tor_enabled
+        if args.use_tor:
+            _proxy_url = config.TOR_SOCKS_PROXY
+            _tor_enabled = True
+            try:
+                _rotate_tor_circuit()
+            except Exception as e:
+                logger.error("Tor not reachable: %s. Install with: "
+                             "brew install tor && brew services start tor", e)
+                return
+        else:
+            _proxy_url = args.proxy
+        logger.info("Proxy enabled: %s", _proxy_url)
 
     # ── Apply default filters for equities ───────────────────────────────
     if args.all_countries:
@@ -1344,6 +1790,7 @@ def main():
                 checkpoint_path=checkpoint_path,
                 staging_db_path=staging_db_path,
                 rate_limit_delay=args.rate_limit,
+                n_workers=args.workers,
             )
             all_manifests.append((db_type, manifest))
 
@@ -1377,6 +1824,7 @@ def main():
             checkpoint_path=checkpoint_path,
             staging_db_path=staging_db_path,
             rate_limit_delay=args.rate_limit,
+            n_workers=args.workers,
         )
         dl = manifest.get('download_result', {})
         logger.info("Pipeline: status=%s, saved=%s, failed_batches=%s",

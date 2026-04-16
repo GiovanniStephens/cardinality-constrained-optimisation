@@ -33,6 +33,10 @@ dev = [
     "coverage>=7.0",
     "ruff>=0.4",
 ]
+tor = [
+    "stem>=1.8.0",
+    "PySocks>=1.7.1",
+]
 
 [project.scripts]
 portfolio-backtest = "src.backtest:main"

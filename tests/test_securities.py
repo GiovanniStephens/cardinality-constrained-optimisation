@@ -505,5 +505,168 @@ class TestValidateTickers(unittest.TestCase):
         self.assertEqual(len(unvalidated), 0)
 
 
+class TestProxyIntegration(unittest.TestCase):
+    """Tests for proxy and Tor integration in download_data."""
+
+    def setUp(self):
+        dd._proxy_url = None
+        dd._tor_enabled = False
+
+    def tearDown(self):
+        dd._proxy_url = None
+        dd._tor_enabled = False
+
+    def test_make_session_with_proxy_adds_proxy(self):
+        """When _proxy_url is set, session should have proxy dict set."""
+        dd._proxy_url = 'socks5://user:pass@proxy.example.com:1080'
+        session = dd._make_session()
+        self.assertEqual(session.proxies['http'], dd._proxy_url)
+        self.assertEqual(session.proxies['https'], dd._proxy_url)
+
+    def test_make_session_with_tor_adds_proxy(self):
+        """When _proxy_url is Tor SOCKS5, session should have proxy dict set."""
+        dd._proxy_url = 'socks5://127.0.0.1:9050'
+        dd._tor_enabled = True
+        session = dd._make_session()
+        self.assertIn('socks5://', session.proxies['http'])
+
+    def test_make_session_without_proxy_no_proxy(self):
+        """When _proxy_url is None, session should have no proxies."""
+        dd._proxy_url = None
+        session = dd._make_session()
+        self.assertFalse(getattr(session, 'proxies', None))
+
+    def test_rotate_tor_circuit_calls_newnym(self):
+        """_rotate_tor_circuit should authenticate and send NEWNYM."""
+        import sys
+        import unittest.mock as mock
+
+        mock_signal = mock.MagicMock()
+        mock_signal.NEWNYM = 'NEWNYM'
+
+        mock_controller_instance = mock.MagicMock()
+        mock_controller_cls = mock.MagicMock()
+        mock_controller_cls.from_port.return_value.__enter__ = mock.MagicMock(
+            return_value=mock_controller_instance)
+        mock_controller_cls.from_port.return_value.__exit__ = mock.MagicMock(
+            return_value=False)
+
+        mock_stem = mock.MagicMock()
+        mock_stem.Signal = mock_signal
+        mock_stem_control = mock.MagicMock()
+        mock_stem_control.Controller = mock_controller_cls
+
+        with patch.dict(sys.modules, {
+            'stem': mock_stem,
+            'stem.control': mock_stem_control,
+        }):
+            dd._rotate_tor_circuit()
+
+        mock_controller_instance.authenticate.assert_called_once()
+        mock_controller_instance.signal.assert_called_once_with('NEWNYM')
+
+
+class TestPartitionTickers(unittest.TestCase):
+    """Tests for _partition_tickers helper."""
+
+    def test_even_split(self):
+        tickers = [f'T{i}' for i in range(20)]
+        parts = dd._partition_tickers(tickers, 4)
+        self.assertEqual(len(parts), 4)
+        self.assertTrue(all(len(p) == 5 for p in parts))
+        # All tickers accounted for
+        self.assertEqual(sorted(sum(parts, [])), sorted(tickers))
+
+    def test_uneven_split(self):
+        tickers = [f'T{i}' for i in range(22)]
+        parts = dd._partition_tickers(tickers, 4)
+        self.assertEqual(len(parts), 4)
+        sizes = sorted([len(p) for p in parts])
+        self.assertEqual(sizes, [5, 5, 6, 6])
+        self.assertEqual(sorted(sum(parts, [])), sorted(tickers))
+
+    def test_fewer_tickers_than_workers(self):
+        tickers = ['A', 'B']
+        parts = dd._partition_tickers(tickers, 4)
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(all(len(p) == 1 for p in parts))
+
+    def test_single_worker(self):
+        tickers = [f'T{i}' for i in range(10)]
+        parts = dd._partition_tickers(tickers, 1)
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0], tickers)
+
+    def test_empty_tickers(self):
+        parts = dd._partition_tickers([], 4)
+        self.assertEqual(len(parts), 0)
+
+
+class TestConcurrentDownload(unittest.TestCase):
+    """Tests for concurrent_download_and_save."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, 'test.db')
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_concurrent_download_basic(self, mock_dl):
+        """Run with 2 workers, verify all tickers saved."""
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+
+        def fake_download(tickers, start, end, timeout):
+            return pd.DataFrame(
+                {t: range(5) for t in tickers}, index=dates)
+
+        mock_dl.side_effect = fake_download
+        tickers = [f'T{i}' for i in range(10)]
+        saved_tickers = []
+
+        def on_complete(saved_list, batch_num):
+            saved_tickers.extend(saved_list)
+
+        result = dd.concurrent_download_and_save(
+            tickers, self.conn, exchange='US', n_workers=2,
+            batch_size=3, max_retries=1, rate_limit_delay=0,
+            batch_timeout=10, circuit_breaker_threshold=100,
+            on_batch_complete=on_complete,
+        )
+        self.assertEqual(result['total_tickers'], 10)
+        self.assertEqual(result['saved_tickers'], 10)
+        self.assertEqual(sorted(saved_tickers), sorted(tickers))
+
+    @patch('src.download_data._download_batch_with_timeout')
+    def test_concurrent_download_worker_failure_isolation(self, mock_dl):
+        """One worker's batches fail, the other continues."""
+        dates = pd.date_range('2024-01-01', periods=5, freq='B')
+        # Worker 0 gets T0-T4, Worker 1 gets T5-T9
+        # Fail tickers starting with T0-T4 (worker 0's partition)
+        fail_tickers = {f'T{i}' for i in range(5)}
+
+        def fake_download(tickers, start, end, timeout):
+            if any(t in fail_tickers for t in tickers):
+                return None
+            return pd.DataFrame(
+                {t: range(5) for t in tickers}, index=dates)
+
+        mock_dl.side_effect = fake_download
+
+        tickers = [f'T{i}' for i in range(10)]
+        result = dd.concurrent_download_and_save(
+            tickers, self.conn, exchange='US', n_workers=2,
+            batch_size=3, max_retries=1, rate_limit_delay=0,
+            batch_timeout=10, circuit_breaker_threshold=100,
+        )
+        # Worker 1's tickers should all be saved
+        self.assertEqual(result['saved_tickers'], 5)
+        self.assertGreater(len(result['failed_batches']), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
