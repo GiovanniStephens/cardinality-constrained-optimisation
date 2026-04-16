@@ -325,9 +325,13 @@ def _download_batch(tickers, start, end, session=None):
     tickers_str = " ".join(tickers)
     if session is None:
         session = _make_session()
+    # Disable yfinance internal threading when using a proxy — curl_cffi
+    # sessions are not safe for concurrent use across yfinance's threads.
+    # Our external workers already provide download parallelism.
+    yf_threads = False if _proxy_url else DOWNLOAD_THREADS
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
-        threads=DOWNLOAD_THREADS, timeout=DOWNLOAD_TIMEOUT, session=session,
+        threads=yf_threads, timeout=DOWNLOAD_TIMEOUT, session=session,
     )
     # Validate returned structure (P5)
     if prices is None or not isinstance(prices, pd.DataFrame) or prices.empty:
