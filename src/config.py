@@ -176,7 +176,9 @@ PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
 PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
 PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
 PIPELINE_DEFAULT_WORKERS = 1              # sequential by default (1 = use download_and_save)
-PIPELINE_MAX_WORKERS = 8                  # cap for --workers
+PIPELINE_MAX_WORKERS = 24                 # cap for --workers
+PIPELINE_SUBPROCESS_STAGGER = 5           # seconds between subprocess launches
+PIPELINE_SESSION_ROTATE_INTERVAL = 50     # rotate proxy session every N batches
 
 # ─── Ticker validation pass ──────────────────────────────────────────────
 # Pre-download validation: download 1 week of data per ticker to check if
