@@ -163,6 +163,7 @@ BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. 
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 20             # was 50 — full 11yr download needs smaller batches
+PIPELINE_PROXY_BATCH_SIZE = 5        # smaller batches via proxy (Yahoo rate-limits large requests)
 PIPELINE_RATE_LIMIT_DELAY = 2.0    # was 4.0 — smaller batches tolerate shorter delays
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space

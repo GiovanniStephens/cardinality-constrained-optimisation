@@ -400,7 +400,11 @@ def run_pipeline(
 
     # Apply defaults from config
     if batch_size is None:
-        batch_size = config.PIPELINE_BATCH_SIZE
+        from src.download_data import _proxy_url
+        if _proxy_url and n_workers and n_workers > 1:
+            batch_size = config.PIPELINE_PROXY_BATCH_SIZE
+        else:
+            batch_size = config.PIPELINE_BATCH_SIZE
     if max_retries is None:
         max_retries = config.PIPELINE_MAX_RETRIES
     if rate_limit_delay is None:
