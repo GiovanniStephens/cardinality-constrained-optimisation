@@ -20,6 +20,12 @@ _proxy_session_counter = random.randint(0, 999_999)  # Random seed to avoid reus
 _proxy_session_counter_lock = threading.Lock()
 
 
+def is_rate_limit_error(error: Exception) -> bool:
+    """Check if an exception indicates Yahoo Finance rate limiting."""
+    error_msg = str(error).lower()
+    return '429' in error_msg or 'too many' in error_msg or 'rate' in error_msg
+
+
 def set_proxy_state(proxy_url, tor_enabled, counter_start):
     """Set process-local proxy globals.
 

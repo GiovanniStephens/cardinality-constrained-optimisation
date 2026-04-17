@@ -137,10 +137,7 @@ def _subprocess_worker(worker_id, tickers, proxy_url, proxy_counter_start,
                             batch_num, attempt, max_retries, jittered)
                         time.sleep(jittered)
                 except Exception as e:
-                    error_msg = str(e).lower()
-                    is_rate_limit = ('429' in error_msg
-                                     or 'too many' in error_msg
-                                     or 'rate' in error_msg)
+                    is_rate_limit = _dd.is_rate_limit_error(e)
                     if is_rate_limit:
                         hit_rate_limit = True
                         session = _dd._make_session()
@@ -304,9 +301,7 @@ def _worker_download(worker_id, tickers, start, end, batch_size,
                                        jittered)
                         time.sleep(jittered)
                 except Exception as e:
-                    error_msg = str(e).lower()
-                    is_rate_limit = ('429' in error_msg or 'too many' in error_msg
-                                     or 'rate' in error_msg)
+                    is_rate_limit = _dd.is_rate_limit_error(e)
                     if is_rate_limit:
                         hit_rate_limit = True
                         # Session's IP is burned — rotate to fresh one

@@ -30,7 +30,19 @@ src/                         # Python source package
 ├── backtest_simulation.py   # Portfolio simulation: get_random_weights, run_portfolio, get_statistics
 ├── backtest_statistics.py   # Hypothesis tests: difference_of_means, paired_t_test, friedman_test
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
-├── db.py                    # SQLite database module (schema, migrations, save/load functions)
+├── db/                      # SQLite database package (schema, migrations, save/load functions)
+│   ├── __init__.py          # Re-exports all public functions for `from src import db` usage
+│   ├── __main__.py          # CLI entry point (create DB, migrate CSVs, backfill metadata)
+│   ├── schema.py            # Schema DDL, version, default seed data
+│   ├── connection.py        # Connection management (get_connection, DB_PATH)
+│   ├── tickers.py           # Ticker CRUD, metadata backfill, exclusion flags
+│   ├── prices.py            # Price data storage and retrieval
+│   ├── bad_tickers.py       # Known-bad ticker cache for download retry logic
+│   ├── forecasts.py         # Forecast data storage and retrieval
+│   ├── optimisation.py      # Optimisation run storage and retrieval
+│   ├── backtest.py          # Backtest session and result storage
+│   ├── metadata.py          # Data source and metadata functions
+│   └── migrations.py        # CSV migration functions for importing legacy data
 ├── portfolio_utils.py       # OptimisationResult dataclass + save_optimisation_result DB helper
 ├── returns.py               # Log returns, expected returns, variances
 ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance estimation
@@ -41,8 +53,12 @@ src/                         # Python source package
 ├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── universe.py              # Security universe building (FinanceDatabase queries, ticker filtering)
-├── download_data.py         # Yahoo Finance download primitives, validation, sequential download, CLI
+├── download_data.py         # Yahoo Finance download primitives, sequential download
+├── download_cli.py          # CLI entry point for download_data (argparse, logging, summary)
 ├── download_workers.py      # Multi-worker concurrent download (threads, subprocesses, DB writer)
+├── download_session.py      # Proxy/Tor session management, circuit rotation
+├── download_validate.py     # Ticker validation with resumable caching
+├── exceptions.py            # Domain exception hierarchy (PortfolioError base)
 ├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
 ├── data_quality.py          # Data validation and bad-ticker flagging
 └── logging_config.py        # Centralised logging setup
@@ -65,7 +81,12 @@ tests/                       # Unit and integration tests
 └── test_pipeline_integration.py     # Integration tests for pipeline
 cpp/                         # C++ parallel island GA implementation
 ├── CMakeLists.txt           # CMake build config (auto-detects Metal on macOS)
-├── optimisation.cpp         # GA/MC source — `--gpu` flag enables Metal path
+├── optimisation.cpp         # GA orchestrator — CLI, island dispatch, result reporting
+├── data_io.h                # Data I/O and preprocessing (header)
+├── data_io.cpp              # Data I/O and preprocessing (implementation)
+├── ga_types.h               # GA types, operators, fitness (header-only)
+├── monte_carlo.h            # Monte Carlo worker (header)
+├── monte_carlo.cpp          # Monte Carlo worker (implementation)
 ├── metal_fitness.h          # PIMPL header for GPU evaluator (pure C++, no ObjC)
 ├── metal_fitness.mm         # ObjC++ Metal implementation (shader + host code)
 └── optimisation             # Compiled binary (gitignored, rebuild via cmake)
@@ -76,7 +97,7 @@ benchmark/                   # Benchmarking framework package
 ├── analysis.py              # Result analysis and reporting
 └── results.py               # Data structures for benchmark results
 data/                        # CSV price data, ETF lists, forecast outputs (~112 MB)
-├── portfolio.db             # SQLite database (gitignored, created by db.py)
+├── portfolio.db             # SQLite database (gitignored, created by src/db)
 ├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs
 └── ...                      # Other CSV data files
 images/                      # Visualisation outputs
@@ -175,7 +196,7 @@ The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silico
 - **Securities.csv**: ticker metadata (name, country, asset type) from FinanceDatabase
 - **expected_returns.csv** / **variances.csv**: ARIMA/GARCH forecast outputs
 - **known_bad_tickers.csv**: cached tickers that failed download validation
-- **portfolio.db**: SQLite database (gitignored, created by `src/db.py`)
+- **portfolio.db**: SQLite database (gitignored, created by `src/db`)
 - Data files are gitignored where large; do not commit raw price CSVs without checking size
 
 ## Conventions
