@@ -559,7 +559,8 @@ def evaluate_window(
         try:
             is_stats = get_statistics(portfolio, weights, train_log_returns)
             return is_stats['sharpe_ratio']
-        except Exception:
+        except Exception as e:
+            logger.debug("IS Sharpe computation failed: %s", e, exc_info=True)
             return None
 
     # ── Helper: build PortfolioResults for a set of portfolios + weights ──

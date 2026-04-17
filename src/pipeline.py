@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from src import config, db
 from src.data_quality import validate_universe
 from src.download_data import download_and_save
+from src.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +422,7 @@ def run_pipeline(
         manifest['promoted_tickers'] = promoted
         manifest['status'] = 'promoted'
         logger.info("Promotion successful: %d tickers", promoted)
-    except Exception as e:
+    except (sqlite3.Error, DatabaseError) as e:
         logger.error("Promotion failed: %s", e)
         manifest['status'] = 'promotion_failed'
         manifest['promotion_error'] = str(e)
