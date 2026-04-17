@@ -6,6 +6,8 @@ with checkpointing -> data quality validation -> promotion to production
 (with backup) -> cleanup.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -13,6 +15,7 @@ import shutil
 import sqlite3
 import time
 from datetime import datetime, timezone
+from typing import Any, Optional
 
 from src import config, db
 from src.data_quality import validate_universe
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Checkpoint persistence
 # ---------------------------------------------------------------------------
 
-def load_checkpoint(path):
+def load_checkpoint(path: str) -> dict[str, Any]:
     """Load checkpoint JSON. Returns dict or empty dict if file missing."""
     if not os.path.exists(path):
         return {}
@@ -35,7 +38,7 @@ def load_checkpoint(path):
         return json.load(f)
 
 
-def save_checkpoint(path, state):
+def save_checkpoint(path: str, state: dict[str, Any]) -> None:
     """Atomically write checkpoint JSON (write to .tmp then rename)."""
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
@@ -43,7 +46,8 @@ def save_checkpoint(path, state):
     os.replace(tmp, path)
 
 
-def filter_completed(tickers, checkpoint):
+def filter_completed(tickers: list[str],
+                     checkpoint: dict[str, Any]) -> list[str]:
     """Remove already-completed tickers from the download list."""
     completed = set(checkpoint.get('completed_tickers', []))
     if not completed:
@@ -58,7 +62,9 @@ def filter_completed(tickers, checkpoint):
 # Preflight checks
 # ---------------------------------------------------------------------------
 
-def preflight_check(prod_db_path, staging_db_path, num_tickers, num_trading_days):
+def preflight_check(prod_db_path: str, staging_db_path: str,
+                    num_tickers: int,
+                    num_trading_days: int) -> dict[str, Any]:
     """
     Check disk space and estimate storage needs.
 
@@ -100,7 +106,8 @@ def preflight_check(prod_db_path, staging_db_path, num_tickers, num_trading_days
 # Backup and rollback
 # ---------------------------------------------------------------------------
 
-def backup_database(source_conn, backup_path):
+def backup_database(source_conn: sqlite3.Connection,
+                    backup_path: str) -> str:
     """
     Create a consistent backup using sqlite3.Connection.backup().
 
@@ -116,7 +123,7 @@ def backup_database(source_conn, backup_path):
     return backup_path
 
 
-def rollback(backup_path, prod_db_path):
+def rollback(backup_path: str, prod_db_path: str) -> None:
     """Restore production DB from a backup file."""
     if not os.path.exists(backup_path):
         raise FileNotFoundError(f"Backup not found: {backup_path}")
@@ -133,7 +140,8 @@ def rollback(backup_path, prod_db_path):
 # Promotion (staging -> production)
 # ---------------------------------------------------------------------------
 
-def promote_staging(staging_db_path, conn_prod, exchange, chunk_size=200):
+def promote_staging(staging_db_path: str, conn_prod: sqlite3.Connection,
+                    exchange: str, chunk_size: int = 200) -> int:
     """
     Copy validated data from staging DB into production DB.
 
@@ -159,7 +167,7 @@ def promote_staging(staging_db_path, conn_prod, exchange, chunk_size=200):
         countries_map = {r['symbol']: r['country'] for r in rows if r['country']}
 
         # Group by asset_type to match save_prices() expectations
-        by_type = {}
+        by_type: dict[str, list[str]] = {}
         for sym in symbols:
             at = asset_types[sym]
             by_type.setdefault(at, []).append(sym)
@@ -212,7 +220,7 @@ def promote_staging(staging_db_path, conn_prod, exchange, chunk_size=200):
 # Manifest
 # ---------------------------------------------------------------------------
 
-def write_manifest(path, manifest):
+def write_manifest(path: str, manifest: dict[str, Any]) -> None:
     """Write the run manifest to a JSON file."""
     with open(path, 'w') as f:
         json.dump(manifest, f, indent=2, default=str)
@@ -367,31 +375,31 @@ def _promote_and_cleanup(staging_db_path, prod_db_path, exchange, run_id,
 
 
 def run_pipeline(
-    tickers,
-    exchange,
-    asset_type='etf',
-    start='2014-04-30',
-    end='2025-04-30',
-    batch_size=None,
-    null_threshold=0.9,
-    names=None,
-    countries=None,
-    sectors=None,
-    industries=None,
-    category_groups=None,
-    categories=None,
-    max_retries=None,
-    subset=None,
-    stage_only=False,
-    skip_validation=False,
-    keep_staging=False,
-    no_backup=False,
-    checkpoint_path=None,
-    staging_db_path=None,
-    rate_limit_delay=None,
-    prod_db_path=None,
-    n_workers=None,
-):
+    tickers: list[str],
+    exchange: str,
+    asset_type: str = 'etf',
+    start: str = '2014-04-30',
+    end: str = '2025-04-30',
+    batch_size: Optional[int] = None,
+    null_threshold: float = 0.9,
+    names: Optional[dict[str, str]] = None,
+    countries: Optional[dict[str, str]] = None,
+    sectors: Optional[dict[str, str]] = None,
+    industries: Optional[dict[str, str]] = None,
+    category_groups: Optional[dict[str, str]] = None,
+    categories: Optional[dict[str, str]] = None,
+    max_retries: Optional[int] = None,
+    subset: Optional[int] = None,
+    stage_only: bool = False,
+    skip_validation: bool = False,
+    keep_staging: bool = False,
+    no_backup: bool = False,
+    checkpoint_path: Optional[str] = None,
+    staging_db_path: Optional[str] = None,
+    rate_limit_delay: Optional[float] = None,
+    prod_db_path: Optional[str] = None,
+    n_workers: Optional[int] = None,
+) -> dict[str, Any]:
     """
     Full staged pipeline: preflight -> stage -> validate -> promote.
 
