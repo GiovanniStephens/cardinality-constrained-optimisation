@@ -31,6 +31,7 @@ dev = [
     "build",
     "pip-tools",
     "coverage>=7.0",
+    "mypy>=1.10",
     "ruff>=0.4",
 ]
 tor = [
@@ -58,3 +59,10 @@ ignore = [
     "F401",   # imported but unused (re-export facades)
     "E741",   # ambiguous variable name (single-letter math vars)
 ]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = false

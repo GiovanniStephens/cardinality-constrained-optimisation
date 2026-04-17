@@ -32,6 +32,11 @@ jobs:
           coverage run -m unittest discover tests
           coverage report --fail-under=60
 
+      - name: Type check
+        continue-on-error: true
+        run: mypy src/ --ignore-missing-imports
+
+
   cpp:
     runs-on: ubuntu-latest
     steps:
