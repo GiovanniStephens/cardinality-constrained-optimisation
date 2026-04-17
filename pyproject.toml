@@ -42,7 +42,7 @@ tor = [
 [project.scripts]
 portfolio-backtest = "src.backtest:main"
 portfolio-forecast = "src.forecast:main"
-portfolio-download = "src.download_cli:main"
+portfolio-download = "src.download.cli:main"
 portfolio-benchmark = "run_benchmark:main"
 
 [tool.setuptools.packages.find]

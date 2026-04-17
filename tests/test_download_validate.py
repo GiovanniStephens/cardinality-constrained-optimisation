@@ -14,12 +14,12 @@ from tests.helpers import BaseTmpDirTest
 class TestValidateTickersAllValid(BaseTmpDirTest):
     """All tickers return data and end up in the valid set."""
 
-    @patch('src.download_validate._sess._get_state', return_value=False)
-    @patch('src.download_validate._sess._rotate_tor_circuit')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate._sess._get_state', return_value=False)
+    @patch('src.download.validate._sess._rotate_tor_circuit')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_validate_tickers_all_valid(self, mock_download, mock_rotate,
                                         mock_get_state):
-        from src.download_validate import validate_tickers
+        from src.download.validate import validate_tickers
 
         tickers = ['AAPL', 'MSFT', 'GOOG']
         mock_df = pd.DataFrame(
@@ -47,12 +47,12 @@ class TestValidateTickersAllValid(BaseTmpDirTest):
 class TestValidateTickersSomeInvalid(BaseTmpDirTest):
     """Some tickers return data, others do not."""
 
-    @patch('src.download_validate._sess._get_state', return_value=False)
-    @patch('src.download_validate._sess._rotate_tor_circuit')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate._sess._get_state', return_value=False)
+    @patch('src.download.validate._sess._rotate_tor_circuit')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_validate_tickers_some_invalid(self, mock_download, mock_rotate,
                                            mock_get_state):
-        from src.download_validate import validate_tickers
+        from src.download.validate import validate_tickers
 
         tickers = ['AAPL', 'BADTICKER', 'GOOG']
         # Only AAPL and GOOG have data
@@ -81,12 +81,12 @@ class TestValidateTickersSomeInvalid(BaseTmpDirTest):
 class TestValidateTickersCacheHit(BaseTmpDirTest):
     """Pre-existing fresh cache file is loaded, download skipped."""
 
-    @patch('src.download_validate._sess._get_state', return_value=False)
-    @patch('src.download_validate._sess._rotate_tor_circuit')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate._sess._get_state', return_value=False)
+    @patch('src.download.validate._sess._rotate_tor_circuit')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_validate_tickers_cache_hit(self, mock_download, mock_rotate,
                                         mock_get_state):
-        from src.download_validate import validate_tickers
+        from src.download.validate import validate_tickers
 
         # Write a fresh cache file
         cache_data = {
@@ -120,12 +120,12 @@ class TestValidateTickersCacheHit(BaseTmpDirTest):
 class TestValidateTickersCacheExpired(BaseTmpDirTest):
     """Stale cache triggers re-validation."""
 
-    @patch('src.download_validate._sess._get_state', return_value=False)
-    @patch('src.download_validate._sess._rotate_tor_circuit')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate._sess._get_state', return_value=False)
+    @patch('src.download.validate._sess._rotate_tor_circuit')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_validate_tickers_cache_expired(self, mock_download, mock_rotate,
                                             mock_get_state):
-        from src.download_validate import validate_tickers
+        from src.download.validate import validate_tickers
 
         # Write a stale cache (200 hours old > 168h max)
         old_ts = (datetime.now() - timedelta(hours=200)).isoformat()
@@ -165,11 +165,11 @@ class TestValidateTickersCacheExpired(BaseTmpDirTest):
 class TestRetryWithSplitting(unittest.TestCase):
     """Test _retry_with_splitting recursive splitting logic."""
 
-    @patch('src.download_validate.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_retry_with_splitting(self, mock_download, mock_sleep):
         """Fails on large batches, succeeds on smaller ones."""
-        from src.download_validate import _retry_with_splitting
+        from src.download.validate import _retry_with_splitting
 
         # Fail on batches > 2 tickers, succeed on 1-2 ticker batches
         def download_side_effect(tickers, start, end, timeout):
@@ -195,11 +195,11 @@ class TestRetryWithSplitting(unittest.TestCase):
         # All tickers should be in the combined result
         self.assertEqual(set(df.columns), {'A', 'B', 'C', 'D'})
 
-    @patch('src.download_validate.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.validate.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_retry_with_splitting_min_batch(self, mock_download, mock_sleep):
         """Splitting stops at min_sub_batch_size, returns failures."""
-        from src.download_validate import _retry_with_splitting
+        from src.download.validate import _retry_with_splitting
 
         # Always fail
         mock_download.return_value = None

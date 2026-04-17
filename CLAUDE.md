@@ -24,11 +24,14 @@ src/                         # Python source package
 │   ├── island_ga.py         # Parallel island-based GA
 │   ├── monte_carlo.py       # Monte Carlo brute-force baseline
 │   └── mip.py               # Mixed Integer Linear Programming
-├── backtest.py              # Forward-walk backtesting orchestrator (portfolio creation, OOS eval)
-├── backtest_types.py        # Dataclasses: WindowSpec, PortfolioResult, MethodResults, WindowResult
-├── backtest_windows.py      # Window generation, data slicing, cross-window aggregation
-├── backtest_simulation.py   # Portfolio simulation: get_random_weights, run_portfolio, get_statistics
-├── backtest_statistics.py   # Hypothesis tests: difference_of_means, paired_t_test, friedman_test
+├── backtest/                # Forward-walk backtesting package
+│   ├── __init__.py          # Re-exports public API for `from src.backtest import ...`
+│   ├── __main__.py          # CLI entry point (`python -m src.backtest`)
+│   ├── runner.py            # Orchestrator: evaluate_window(), main()
+│   ├── types.py             # Dataclasses: WindowSpec, PortfolioResult, MethodResults, WindowResult
+│   ├── windows.py           # Window generation, data slicing
+│   ├── simulation.py        # Portfolio simulation: get_random_weights, run_portfolio, get_statistics
+│   └── statistics.py        # Hypothesis tests, cross-window aggregation
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
 ├── db/                      # SQLite database package (schema, migrations, save/load functions)
 │   ├── __init__.py          # Re-exports all public functions for `from src import db` usage
@@ -53,11 +56,14 @@ src/                         # Python source package
 ├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── universe.py              # Security universe building (FinanceDatabase queries, ticker filtering)
-├── download_data.py         # Yahoo Finance download primitives, sequential download
-├── download_cli.py          # CLI entry point for download_data (argparse, logging, summary)
-├── download_workers.py      # Multi-worker concurrent download (threads, subprocesses, DB writer)
-├── download_session.py      # Proxy/Tor session management, circuit rotation
-├── download_validate.py     # Ticker validation with resumable caching
+├── download/                # Data download package (Yahoo Finance)
+│   ├── __init__.py          # Re-exports public API
+│   ├── __main__.py          # CLI entry point (`python -m src.download`)
+│   ├── core.py              # Download primitives, download_and_save
+│   ├── cli.py               # Argparse CLI, logging, summary reporting
+│   ├── session.py           # Proxy/Tor session management, circuit rotation
+│   ├── validate.py          # Ticker validation with resumable caching
+│   └── workers.py           # Multi-worker concurrent download (threads, subprocesses)
 ├── exceptions.py            # Domain exception hierarchy (PortfolioError base)
 ├── pipeline.py              # Orchestrates data download, quality checks, and forecasting
 ├── data_quality.py          # Data validation and bad-ticker flagging
@@ -72,6 +78,8 @@ tests/                       # Unit and integration tests
 ├── test_securities.py       # Tests for security universe/download
 ├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
 ├── test_group_constraints.py # Tests for group allocation constraints
+├── test_download_session.py  # Tests for download session/proxy management
+├── test_download_validate.py # Tests for ticker validation
 ├── test_data_quality.py     # Tests for data validation
 ├── test_pipeline.py         # Tests for pipeline orchestration
 ├── test_cpp_equivalence.py  # Tests for C++/Python parity + Metal GPU equivalence
@@ -132,8 +140,8 @@ python -m src.backtest
 python -m src.forecast
 
 # Download price data (also: portfolio-download)
-python -m src.download_data --asset-types equities etfs
-python -m src.download_data --incremental   # only new dates
+python -m src.download --asset-types equities etfs
+python -m src.download --incremental   # only new dates
 
 # Validate data quality (flag bad tickers)
 python -m src.data_quality                  # validate and flag

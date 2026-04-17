@@ -19,10 +19,10 @@ from tests.helpers import make_synthetic_prices, get_memory_db
 
 from src import db
 from src.backtest import create_random_portfolios, evaluate_portfolios
-from src.backtest_types import WindowResult
-from src.backtest_windows import generate_windows, slice_window_data, aggregate_cross_window
-from src.backtest_simulation import get_random_weights
-from src.backtest_statistics import paired_t_test
+from src.backtest.types import WindowResult
+from src.backtest.windows import generate_windows, slice_window_data
+from src.backtest.simulation import get_random_weights
+from src.backtest.statistics import paired_t_test, aggregate_cross_window
 from src.returns import calculate_log_returns
 from src.weights import optimise_weights
 

@@ -19,8 +19,8 @@ from typing import Any, Optional
 
 from src import config, db
 from src.data_quality import validate_universe
-from src.download_data import download_and_save
-from src.download_workers import concurrent_download_and_save
+from src.download.core import download_and_save
+from src.download.workers import concurrent_download_and_save
 from src.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
@@ -410,7 +410,7 @@ def run_pipeline(
 
     # Apply defaults from config
     if batch_size is None:
-        from src.download_data import _proxy_url
+        from src.download.session import _proxy_url
         if _proxy_url and n_workers and n_workers > 1:
             batch_size = config.PIPELINE_PROXY_BATCH_SIZE
         else:

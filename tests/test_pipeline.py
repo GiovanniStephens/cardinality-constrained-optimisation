@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from src import db
-from src.download_data import download_and_save
+from src.download.core import download_and_save
 from src.pipeline import (
     backup_database,
     filter_completed,
@@ -295,7 +295,7 @@ class TestCircuitBreaker(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_circuit_breaker_trips_after_threshold(self, mock_dl):
         tickers = [f'T{i}' for i in range(25)]  # 5 batches of 5
         result = download_and_save(
@@ -308,7 +308,7 @@ class TestCircuitBreaker(BaseTmpDirTest):
         # Should have stopped after 3 consecutive failures, not all 5
         self.assertEqual(len(result['failed_batches']), 3)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_circuit_breaker_resets_on_success(self, mock_dl):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
 
@@ -329,7 +329,7 @@ class TestCircuitBreaker(BaseTmpDirTest):
         # 4 failures then 1 success — should NOT trip (resets at batch 5)
         self.assertFalse(result['circuit_breaker_tripped'])
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_circuit_breaker_saves_checkpoint(self, mock_dl):
         checkpoint_path = os.path.join(self.tmpdir, 'ckpt.json')
         checkpoint = {
@@ -366,7 +366,7 @@ class TestFailedTickerRecording(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_failed_batches_contain_ticker_symbols(self, mock_dl):
         tickers = ['SPY', 'QQQ', 'IVV', 'VTI', 'BND']
         result = download_and_save(
@@ -381,7 +381,7 @@ class TestFailedTickerRecording(BaseTmpDirTest):
         # First batch should contain SPY, QQQ
         self.assertEqual(result['failed_batches'][0]['tickers'], ['SPY', 'QQQ'])
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_checkpoint_records_failed_tickers(self, mock_dl):
         checkpoint_path = os.path.join(self.tmpdir, 'ckpt.json')
         checkpoint = {
@@ -418,8 +418,8 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_rate_limit_delay_escalates_on_429(self, mock_dl, mock_sleep):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
 
@@ -446,8 +446,8 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
         self.assertGreater(rate_limit_sleeps[1], rate_limit_sleeps[0],
                            "Backoff should escalate on repeated 429s")
 
-    @patch('src.download_data.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_rate_limit_delay_halves_on_success(self, mock_dl, mock_sleep):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
 
@@ -489,7 +489,7 @@ class TestBatchTimeout(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data._download_batch')
+    @patch('src.download.core._download_batch')
     def test_batch_timeout_returns_none(self, mock_dl):
         def slow_download(*args):
             time.sleep(5)
@@ -551,7 +551,7 @@ class TestSubBatchSplitting(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_sub_batch_recovers_partial_data(self, mock_dl):
         """Splitting should recover tickers from smaller sub-batches."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
@@ -575,7 +575,7 @@ class TestSubBatchSplitting(BaseTmpDirTest):
         self.assertEqual(result['saved_tickers'], 20)
         self.assertEqual(len(result['failed_batches']), 0)
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_sub_batch_respects_min_size(self, mock_dl):
         """When everything fails, splitting stops at min batch size."""
         tickers = [f'T{i}' for i in range(20)]
@@ -602,8 +602,8 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
-    @patch('src.download_data.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_cooldown_resets_counter_and_continues(self, mock_dl, mock_sleep):
         """After first trip, cooldown should reset counter and continue."""
         tickers = [f'T{i}' for i in range(30)]  # 6 batches of 5
@@ -619,8 +619,8 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         # Should have processed more than just 2 batches (continued after first trip)
         self.assertGreater(len(result['failed_batches']), 2)
 
-    @patch('src.download_data.time.sleep')
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core.time.sleep')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_success_after_cooldown_prevents_abort(self, mock_dl, mock_sleep):
         """If batches succeed after a cooldown, no hard abort."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
@@ -645,7 +645,7 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         self.assertEqual(result['circuit_breaker_trip_count'], 1)
         self.assertGreater(result['saved_tickers'], 0)
 
-    @patch('src.download_data._download_batch_with_timeout', return_value=None)
+    @patch('src.download.core._download_batch_with_timeout', return_value=None)
     def test_trip_count_in_result(self, mock_dl):
         """Result dict should include circuit_breaker_trip_count."""
         tickers = [f'T{i}' for i in range(10)]

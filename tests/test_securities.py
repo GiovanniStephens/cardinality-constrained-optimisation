@@ -8,6 +8,7 @@ import pandas as pd
 
 from src import db
 from src import download_data as dd
+import src.download.session as dl_sess
 from tests import requires_network
 
 
@@ -168,19 +169,19 @@ class TestEndToEnd(unittest.TestCase):
 class TestDownloadBatchValidation(unittest.TestCase):
     """Test DataFrame structure validation in _download_batch."""
 
-    @patch('src.download_data.yf.download')
+    @patch('src.download.core.yf.download')
     def test_handles_empty_dataframe(self, mock_yf):
         mock_yf.return_value = pd.DataFrame()
         result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
         self.assertIsNone(result)
 
-    @patch('src.download_data.yf.download')
+    @patch('src.download.core.yf.download')
     def test_handles_none_return(self, mock_yf):
         mock_yf.return_value = None
         result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
         self.assertIsNone(result)
 
-    @patch('src.download_data.yf.download')
+    @patch('src.download.core.yf.download')
     def test_handles_non_datetime_index(self, mock_yf):
         # Return a DataFrame with integer index that can be coerced to datetime
         dates = pd.date_range('2024-01-01', periods=3, freq='B')
@@ -190,7 +191,7 @@ class TestDownloadBatchValidation(unittest.TestCase):
         # Should succeed after coercing index
         self.assertIsNotNone(result)
 
-    @patch('src.download_data.yf.download')
+    @patch('src.download.core.yf.download')
     def test_handles_unconvertible_index(self, mock_yf):
         df = pd.DataFrame({'Close': [100, 101]}, index=['not-a-date', 'also-not'])
         mock_yf.return_value = df
@@ -212,7 +213,7 @@ class TestDeduplication(unittest.TestCase):
             os.remove(os.path.join(self.tmpdir, f))
         os.rmdir(self.tmpdir)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_download_and_save_deduplicates_tickers(self, mock_dl):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
         mock_dl.return_value = pd.DataFrame(
@@ -232,7 +233,7 @@ class TestDeduplication(unittest.TestCase):
 class TestLogAggregation(unittest.TestCase):
     """Test that skipped tickers are logged as a summary, not individually."""
 
-    @patch('src.download_data.yf.download')
+    @patch('src.download.core.yf.download')
     def test_batch_skipped_tickers_logged_as_summary(self, mock_yf):
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
         # Return a DataFrame that only has data for one ticker out of many
@@ -243,7 +244,7 @@ class TestLogAggregation(unittest.TestCase):
         df.columns = pd.MultiIndex.from_tuples([('SPY', 'Close')])
         mock_yf.return_value = df
 
-        with self.assertLogs('src.download_data', level='INFO') as cm:
+        with self.assertLogs('src.download.core', level='INFO') as cm:
             # Request many tickers but only SPY has data
             tickers = ['SPY'] + [f'BAD{i}' for i in range(20)]
             dd._download_batch(tickers, '2024-01-01', '2024-02-01')
@@ -361,7 +362,7 @@ class TestValidateTickers(unittest.TestCase):
             {t: range(len(dates)) for t in tickers}, index=dates
         )
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_valid_tickers_from_successful_batch(self, mock_dl):
         """Tickers present in result columns are returned as valid."""
         mock_dl.return_value = self._make_result(['AAPL', 'MSFT'])
@@ -374,7 +375,7 @@ class TestValidateTickers(unittest.TestCase):
         self.assertIn('AAPL', valid)
         self.assertIn('MSFT', valid)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_invalid_tickers_from_successful_batch(self, mock_dl):
         """Tickers NOT in result columns are returned as invalid."""
         mock_dl.return_value = self._make_result(['AAPL'])
@@ -388,7 +389,7 @@ class TestValidateTickers(unittest.TestCase):
         self.assertIn('BADTICKER', invalid)
         self.assertNotIn('BADTICKER', valid)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_failed_batch_tickers_are_unvalidated(self, mock_dl):
         """When batch returns None, tickers go to unvalidated (not invalid)."""
         mock_dl.return_value = None  # all retries fail
@@ -403,7 +404,7 @@ class TestValidateTickers(unittest.TestCase):
         self.assertIn('AAPL', unvalidated)
         self.assertIn('MSFT', unvalidated)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_two_windows_union(self, mock_dl):
         """Ticker valid in window 2 but not window 1 → still valid."""
         # Window 1: only AAPL has data
@@ -439,7 +440,7 @@ class TestValidateTickers(unittest.TestCase):
         self.assertIn('GOOG', valid)
         self.assertEqual(len(invalid), 0)
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_uses_cache_when_fresh(self, mock_dl):
         """Loads from JSON cache instead of calling yfinance."""
         import json
@@ -465,7 +466,7 @@ class TestValidateTickers(unittest.TestCase):
         # Should not have called yfinance at all
         mock_dl.assert_not_called()
 
-    @patch('src.download_data._download_batch_with_timeout')
+    @patch('src.download.core._download_batch_with_timeout')
     def test_refreshes_stale_cache(self, mock_dl):
         """Re-validates when cache is older than max_cache_hours."""
         import json
@@ -507,34 +508,36 @@ class TestValidateTickers(unittest.TestCase):
 
 
 class TestProxyIntegration(unittest.TestCase):
-    """Tests for proxy and Tor integration in download_data."""
+    """Tests for proxy and Tor integration in download session."""
 
     def setUp(self):
-        dd._proxy_url = None
-        dd._tor_enabled = False
+        self._orig_proxy = dl_sess._proxy_url
+        self._orig_tor = dl_sess._tor_enabled
+        dl_sess._proxy_url = None
+        dl_sess._tor_enabled = False
 
     def tearDown(self):
-        dd._proxy_url = None
-        dd._tor_enabled = False
+        dl_sess._proxy_url = self._orig_proxy
+        dl_sess._tor_enabled = self._orig_tor
 
     def test_make_session_with_proxy_adds_proxy(self):
         """When _proxy_url is set, session should have proxy dict set."""
-        dd._proxy_url = 'socks5://user:pass@proxy.example.com:1080'
-        session = dd._make_session()
-        self.assertEqual(session.proxies['http'], dd._proxy_url)
-        self.assertEqual(session.proxies['https'], dd._proxy_url)
+        dl_sess._proxy_url = 'socks5://user:pass@proxy.example.com:1080'
+        session = dl_sess._make_session()
+        self.assertEqual(session.proxies['http'], dl_sess._proxy_url)
+        self.assertEqual(session.proxies['https'], dl_sess._proxy_url)
 
     def test_make_session_with_tor_adds_proxy(self):
         """When _proxy_url is Tor SOCKS5, session should have proxy dict set."""
-        dd._proxy_url = 'socks5://127.0.0.1:9050'
-        dd._tor_enabled = True
-        session = dd._make_session()
+        dl_sess._proxy_url = 'socks5://127.0.0.1:9050'
+        dl_sess._tor_enabled = True
+        session = dl_sess._make_session()
         self.assertIn('socks5://', session.proxies['http'])
 
     def test_make_session_without_proxy_no_proxy(self):
         """When _proxy_url is None, session should have no proxies."""
-        dd._proxy_url = None
-        session = dd._make_session()
+        dl_sess._proxy_url = None
+        session = dl_sess._make_session()
         self.assertFalse(getattr(session, 'proxies', None))
 
     def test_rotate_tor_circuit_calls_newnym(self):
@@ -616,7 +619,7 @@ class TestConcurrentDownload(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    @patch('src.download_data._download_batch')
+    @patch('src.download.core._download_batch')
     def test_concurrent_download_basic(self, mock_dl):
         """Run with 2 workers, verify all tickers saved."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
@@ -642,7 +645,7 @@ class TestConcurrentDownload(unittest.TestCase):
         self.assertEqual(result['saved_tickers'], 10)
         self.assertEqual(sorted(saved_tickers), sorted(tickers))
 
-    @patch('src.download_data._download_batch')
+    @patch('src.download.core._download_batch')
     def test_concurrent_download_worker_failure_isolation(self, mock_dl):
         """One worker's batches fail, the other continues."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
@@ -706,10 +709,10 @@ class TestSubprocessWorker(unittest.TestCase):
 
     def test_proxy_triggers_subprocess_path(self):
         """When _proxy_url is set and n_workers > 1, subprocess path is used."""
-        from src import download_workers as dw
-        old_proxy = dd._proxy_url
+        from src.download import workers as dw
+        old_proxy = dl_sess._proxy_url
         try:
-            dd._proxy_url = 'http://user-1:pass@proxy.example.com:8080'
+            dl_sess._proxy_url = 'http://user-1:pass@proxy.example.com:8080'
 
             # Patch _concurrent_subprocess_download to verify it's called
             with patch.object(dw, '_concurrent_subprocess_download',
@@ -723,7 +726,7 @@ class TestSubprocessWorker(unittest.TestCase):
                 db_path = os.path.join(tmpdir, 'test.db')
                 conn = db.get_connection(db_path)
                 try:
-                    dd.concurrent_download_and_save(
+                    dw.concurrent_download_and_save(
                         ['A', 'B'], conn, exchange='US', n_workers=2,
                         batch_size=5, rate_limit_delay=0, batch_timeout=10,
                         circuit_breaker_threshold=100,
@@ -734,14 +737,14 @@ class TestSubprocessWorker(unittest.TestCase):
                     import shutil
                     shutil.rmtree(tmpdir, ignore_errors=True)
         finally:
-            dd._proxy_url = old_proxy
+            dl_sess._proxy_url = old_proxy
 
     def test_no_proxy_uses_thread_path(self):
         """When _proxy_url is None, thread path is used even with multiple workers."""
-        from src import download_workers as dw
-        old_proxy = dd._proxy_url
+        from src.download import workers as dw
+        old_proxy = dl_sess._proxy_url
         try:
-            dd._proxy_url = None
+            dl_sess._proxy_url = None
 
             with patch.object(dw, '_concurrent_thread_download',
                               return_value={'total_tickers': 0,
@@ -754,7 +757,7 @@ class TestSubprocessWorker(unittest.TestCase):
                 db_path = os.path.join(tmpdir, 'test.db')
                 conn = db.get_connection(db_path)
                 try:
-                    dd.concurrent_download_and_save(
+                    dw.concurrent_download_and_save(
                         ['A', 'B'], conn, exchange='US', n_workers=2,
                         batch_size=5, rate_limit_delay=0, batch_timeout=10,
                         circuit_breaker_threshold=100,
@@ -765,7 +768,7 @@ class TestSubprocessWorker(unittest.TestCase):
                     import shutil
                     shutil.rmtree(tmpdir, ignore_errors=True)
         finally:
-            dd._proxy_url = old_proxy
+            dl_sess._proxy_url = old_proxy
 
 
 if __name__ == '__main__':

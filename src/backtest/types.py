@@ -1,4 +1,4 @@
-"""Data structures used by the backtest module."""
+"""Data structures for the backtest pipeline."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional

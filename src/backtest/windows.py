@@ -1,12 +1,9 @@
-"""Window generation and aggregation for forward-walk backtesting."""
+"""Window generation and data slicing for the forward-walk backtest."""
 
-import logging
 from typing import List
 
-import numpy as np
 import pandas as pd
 
-from src.backtest_types import WindowSpec
 from src.config import (
     BACKTEST_TRAIN_YEARS,
     BACKTEST_TEST_DAYS,
@@ -15,7 +12,7 @@ from src.config import (
 )
 from src.returns import calculate_log_returns
 
-logger = logging.getLogger(__name__)
+from .types import WindowSpec
 
 
 def generate_windows(
@@ -63,56 +60,29 @@ def generate_windows(
     return windows
 
 
-def slice_window_data(window, full_prices):
-    """Slice full prices into train/test sets and compute OOS log returns.
+def slice_window_data(window: WindowSpec, full_prices: pd.DataFrame):
+    """
+    Slice price data for a single window and compute OOS log returns.
+
+    Prepends the last training price so the first test-day log return is
+    log(test_price[0] / train_price[-1]) rather than 0.
 
     :param window: WindowSpec defining train/test boundaries.
-    :param full_prices: complete price DataFrame.
+    :param full_prices: complete price DataFrame (will be sliced).
     :return: (train_prices, oos_log_returns) tuple.
     """
     train_prices = full_prices.loc[window.train_start:window.train_end]
     test_prices = full_prices.loc[window.test_start:window.test_end]
+    # Runtime guard: training must end strictly before testing begins
     assert train_prices.index.max() < test_prices.index.min(), (
         f"Window {window.label}: train data ends at {train_prices.index.max()} "
         f"but test data starts at {test_prices.index.min()}. "
         f"This would leak test-period data into training."
     )
+    # Prepend last training price so the first test-day log return is
+    # log(test_price[0] / train_price[-1]) rather than 0.
     boundary_price = train_prices.iloc[[-1]]
     test_with_boundary = pd.concat([boundary_price, test_prices])
     oos_log_returns = calculate_log_returns(test_with_boundary).iloc[1:]
-    logger.info(
-        "  Window %s: train=%d rows, test=%d rows, %d tickers",
-        window.label, len(train_prices), len(test_prices),
-        train_prices.shape[1],
-    )
+
     return train_prices, oos_log_returns
-
-
-def aggregate_cross_window(all_results):
-    """
-    Build a summary table of mean Sharpe per method per window.
-
-    :param all_results: list of WindowResult objects.
-    :return: DataFrame with methods as rows, windows + mean + std as columns.
-    """
-    data = {}
-    all_categories = set()
-    for wr in all_results:
-        for cat in wr.method_results:
-            all_categories.add(cat)
-
-    for cat in sorted(all_categories):
-        row = {}
-        values = []
-        for wr in all_results:
-            if cat in wr.method_results:
-                val = wr.method_results[cat].mean_sharpe
-                row[wr.window.label] = val
-                values.append(val)
-            else:
-                row[wr.window.label] = np.nan
-        row['mean'] = np.nanmean(values) if values else np.nan
-        row['std'] = np.nanstd(values) if values else np.nan
-        data[cat] = row
-
-    return pd.DataFrame(data).T

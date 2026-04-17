@@ -4,7 +4,7 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
-import src.download_session as sess
+import src.download.session as sess
 
 
 class TestSetProxyState(unittest.TestCase):
@@ -47,7 +47,7 @@ class TestMakeSession(unittest.TestCase):
         sess._tor_enabled = self._orig_tor
         sess._proxy_session_counter = self._orig_counter
 
-    @patch('src.download_session.CffiSession')
+    @patch('src.download.session.CffiSession')
     def test_make_session_no_proxy(self, mock_session_cls):
         """No proxy set: session created with Chrome impersonation, no proxies."""
         sess._proxy_url = None
@@ -61,7 +61,7 @@ class TestMakeSession(unittest.TestCase):
         # proxies should not have been set on the instance
         self.assertFalse(hasattr(mock_instance, 'proxies'))
 
-    @patch('src.download_session.CffiSession')
+    @patch('src.download.session.CffiSession')
     def test_make_session_with_proxy(self, mock_session_cls):
         """Proxy set: session gets proxies dict."""
         sess._proxy_url = 'socks5://127.0.0.1:9050'
@@ -78,7 +78,7 @@ class TestMakeSession(unittest.TestCase):
             'https': 'socks5://127.0.0.1:9050',
         })
 
-    @patch('src.download_session.CffiSession')
+    @patch('src.download.session.CffiSession')
     def test_make_session_proxy_rotation(self, mock_session_cls):
         """Residential proxy URL with digit suffix gets counter rotated."""
         sess._proxy_url = 'http://user-11:pass@proxy.example.com:8080'
@@ -99,7 +99,7 @@ class TestMakeSession(unittest.TestCase):
 class TestRotateTorCircuit(unittest.TestCase):
     """Test _rotate_tor_circuit sends NEWNYM and handles failures."""
 
-    @patch('src.download_session.logger')
+    @patch('src.download.session.logger')
     def test_rotate_tor_circuit_success(self, mock_logger):
         """Successful circuit rotation sends NEWNYM signal."""
         mock_controller = MagicMock()
@@ -122,7 +122,7 @@ class TestRotateTorCircuit(unittest.TestCase):
             mock_controller.__enter__().signal.assert_called_once_with(
                 mock_signal_mod.Signal.NEWNYM)
 
-    @patch('src.download_session.logger')
+    @patch('src.download.session.logger')
     def test_rotate_tor_circuit_failure(self, mock_logger):
         """Connection refused logs warning, doesn't raise."""
         mock_signal_mod = MagicMock()
@@ -153,33 +153,36 @@ class TestGetState(unittest.TestCase):
 
     def tearDown(self):
         sess._proxy_url = self._orig_proxy
-        # Clean up any mock attributes on download_data
+        # Clean up any mock attributes on download.core
         import sys
+        core = sys.modules.get('src.download.core')
+        if core is not None and '_proxy_url' in core.__dict__:
+            del core.__dict__['_proxy_url']
         dd = sys.modules.get('src.download_data')
         if dd is not None and '_proxy_url' in dd.__dict__:
             del dd.__dict__['_proxy_url']
 
     def test_get_state_fallback(self):
-        """_get_state reads from src.download_data.__dict__ first,
+        """_get_state reads from src.download.core.__dict__ first,
         then falls back to module globals."""
         import sys
-        import src.download_data as dd
+        import src.download.core as core
 
         # Set the module global
         sess._proxy_url = 'http://module-global.example.com'
 
-        # Without download_data override, should read module global
-        # First, ensure download_data doesn't have _proxy_url set
-        if '_proxy_url' in dd.__dict__:
-            del dd.__dict__['_proxy_url']
+        # Without core override, should read module global
+        # First, ensure core doesn't have _proxy_url set
+        if '_proxy_url' in core.__dict__:
+            del core.__dict__['_proxy_url']
 
         result = sess._get_state('_proxy_url')
         self.assertEqual(result, 'http://module-global.example.com')
 
-        # Now set it on download_data — should prefer that
-        dd._proxy_url = 'http://download-data-override.example.com'
+        # Now set it on core — should prefer that
+        core._proxy_url = 'http://download-core-override.example.com'
         result = sess._get_state('_proxy_url')
-        self.assertEqual(result, 'http://download-data-override.example.com')
+        self.assertEqual(result, 'http://download-core-override.example.com')
 
 
 if __name__ == '__main__':

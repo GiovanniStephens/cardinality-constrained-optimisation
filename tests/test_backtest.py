@@ -1,6 +1,7 @@
 import os
 import unittest
 from src import backtest
+from src.backtest import simulation as _sim
 from src.data_loading import load_data
 from src.returns import calculate_log_returns, calculate_expected_returns
 from src.metrics import maximum_drawdown, downside_deviation, sortino_ratio, calmar_ratio
@@ -50,11 +51,11 @@ class TestBacktest(unittest.TestCase):
         cls.data = _make_synthetic_prices()
         test_days = min(BACKTEST_TEST_DAYS, len(cls.data) // 3)
         training = cls.data.iloc[:-test_days, :]
-        backtest._backtest_data = training
-        backtest._use_forecast = False
+        _sim._backtest_data = training
+        _sim._use_forecast = False
         log_rets = calculate_log_returns(training)
-        backtest._backtest_log_returns = log_rets.transpose()
-        backtest._backtest_expected_returns = calculate_expected_returns(log_rets)
+        _sim._backtest_log_returns = log_rets.transpose()
+        _sim._backtest_expected_returns = calculate_expected_returns(log_rets)
         cls.test_tickers = list(cls.data.columns[:3])
 
     def test_get_random_weights_count(self):
@@ -162,11 +163,11 @@ class TestBacktestWithRealData(unittest.TestCase):
     def setUpClass(cls):
         cls.data = _load_test_data()
         training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
-        backtest._backtest_data = training
-        backtest._use_forecast = False
+        _sim._backtest_data = training
+        _sim._use_forecast = False
         log_rets = calculate_log_returns(training)
-        backtest._backtest_log_returns = log_rets.transpose()
-        backtest._backtest_expected_returns = calculate_expected_returns(log_rets)
+        _sim._backtest_log_returns = log_rets.transpose()
+        _sim._backtest_expected_returns = calculate_expected_returns(log_rets)
 
     def test_data_loads_from_db_or_csv(self):
         self.assertTrue(self.data.shape[0] > 0)

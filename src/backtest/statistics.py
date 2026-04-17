@@ -1,9 +1,12 @@
-"""Statistical hypothesis tests for backtesting."""
+"""Statistical testing and cross-window aggregation for backtests."""
+
+from typing import List
 
 import numpy as np
+import pandas as pd
 from scipy.stats import friedmanchisquare, ttest_rel
 
-from src.config import BACKTEST_MIN_METHODS_FOR_STATS
+from .types import WindowResult
 
 
 def difference_of_means_hypothesis_test(sample_1, sample_2):
@@ -51,7 +54,7 @@ def paired_t_test(sharpes_a, sharpes_b):
     return ttest_rel(b, a)
 
 
-def friedman_test(all_results, categories):
+def friedman_test(all_results: List[WindowResult], categories):
     """
     Non-parametric Friedman test for comparing K methods across W windows.
 
@@ -72,10 +75,40 @@ def friedman_test(all_results, categories):
     # All methods must have the same number of windows
     n_windows = len(all_results)
     valid_cats = [c for c in categories if len(columns.get(c, [])) == n_windows]
-    if len(valid_cats) < BACKTEST_MIN_METHODS_FOR_STATS:
+    if len(valid_cats) < 3:
         raise ValueError(
-            f"Friedman test requires >= {BACKTEST_MIN_METHODS_FOR_STATS} methods present in all windows, "
+            f"Friedman test requires >= 3 methods present in all windows, "
             f"got {len(valid_cats)}"
         )
     arrays = [columns[c] for c in valid_cats]
     return friedmanchisquare(*arrays)
+
+
+def aggregate_cross_window(all_results: List[WindowResult]):
+    """
+    Build a summary table of mean Sharpe per method per window.
+
+    :param all_results: list of WindowResult objects.
+    :return: DataFrame with methods as rows, windows + mean + std as columns.
+    """
+    data = {}
+    all_categories = set()
+    for wr in all_results:
+        for cat in wr.method_results:
+            all_categories.add(cat)
+
+    for cat in sorted(all_categories):
+        row = {}
+        values = []
+        for wr in all_results:
+            if cat in wr.method_results:
+                val = wr.method_results[cat].mean_sharpe
+                row[wr.window.label] = val
+                values.append(val)
+            else:
+                row[wr.window.label] = np.nan
+        row['mean'] = np.nanmean(values) if values else np.nan
+        row['std'] = np.nanstd(values) if values else np.nan
+        data[cat] = row
+
+    return pd.DataFrame(data).T
