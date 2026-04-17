@@ -16,7 +16,7 @@ else()
 endif()
 include_directories(${CMAKE_SOURCE_DIR}/../csv-parser/single_include)
 
-set(SOURCES optimisation.cpp)
+set(SOURCES optimisation.cpp data_io.cpp monte_carlo.cpp)
 
 # Platform-specific linking
 if(APPLE)
