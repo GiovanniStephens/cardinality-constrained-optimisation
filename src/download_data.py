@@ -1,9 +1,11 @@
 """
 Downloads price data from Yahoo Finance.
 
-Provides session management, core download primitives, ticker validation,
-sequential download-and-save, and a CLI entry point. Universe building
-lives in src.universe; concurrent worker infrastructure in src.download_workers.
+Provides core download primitives, sequential download-and-save, and a CLI
+entry point. Session management and proxy/Tor setup live in
+src.download_session; ticker validation in src.download_validate; universe
+building in src.universe; concurrent worker infrastructure in
+src.download_workers.
 """
 
 import argparse
@@ -12,78 +14,19 @@ import os
 import random
 import re
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 
-from curl_cffi.requests import Session as CffiSession
 import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
 
 from src.config import (DOWNLOAD_THREADS, DOWNLOAD_TIMEOUT,
                         TICKER_EXCLUDE_SUFFIXES, TICKER_EXCLUDE_NAME_PATTERNS)
+from src.download_validate import validate_tickers, _retry_with_splitting
 
 logger = logging.getLogger(__name__)
-
-_proxy_url = None   # Set from CLI: --proxy or --use-tor
-_tor_enabled = False  # Tor-specific: enables NEWNYM circuit rotation
-_proxy_session_counter = random.randint(0, 999_999)  # Random seed to avoid reusing burned session IDs
-_proxy_session_counter_lock = threading.Lock()
-
-
-def set_proxy_state(proxy_url, tor_enabled, counter_start):
-    """Set process-local proxy globals.
-
-    Called by subprocess workers (in download_workers) after fork to
-    initialise this module's state in the child process.
-    """
-    global _proxy_url, _tor_enabled, _proxy_session_counter
-    _proxy_url = proxy_url
-    _tor_enabled = tor_enabled
-    _proxy_session_counter = counter_start
-
-
-def _make_session():
-    """Create a curl_cffi Session with Chrome TLS impersonation.
-
-    Chrome impersonation is critical — Yahoo's bot detection blocks requests
-    with non-browser TLS fingerprints, even from residential proxy IPs.
-
-    For rotating residential proxies: if the proxy URL contains a username
-    ending in digits (e.g. ``mdgihswf-11``), the trailing number is replaced
-    with a per-session counter so each batch gets a distinct exit IP.
-    """
-    global _proxy_session_counter
-    session = CffiSession(impersonate='chrome')
-    if _proxy_url:
-        url = _proxy_url
-        # Rotate proxy username suffix for residential proxies
-        # e.g. http://user-11:pass@host → http://user-42:pass@host
-        if re.match(r'https?://[^:]*-\d+:', url):
-            with _proxy_session_counter_lock:
-                _proxy_session_counter += 1
-                counter = _proxy_session_counter
-            url = re.sub(r'(-)\d+:', rf'\g<1>{counter}:', url, count=1)
-        session.proxies = {'http': url, 'https': url}
-    return session
-
-
-def _rotate_tor_circuit():
-    """Request a new Tor circuit (new exit IP) via the ControlPort."""
-    try:
-        from stem import Signal
-        from stem.control import Controller
-        from src.config import TOR_CONTROL_PORT, TOR_CONTROL_PASSWORD
-        with Controller.from_port(port=TOR_CONTROL_PORT) as controller:
-            if TOR_CONTROL_PASSWORD:
-                controller.authenticate(password=TOR_CONTROL_PASSWORD)
-            else:
-                controller.authenticate()
-            controller.signal(Signal.NEWNYM)
-    except Exception as e:
-        logger.warning("Tor circuit rotation failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +35,14 @@ def _rotate_tor_circuit():
 
 def _download_batch(tickers, start, end, session=None):
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
+    import src.download_session as _sess
     tickers_str = " ".join(tickers)
     if session is None:
-        session = _make_session()
+        session = _sess._make_session()
     # Disable yfinance internal threading when using a proxy — curl_cffi
     # sessions are not safe for concurrent use across yfinance's threads.
     # Our external workers already provide download parallelism.
-    yf_threads = False if _proxy_url else DOWNLOAD_THREADS
+    yf_threads = False if _sess._get_state('_proxy_url') else DOWNLOAD_THREADS
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
         threads=yf_threads, timeout=DOWNLOAD_TIMEOUT, session=session,
@@ -147,241 +91,6 @@ def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
             logger.warning("Batch download timed out after %ds (%d tickers)",
                            timeout_seconds, len(tickers))
             return None
-
-
-def validate_tickers(tickers, batch_size=None, delay=None, max_retries=None,
-                     timeout=None, validation_windows=None,
-                     cache_dir=None, max_cache_hours=None):
-    """Quick validation pass: download 1 week of data per ticker to identify
-    which tickers yfinance can actually serve.
-
-    Uses two date windows (mid-2019, mid-2024) to catch both older and
-    newer listings. A ticker with data in EITHER window is valid.
-
-    Failed batches (possible rate-limit) are treated conservatively:
-    all their tickers remain as 'unvalidated' and proceed to full download.
-
-    :param tickers: list of ticker symbols to validate.
-    :param batch_size: tickers per validation batch (default: config).
-    :param delay: seconds between batches (default: config).
-    :param max_retries: retries for failed batches (default: config).
-    :param timeout: seconds per batch download (default: config).
-    :param validation_windows: list of (start, end) date pairs (default: config).
-    :param cache_dir: directory for cache file (default: config.DATA_DIR).
-    :param max_cache_hours: use cached results if fresher than this; None
-        disables caching (default: config).
-    :returns: (valid_set, invalid_set, unvalidated_set)
-        valid: confirmed to have data on yfinance
-        invalid: in a successful batch but returned no data
-        unvalidated: in a failed batch (kept for full download)
-    """
-    import json
-    from datetime import datetime as dt_cls
-    from src import config as cfg
-
-    batch_size = batch_size or cfg.VALIDATION_BATCH_SIZE
-    delay = delay if delay is not None else cfg.VALIDATION_DELAY
-    max_retries = max_retries if max_retries is not None else cfg.VALIDATION_MAX_RETRIES
-    timeout = timeout or cfg.VALIDATION_TIMEOUT
-    validation_windows = validation_windows or cfg.VALIDATION_WINDOWS
-    cache_dir = cache_dir or cfg.DATA_DIR
-    if max_cache_hours is None:
-        max_cache_hours = cfg.VALIDATION_CACHE_HOURS
-
-    cache_path = os.path.join(cache_dir, cfg.VALIDATION_CACHE_FILE)
-    tickers_set = set(tickers)
-
-    # ── Helper: save cache incrementally ────────────────────────────────
-    save_interval = 10  # save every N batches
-    batches_since_save = 0
-
-    def _save_cache(v, inv, unv, force=False):
-        nonlocal batches_since_save
-        batches_since_save += 1
-        if not force and batches_since_save < save_interval:
-            return
-        batches_since_save = 0
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            cache_data = {
-                'timestamp': dt_cls.now().isoformat(),
-                'valid': sorted(v),
-                'invalid': sorted(inv - v),
-                'unvalidated': sorted(unv - v),
-            }
-            with open(cache_path, 'w') as f:
-                json.dump(cache_data, f, indent=2)
-        except OSError:
-            pass
-
-    # ── Load progress from cache (resume or fresh hit) ───────────────────
-    valid = set()
-    invalid = set()
-    unvalidated = set()
-
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path) as f:
-                cached = json.load(f)
-            cache_ts = dt_cls.fromisoformat(cached['timestamp'])
-            age_hours = (dt_cls.now() - cache_ts).total_seconds() / 3600
-
-            cached_valid = set(cached.get('valid', []))
-            cached_invalid = set(cached.get('invalid', []))
-            cached_unvalidated = set(cached.get('unvalidated', []))
-            categorised = cached_valid | cached_invalid | cached_unvalidated
-            unchecked = tickers_set - categorised
-
-            # Fresh + complete cache → return immediately
-            if max_cache_hours and age_hours < max_cache_hours and not unchecked:
-                valid = cached_valid & tickers_set
-                invalid = cached_invalid & tickers_set
-                unvalidated = tickers_set - valid - invalid
-                logger.info("Validation cache hit (%.1fh old): %d valid, "
-                            "%d invalid, %d unvalidated",
-                            age_hours, len(valid), len(invalid), len(unvalidated))
-                return valid, invalid, unvalidated
-
-            # Stale complete cache → re-validate from scratch
-            if not unchecked and (not max_cache_hours or age_hours >= max_cache_hours):
-                logger.info("Validation cache stale (%.1fh old), re-validating",
-                            age_hours)
-            else:
-                # Partial cache → resume from where we left off
-                valid = cached_valid
-                invalid = cached_invalid
-                unvalidated = cached_unvalidated
-                logger.info("Resuming validation: %d valid, %d invalid, "
-                            "%d unvalidated from cache, %d unchecked remain",
-                            len(valid), len(invalid), len(unvalidated),
-                            len(unchecked))
-        except (json.JSONDecodeError, KeyError, ValueError):
-            logger.warning("Validation cache corrupt, starting fresh")
-
-    # ── Validate across windows ──────────────────────────────────────────
-
-    for window_idx, (win_start, win_end) in enumerate(validation_windows, 1):
-        # Only skip tickers confirmed valid or unvalidated (failed batch);
-        # re-check invalid tickers — they may exist in a different window
-        skip = valid | unvalidated
-        remaining = [t for t in tickers if t not in skip]
-        if not remaining:
-            break
-
-        logger.info("Validation window %d/%d (%s to %s): %d tickers to check",
-                     window_idx, len(validation_windows), win_start, win_end,
-                     len(remaining))
-
-        batches = [remaining[i:i + batch_size]
-                   for i in range(0, len(remaining), batch_size)]
-
-        for batch_idx, batch in enumerate(tqdm(batches, desc=f"Validating (window {window_idx})",
-                                                unit="batch")):
-            result = _download_batch_with_timeout(batch, win_start, win_end, timeout)
-
-            if result is not None and not result.empty:
-                # Successful batch — categorise tickers
-                returned_tickers = set(result.columns)
-                valid |= returned_tickers
-                # Tickers in this batch with no data → invalid (for this window)
-                batch_invalid = set(batch) - returned_tickers
-                invalid |= batch_invalid
-                # Remove from unvalidated if previously there
-                unvalidated -= returned_tickers
-            elif result is not None and result.empty:
-                # Batch succeeded but empty — all tickers invalid
-                invalid |= set(batch)
-            else:
-                # Batch failed (None) — retry once
-                retried = False
-                for retry in range(max_retries):
-                    if _tor_enabled:
-                        _rotate_tor_circuit()
-                    time.sleep(delay)
-                    result = _download_batch_with_timeout(batch, win_start, win_end, timeout)
-                    if result is not None and not result.empty:
-                        returned_tickers = set(result.columns)
-                        valid |= returned_tickers
-                        invalid |= set(batch) - returned_tickers
-                        unvalidated -= returned_tickers
-                        retried = True
-                        break
-                    elif result is not None and result.empty:
-                        invalid |= set(batch)
-                        retried = True
-                        break
-                if not retried:
-                    # All retries failed — conservatively keep as unvalidated
-                    unvalidated |= set(batch)
-
-            _save_cache(valid, invalid, unvalidated)
-
-            if _tor_enabled:
-                from src.config import TOR_ROTATE_EVERY_N_BATCHES
-                if (batch_idx + 1) % TOR_ROTATE_EVERY_N_BATCHES == 0:
-                    _rotate_tor_circuit()
-
-            if batch_idx < len(batches) - 1:
-                time.sleep(delay)
-
-    # Tickers valid in any window should not be in invalid
-    invalid -= valid
-    unvalidated -= valid
-
-    # ── Save final cache ─────────────────────────────────────────────────
-    _save_cache(valid, invalid, unvalidated, force=True)
-    logger.info("Validation cache saved to %s", cache_path)
-
-    logger.info("Validation complete: %d valid, %d invalid, %d unvalidated",
-                 len(valid), len(invalid), len(unvalidated))
-    return valid, invalid, unvalidated
-
-
-def _retry_with_splitting(tickers, start, end, timeout_seconds,
-                          min_batch_size, delay_state):
-    """Split a failed batch into halves and retry. Returns (df_or_None, failed_tickers).
-
-    delay_state is a mutable list [current_delay, max_delay, base_delay]
-    so adaptive backoff propagates across recursive calls.
-    """
-    current_delay, max_delay, base_delay = delay_state
-
-    # Try the full list with 2 quick retries
-    for attempt in range(1, 3):
-        df = _download_batch_with_timeout(tickers, start, end, timeout_seconds)
-        if df is not None and not df.empty:
-            # Success — halve delay
-            delay_state[0] = max(base_delay, current_delay * 0.5)
-            return df, []
-        if attempt < 2:
-            # Failed — escalate delay
-            current_delay = min(current_delay * 2, max_delay)
-            delay_state[0] = current_delay
-            jittered = current_delay * random.uniform(0.8, 1.2)
-            time.sleep(jittered)
-
-    # Can't split further — return as failed
-    if len(tickers) <= min_batch_size:
-        return None, list(tickers)
-
-    # Split in half and recurse
-    mid = len(tickers) // 2
-    left, right = tickers[:mid], tickers[mid:]
-
-    jittered = delay_state[0] * random.uniform(0.8, 1.2)
-    time.sleep(jittered)
-    df_left, failed_left = _retry_with_splitting(
-        left, start, end, timeout_seconds, min_batch_size, delay_state)
-
-    jittered = delay_state[0] * random.uniform(0.8, 1.2)
-    time.sleep(jittered)
-    df_right, failed_right = _retry_with_splitting(
-        right, start, end, timeout_seconds, min_batch_size, delay_state)
-
-    # Combine successful results
-    parts = [d for d in (df_left, df_right) if d is not None and not d.empty]
-    combined = pd.concat(parts, axis=1) if parts else None
-    return combined, failed_left + failed_right
 
 
 def download_data(
@@ -476,6 +185,7 @@ def download_and_save(
         circuit_breaker_tripped (bool), and circuit_breaker_trip_count (int).
     """
     from src import db, config
+    import src.download_session as _sess
 
     # Apply config defaults
     if rate_limit_delay is None:
@@ -537,8 +247,8 @@ def download_and_save(
                 # Empty result likely means Yahoo silently rate-limited
                 if attempt < max_retries:
                     hit_rate_limit = True
-                    if _tor_enabled:
-                        _rotate_tor_circuit()
+                    if _sess._get_state('_tor_enabled'):
+                        _sess._rotate_tor_circuit()
                     current_delay = min(current_delay * 2, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
@@ -553,8 +263,8 @@ def download_and_save(
                                  or 'rate' in error_msg)
                 if is_rate_limit:
                     hit_rate_limit = True
-                    if _tor_enabled:
-                        _rotate_tor_circuit()
+                    if _sess._get_state('_tor_enabled'):
+                        _sess._rotate_tor_circuit()
                     current_delay = min(current_delay * 2, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Rate limited on batch %d (attempt %d/%d), "
@@ -707,10 +417,10 @@ def download_and_save(
         if on_batch_complete:
             on_batch_complete(saved_tickers_list, batch_num)
 
-        if _tor_enabled:
+        if _sess._get_state('_tor_enabled'):
             from src.config import TOR_ROTATE_EVERY_N_BATCHES
             if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
-                _rotate_tor_circuit()
+                _sess._rotate_tor_circuit()
 
         if current_delay > 0 and batch_num < len(batches):
             jittered = current_delay * random.uniform(0.8, 1.2)
@@ -877,22 +587,22 @@ def main():
     args = parser.parse_args()
 
     from src import db, config
+    import src.download_session as _sess
 
     # ── Proxy setup ─────────────────────────────────────────────────────
     if args.proxy or args.use_tor:
-        global _proxy_url, _tor_enabled
         if args.use_tor:
-            _proxy_url = config.TOR_SOCKS_PROXY
-            _tor_enabled = True
+            _sess._proxy_url = config.TOR_SOCKS_PROXY
+            _sess._tor_enabled = True
             try:
-                _rotate_tor_circuit()
+                _sess._rotate_tor_circuit()
             except Exception as e:
                 logger.error("Tor not reachable: %s. Install with: "
                              "brew install tor && brew services start tor", e)
                 return
         else:
-            _proxy_url = args.proxy
-        logger.info("Proxy enabled: %s", _proxy_url)
+            _sess._proxy_url = args.proxy
+        logger.info("Proxy enabled: %s", _sess._proxy_url)
 
     # ── Apply default filters for equities ───────────────────────────────
     if args.all_countries:
@@ -1334,6 +1044,11 @@ _WORKER_ATTRS = {
     '_db_writer', '_concurrent_thread_download',
     '_concurrent_subprocess_download',
 }
+_SESSION_ATTRS = {
+    '_proxy_url', '_tor_enabled', '_proxy_session_counter',
+    '_proxy_session_counter_lock',
+    'set_proxy_state', '_make_session', '_rotate_tor_circuit',
+}
 
 
 def __getattr__(name):
@@ -1343,6 +1058,9 @@ def __getattr__(name):
     if name in _WORKER_ATTRS:
         from src import download_workers
         return getattr(download_workers, name)
+    if name in _SESSION_ATTRS:
+        import src.download_session as _sess
+        return getattr(_sess, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
