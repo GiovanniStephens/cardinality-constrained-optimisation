@@ -475,7 +475,7 @@ def backfill_metadata(conn, exchange='US'):
                             "WHERE id = ? AND industry IS NULL",
                             (industry, now, tid),
                         )
-        except Exception as e:
+        except (KeyError, AttributeError, ValueError) as e:
             logger.warning("backfill_metadata: equities lookup failed: %s", e)
 
     # ETFs: category_group/category from FinanceDatabase
@@ -500,7 +500,7 @@ def backfill_metadata(conn, exchange='US'):
                             "WHERE id = ? AND category IS NULL",
                             (cat, now, tid),
                         )
-        except Exception as e:
+        except (KeyError, AttributeError, ValueError) as e:
             logger.warning("backfill_metadata: ETFs lookup failed: %s", e)
 
     conn.commit()
