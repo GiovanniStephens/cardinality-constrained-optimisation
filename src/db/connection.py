@@ -1,8 +1,11 @@
 """Database connection management."""
 
+from __future__ import annotations
+
 import logging
 import sqlite3
 from datetime import datetime, timezone
+from typing import Optional
 
 from src.config import DB_PATH
 from src.db.schema import SCHEMA_SQL, DEFAULT_EXCHANGES, _apply_migrations
@@ -10,11 +13,11 @@ from src.db.schema import SCHEMA_SQL, DEFAULT_EXCHANGES, _apply_migrations
 logger = logging.getLogger(__name__)
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def get_connection(db_path=None):
+def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     """Open a database connection, create tables if needed, seed exchanges."""
     if db_path is None:
         db_path = DB_PATH
@@ -35,7 +38,7 @@ def get_connection(db_path=None):
     return conn
 
 
-def _get_exchange_id(conn, code):
+def _get_exchange_id(conn: sqlite3.Connection, code: str) -> int:
     """Look up exchange id by code. Raises ValueError if not found."""
     row = conn.execute(
         "SELECT id FROM exchanges WHERE code = ?", (code,)

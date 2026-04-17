@@ -8,15 +8,19 @@ building in src.universe; concurrent worker infrastructure in
 src.download_workers.
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os
 import random
 import re
+import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 import pandas as pd
 import yfinance as yf
@@ -43,7 +47,8 @@ logger = logging.getLogger(__name__)
 # Price downloading
 # ---------------------------------------------------------------------------
 
-def _download_batch(tickers, start, end, session=None):
+def _download_batch(tickers: list[str], start: str, end: str,
+                    session: Any = None) -> Optional[pd.DataFrame]:
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
     import src.download_session as _sess
     tickers_str = " ".join(tickers)
@@ -88,7 +93,8 @@ def _download_batch(tickers, start, end, session=None):
     return pd.DataFrame(batch_prices, index=prices.index)
 
 
-def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
+def _download_batch_with_timeout(tickers: list[str], start: str, end: str,
+                                 timeout_seconds: float) -> Optional[pd.DataFrame]:
     """Wrap _download_batch with a timeout. Returns None on timeout."""
     # Don't pass a pre-built session — curl_cffi sessions are not safe to
     # share across threads.  _download_batch will call _make_session()
@@ -161,16 +167,27 @@ def download_data(
 
 
 def download_and_save(
-    tickers, conn, exchange, asset_type='etf',
-    start=DOWNLOAD_DEFAULT_START, end=DOWNLOAD_DEFAULT_END,
-    batch_size=DOWNLOAD_DEFAULT_BATCH_SIZE, null_threshold=0.9,
-    names=None, countries=None, max_retries=3,
-    on_batch_complete=None, on_batch_failed=None,
-    rate_limit_delay=None, batch_timeout=None,
-    circuit_breaker_threshold=None, max_rate_limit_delay=None,
-    circuit_breaker_max_trips=None, circuit_breaker_cooldown=None,
-    sectors=None, industries=None, category_groups=None, categories=None,
-):
+    tickers: list[str], conn: sqlite3.Connection, exchange: str,
+    asset_type: str = 'etf',
+    start: str = DOWNLOAD_DEFAULT_START, end: str = DOWNLOAD_DEFAULT_END,
+    batch_size: int = DOWNLOAD_DEFAULT_BATCH_SIZE,
+    null_threshold: float = 0.9,
+    names: Optional[dict[str, str]] = None,
+    countries: Optional[dict[str, str]] = None,
+    max_retries: int = 3,
+    on_batch_complete: Optional[Callable[[list[str], int], None]] = None,
+    on_batch_failed: Optional[Callable[[list[str], int], None]] = None,
+    rate_limit_delay: Optional[float] = None,
+    batch_timeout: Optional[float] = None,
+    circuit_breaker_threshold: Optional[int] = None,
+    max_rate_limit_delay: Optional[float] = None,
+    circuit_breaker_max_trips: Optional[int] = None,
+    circuit_breaker_cooldown: Optional[float] = None,
+    sectors: Optional[dict[str, str]] = None,
+    industries: Optional[dict[str, str]] = None,
+    category_groups: Optional[dict[str, str]] = None,
+    categories: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
     """
     Download prices in batches and persist each batch to the database immediately.
 
@@ -466,7 +483,7 @@ def download_and_save(
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def _add_file_logging(log_dir='data'):
+def _add_file_logging(log_dir: str = 'data') -> str:
     """Add a file handler so logs survive terminal close during long runs."""
     from datetime import datetime as dt
     os.makedirs(log_dir, exist_ok=True)
@@ -479,7 +496,7 @@ def _add_file_logging(log_dir='data'):
     return log_path
 
 
-def main():
+def main() -> None:
     # Register this module under its canonical name so that when the pipeline
     # does `from src.download_data import ...`, it gets THIS module (with our
     # globals) instead of a fresh copy with _proxy_url=None.
@@ -988,7 +1005,8 @@ def main():
                        else [('all', manifest)], log_path)
 
 
-def _log_final_summary(manifests, log_path):
+def _log_final_summary(manifests: list[tuple[str, dict[str, Any]]],
+                       log_path: str) -> None:
     """Print a clear final summary with key stats and file locations."""
     logger.info("=" * 60)
     logger.info("DOWNLOAD COMPLETE")
@@ -1068,7 +1086,7 @@ _SESSION_ATTRS = {
 }
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _UNIVERSE_ATTRS:
         from src import universe
         return getattr(universe, name)

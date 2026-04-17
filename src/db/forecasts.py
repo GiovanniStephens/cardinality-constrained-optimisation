@@ -1,6 +1,10 @@
 """Forecast data storage and retrieval."""
 
+from __future__ import annotations
+
 import logging
+import sqlite3
+from typing import Optional
 
 import pandas as pd
 
@@ -10,9 +14,13 @@ from src.db.tickers import _ensure_tickers
 logger = logging.getLogger(__name__)
 
 
-def save_forecast_results(conn, expected_returns_s, variances_s,
-                          n_periods=None, elapsed_seconds=None,
-                          notes=None, exchange='US'):
+def save_forecast_results(conn: sqlite3.Connection,
+                          expected_returns_s: pd.Series,
+                          variances_s: pd.Series,
+                          n_periods: Optional[int] = None,
+                          elapsed_seconds: Optional[float] = None,
+                          notes: Optional[str] = None,
+                          exchange: str = 'US') -> int:
     """
     Save expected returns and variances from a forecast run.
 
@@ -60,7 +68,7 @@ def save_forecast_results(conn, expected_returns_s, variances_s,
     return run_id
 
 
-def load_expected_returns(conn, forecast_run_id=None):
+def load_expected_returns(conn: sqlite3.Connection, forecast_run_id: Optional[int] = None) -> pd.Series:
     """Load expected returns as a Series indexed by ticker symbol."""
     if forecast_run_id is None:
         row = conn.execute(
@@ -81,7 +89,7 @@ def load_expected_returns(conn, forecast_run_id=None):
     )
 
 
-def load_variances(conn, forecast_run_id=None):
+def load_variances(conn: sqlite3.Connection, forecast_run_id: Optional[int] = None) -> pd.Series:
     """Load variances as a Series indexed by ticker symbol."""
     if forecast_run_id is None:
         row = conn.execute(

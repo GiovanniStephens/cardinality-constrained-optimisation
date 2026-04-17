@@ -1,7 +1,11 @@
 """Backtest session and result storage."""
 
+from __future__ import annotations
+
 import json
 import logging
+import sqlite3
+from typing import Any, Optional
 
 from src.db.connection import _get_exchange_id, _now
 from src.db.tickers import _ensure_tickers
@@ -9,7 +13,7 @@ from src.db.tickers import _ensure_tickers
 logger = logging.getLogger(__name__)
 
 
-def save_backtest_session(conn, params):
+def save_backtest_session(conn: sqlite3.Connection, params: dict[str, Any]) -> int:
     """
     Save a backtest session.
 
@@ -54,8 +58,11 @@ def save_backtest_session(conn, params):
     return cur.lastrowid
 
 
-def save_backtest_result(conn, session_id, category, index, metrics,
-                         holdings=None, exchange='US'):
+def save_backtest_result(conn: sqlite3.Connection, session_id: int,
+                         category: str, index: int,
+                         metrics: dict[str, Any],
+                         holdings: Optional[list[tuple[str, float]]] = None,
+                         exchange: str = 'US') -> None:
     """
     Save a single portfolio result within a backtest session.
 
@@ -104,14 +111,14 @@ def save_backtest_result(conn, session_id, category, index, metrics,
             )
 
 
-def get_recent_backtests(conn, n=5):
+def get_recent_backtests(conn: sqlite3.Connection, n: int = 5) -> list[sqlite3.Row]:
     """Get the most recent backtest sessions."""
     return conn.execute(
         "SELECT * FROM backtest_sessions ORDER BY id DESC LIMIT ?", (n,)
     ).fetchall()
 
 
-def get_backtest_results(conn, session_id):
+def get_backtest_results(conn: sqlite3.Connection, session_id: int) -> list[sqlite3.Row]:
     """Get all results for a backtest session."""
     return conn.execute(
         "SELECT * FROM backtest_results WHERE session_id = ? ORDER BY category, portfolio_index",

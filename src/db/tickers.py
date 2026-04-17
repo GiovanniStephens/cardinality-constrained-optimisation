@@ -1,15 +1,24 @@
 """Ticker management functions."""
 
+from __future__ import annotations
+
 import logging
+import sqlite3
+from typing import Optional
 
 from src.db.connection import _get_exchange_id, _now
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
-                    countries=None, sectors=None, industries=None,
-                    category_groups=None, categories=None):
+def _ensure_tickers(conn: sqlite3.Connection, symbols: list[str],
+                    exchange_id: int, asset_type: str = 'etf',
+                    names: Optional[dict[str, str]] = None,
+                    countries: Optional[dict[str, str]] = None,
+                    sectors: Optional[dict[str, str]] = None,
+                    industries: Optional[dict[str, str]] = None,
+                    category_groups: Optional[dict[str, str]] = None,
+                    categories: Optional[dict[str, str]] = None) -> dict[str, int]:
     """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
 
     asset_type: one of 'etf', 'stock', 'fund', 'managed_fund'.
@@ -74,7 +83,7 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
     return existing
 
 
-def set_ticker_excluded(conn, ticker_id, reason):
+def set_ticker_excluded(conn: sqlite3.Connection, ticker_id: int, reason: str) -> None:
     """Flag a ticker as excluded with a reason string."""
     conn.execute(
         "UPDATE tickers SET excluded = ?, updated_at = ? WHERE id = ?",
@@ -82,7 +91,7 @@ def set_ticker_excluded(conn, ticker_id, reason):
     )
 
 
-def clear_ticker_excluded(conn, ticker_id):
+def clear_ticker_excluded(conn: sqlite3.Connection, ticker_id: int) -> None:
     """Remove the exclusion flag from a ticker."""
     conn.execute(
         "UPDATE tickers SET excluded = NULL, updated_at = ? WHERE id = ?",
@@ -90,7 +99,7 @@ def clear_ticker_excluded(conn, ticker_id):
     )
 
 
-def get_excluded_tickers(conn, exchange=None):
+def get_excluded_tickers(conn: sqlite3.Connection, exchange: Optional[str] = None) -> list[sqlite3.Row]:
     """Get all excluded tickers with their reasons."""
     query = "SELECT t.id, t.symbol, t.excluded FROM tickers t WHERE t.excluded IS NOT NULL"
     params = []
@@ -102,7 +111,7 @@ def get_excluded_tickers(conn, exchange=None):
     return conn.execute(query, params).fetchall()
 
 
-def load_ticker_metadata(conn, symbols, exchange='US'):
+def load_ticker_metadata(conn: sqlite3.Connection, symbols: list[str], exchange: str = 'US') -> dict[str, dict[str, Optional[str]]]:
     """Load metadata for a list of ticker symbols.
 
     Returns {symbol: {'country': ..., 'asset_type': ..., 'sector': ...,
@@ -127,7 +136,7 @@ def load_ticker_metadata(conn, symbols, exchange='US'):
     }
 
 
-def backfill_metadata(conn, exchange='US'):
+def backfill_metadata(conn: sqlite3.Connection, exchange: str = 'US') -> int:
     """Backfill sector/category_group from FinanceDatabase for tickers missing them.
 
     Updates tickers in-place. Can be run standalone: ``python -m src.db backfill``.

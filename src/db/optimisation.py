@@ -1,7 +1,11 @@
 """Optimisation run storage and retrieval."""
 
+from __future__ import annotations
+
 import json
 import logging
+import sqlite3
+from typing import Any, Optional
 
 from src.db.connection import _get_exchange_id, _now
 from src.db.tickers import _ensure_tickers
@@ -9,7 +13,10 @@ from src.db.tickers import _ensure_tickers
 logger = logging.getLogger(__name__)
 
 
-def save_optimisation_run(conn, params, results, holdings, exchange='US'):
+def save_optimisation_run(conn: sqlite3.Connection, params: dict[str, Any],
+                          results: dict[str, Any],
+                          holdings: list[tuple[str, float]],
+                          exchange: str = 'US') -> int:
     """
     Save an optimisation run and its portfolio holdings.
 
@@ -89,7 +96,8 @@ def save_optimisation_run(conn, params, results, holdings, exchange='US'):
     return run_id
 
 
-def get_recent_runs(conn, n=10, script=None):
+def get_recent_runs(conn: sqlite3.Connection, n: int = 10,
+                    script: Optional[str] = None) -> list[sqlite3.Row]:
     """Get the most recent optimisation runs."""
     query = "SELECT * FROM optimisation_runs"
     params = []
@@ -101,7 +109,7 @@ def get_recent_runs(conn, n=10, script=None):
     return conn.execute(query, params).fetchall()
 
 
-def get_run_holdings(conn, run_id):
+def get_run_holdings(conn: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]:
     """Get portfolio holdings for a given run. Returns rows with ticker (symbol) and weight."""
     return conn.execute(
         "SELECT t.symbol AS ticker, ph.weight "

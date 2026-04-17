@@ -1,5 +1,7 @@
 """Database schema definition, migrations, and default seed data."""
 
+from __future__ import annotations
+
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -195,12 +197,12 @@ DEFAULT_EXCHANGES = [
 SCHEMA_VERSION = 2
 
 
-def _migrate_to_1(conn):
+def _migrate_to_1(conn: sqlite3.Connection) -> None:
     """Initial schema — applied by SCHEMA_SQL; this is a no-op sentinel."""
     pass
 
 
-def _migrate_to_2(conn):
+def _migrate_to_2(conn: sqlite3.Connection) -> None:
     """Add sector/industry/category columns to tickers for group constraints."""
     for col in ('sector', 'industry', 'category_group', 'category'):
         try:
@@ -215,7 +217,7 @@ MIGRATIONS = {
 }
 
 
-def _get_schema_version(conn):
+def _get_schema_version(conn: sqlite3.Connection) -> int:
     """Return the current schema version, or 0 if the table doesn't exist."""
     try:
         row = conn.execute(
@@ -227,7 +229,7 @@ def _get_schema_version(conn):
         return 0
 
 
-def _apply_migrations(conn):
+def _apply_migrations(conn: sqlite3.Connection) -> None:
     """Apply any pending migrations to bring the DB up to SCHEMA_VERSION."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_version ("

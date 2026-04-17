@@ -1,7 +1,11 @@
 """CSV migration functions for importing legacy data."""
 
+from __future__ import annotations
+
 import logging
 import os
+import sqlite3
+from typing import Optional
 
 import pandas as pd
 
@@ -13,7 +17,7 @@ from src.db.forecasts import save_forecast_results
 logger = logging.getLogger(__name__)
 
 
-def migrate_csvs(conn, data_dir=None):
+def migrate_csvs(conn: sqlite3.Connection, data_dir: Optional[str] = None) -> None:
     """One-time import of existing CSV data into the database."""
     if data_dir is None:
         data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Data')
@@ -43,7 +47,8 @@ def migrate_csvs(conn, data_dir=None):
         logger.info("  %s: %d rows", table, count)
 
 
-def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
+def _migrate_price_csv(conn: sqlite3.Connection, data_dir: str, filename: str,
+                       exchange: str, asset_type: str) -> None:
     """Import a single price CSV file."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):
@@ -73,7 +78,9 @@ def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
                 source='csv_migration')
 
 
-def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
+def _migrate_forecasts(conn: sqlite3.Connection, data_dir: str,
+                       er_filename: str, var_filename: str,
+                       exchange: str) -> None:
     """Import paired expected returns and variances CSVs."""
     er_path = os.path.join(data_dir, er_filename)
     var_path = os.path.join(data_dir, var_filename)
@@ -95,7 +102,9 @@ def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
                           notes=f'Migrated from {er_filename} + {var_filename}')
 
 
-def _migrate_ticker_list(conn, data_dir, filename, exchange, asset_type):
+def _migrate_ticker_list(conn: sqlite3.Connection, data_dir: str,
+                         filename: str, exchange: str,
+                         asset_type: str) -> None:
     """Import a ticker list CSV (single column of symbols)."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):

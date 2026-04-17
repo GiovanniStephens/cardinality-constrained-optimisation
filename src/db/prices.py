@@ -1,6 +1,10 @@
 """Price data storage and retrieval."""
 
+from __future__ import annotations
+
 import logging
+import sqlite3
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -11,9 +15,15 @@ from src.db.metadata import _save_data_source_no_commit
 logger = logging.getLogger(__name__)
 
 
-def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
-                names=None, countries=None, sectors=None, industries=None,
-                category_groups=None, categories=None):
+def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
+                exchange: str, asset_type: str = 'etf',
+                source: Optional[str] = None,
+                names: Optional[dict[str, str]] = None,
+                countries: Optional[dict[str, str]] = None,
+                sectors: Optional[dict[str, str]] = None,
+                industries: Optional[dict[str, str]] = None,
+                category_groups: Optional[dict[str, str]] = None,
+                categories: Optional[dict[str, str]] = None) -> int:
     """
     Save a wide-format DataFrame of prices to the database.
 
@@ -75,9 +85,14 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     return ds_id
 
 
-def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
-                tickers=None, exclude_countries=None, exclude_flagged=True,
-                min_coverage=0.95, ffill_limit=5):
+def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
+                asset_type: Optional[str] = None,
+                start: Optional[str] = None, end: Optional[str] = None,
+                tickers: Optional[list[str]] = None,
+                exclude_countries: Optional[list[str]] = None,
+                exclude_flagged: bool = True,
+                min_coverage: Optional[float] = 0.95,
+                ffill_limit: int = 5) -> pd.DataFrame:
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
@@ -150,7 +165,8 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
     return df
 
 
-def get_latest_prices_date(conn, exchange=None, asset_type=None):
+def get_latest_prices_date(conn: sqlite3.Connection, exchange: Optional[str] = None,
+                           asset_type: Optional[str] = None) -> Optional[str]:
     """Return the most recent date string in the prices table, or None.
 
     Useful for incremental downloads: start from the day after this date.
@@ -179,7 +195,7 @@ def get_latest_prices_date(conn, exchange=None, asset_type=None):
     return row[0] if row else None
 
 
-def get_tickers_with_prices(conn, exchange=None):
+def get_tickers_with_prices(conn: sqlite3.Connection, exchange: Optional[str] = None) -> set[str]:
     """Return the set of ticker symbols that have at least one price row."""
     query = ("SELECT DISTINCT t.symbol FROM tickers t "
              "JOIN prices p ON t.id = p.ticker_id")
