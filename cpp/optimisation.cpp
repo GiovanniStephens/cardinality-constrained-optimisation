@@ -16,6 +16,7 @@
 #include <numeric>
 #include <cassert>
 #include <barrier>
+#include <memory>
 #include "csv.hpp"
 
 #ifdef __APPLE__
@@ -1298,6 +1299,26 @@ std::string escapeJson(const std::string& s) {
 int main(int argc, char* argv[]) {
     Config cfg = parse_args(argc, argv);
 
+    // ── Input validation ────────────────────────────────────────────────────
+    if (cfg.min_etfs > cfg.max_etfs) {
+        std::cerr << "Error: min-etfs (" << cfg.min_etfs
+                  << ") must be <= max-etfs (" << cfg.max_etfs << ")." << std::endl;
+        return 1;
+    }
+    if (cfg.max_etfs > 64) {
+        std::cerr << "Error: max-etfs (" << cfg.max_etfs
+                  << ") must be <= 64 (Metal shader limitation)." << std::endl;
+        return 1;
+    }
+    if (cfg.pop_size <= 0) {
+        std::cerr << "Error: pop-size must be > 0." << std::endl;
+        return 1;
+    }
+    if (cfg.num_islands <= 0) {
+        std::cerr << "Error: num-islands must be > 0." << std::endl;
+        return 1;
+    }
+
     auto globalStart = std::chrono::steady_clock::now();
 
     // Load data
@@ -1324,6 +1345,21 @@ int main(int argc, char* argv[]) {
     int T = static_cast<int>(logReturns.rows());
     std::cerr << "Loaded " << numETFs << " instruments, "
               << T << " return observations." << std::endl;
+
+    // ── Post-load validation ────────────────────────────────────────────────
+    if (numETFs <= 0) {
+        std::cerr << "Error: no instruments loaded (M=0)." << std::endl;
+        return 1;
+    }
+    if (T <= 0) {
+        std::cerr << "Error: no return observations (T=0)." << std::endl;
+        return 1;
+    }
+    if (cfg.max_etfs > numETFs) {
+        std::cerr << "Error: max-etfs (" << cfg.max_etfs
+                  << ") exceeds number of instruments (" << numETFs << ")." << std::endl;
+        return 1;
+    }
 
     // Phase 1: Pre-center returns once (avoids redundant centering per fitness call)
     Eigen::MatrixXd centeredReturns = logReturns.rowwise() - logReturns.colwise().mean();
@@ -1356,20 +1392,19 @@ int main(int argc, char* argv[]) {
 
     // GPU fitness evaluator (Metal)
 #ifdef HAS_METAL
-    MetalFitnessEvaluator* gpuEvaluator = nullptr;
+    std::unique_ptr<MetalFitnessEvaluator> gpuEvaluator;
     if (cfg.use_gpu) {
-        gpuEvaluator = new MetalFitnessEvaluator(
+        gpuEvaluator = std::make_unique<MetalFitnessEvaluator>(
             centeredReturns.data(), T, numETFs,
             expectedReturns.data(),
             cfg.min_etfs, cfg.max_etfs,
             cfg.risk_free_rate, cfg.min_return);
         if (!gpuEvaluator->isValid()) {
             std::cerr << "Metal: GPU init failed, falling back to CPU." << std::endl;
-            delete gpuEvaluator;
-            gpuEvaluator = nullptr;
+            gpuEvaluator.reset();
         }
     }
-    void* gpuEvalPtr = gpuEvaluator;
+    void* gpuEvalPtr = gpuEvaluator.get();
 #else
     void* gpuEvalPtr = nullptr;
     if (cfg.use_gpu)
@@ -1461,7 +1496,7 @@ int main(int argc, char* argv[]) {
 
 #ifdef HAS_METAL
         // Re-evaluate with FP64 for precise final reporting
-        if (gpuEvaluator) {
+        if (gpuEvaluator.get()) {
             for (auto& e : dedupHof) {
                 e.fitness = calculateFitnessExact(
                     e.individual, numETFs,
@@ -1486,9 +1521,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#ifdef HAS_METAL
-    delete gpuEvaluator;
-#endif
+    // gpuEvaluator cleaned up automatically by unique_ptr
 
     std::sort(allSolutions.begin(), allSolutions.end(),
               [](const Solution& a, const Solution& b) { return a.fitness > b.fitness; });

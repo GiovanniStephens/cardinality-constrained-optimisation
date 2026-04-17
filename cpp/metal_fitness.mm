@@ -292,16 +292,23 @@ void MetalFitnessEvaluator::evaluateBatch(
 
         // Allocate shared-mode buffer + memcpy (avoids the implicit copy in
         // newBufferWithBytes which can be slower for large buffers).
+        // Note: ARC manages these id<MTLBuffer> locals — if outBuf allocation
+        // fails after bitVecBuf succeeds, ARC releases bitVecBuf on return.
         id<MTLBuffer> bitVecBuf = [impl_->device
             newBufferWithLength:bitBufSize
                         options:MTLResourceStorageModeShared];
+        if (!bitVecBuf) {
+            std::cerr << "Metal: bitVecBuf allocation failed in evaluateBatch." << std::endl;
+            for (int i = 0; i < evalCount; ++i) outFitness[i] = -1e4;
+            return;
+        }
         id<MTLBuffer> outBuf = [impl_->device
             newBufferWithLength:outBufSize
                         options:MTLResourceStorageModeShared];
-        if (!bitVecBuf || !outBuf) {
-            std::cerr << "Metal: Buffer allocation failed in evaluateBatch." << std::endl;
+        if (!outBuf) {
+            std::cerr << "Metal: outBuf allocation failed in evaluateBatch." << std::endl;
             for (int i = 0; i < evalCount; ++i) outFitness[i] = -1e4;
-            return;
+            return;  // ARC releases bitVecBuf
         }
         memcpy([bitVecBuf contents], bitVecsFlat, bitBufSize);
 
