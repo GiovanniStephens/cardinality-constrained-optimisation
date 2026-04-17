@@ -1,5 +1,6 @@
 """Statistical analysis and plotting for benchmark results."""
 
+import logging
 import os
 from typing import Dict, List, Optional
 
@@ -9,6 +10,8 @@ from scipy import stats
 
 from benchmark.results import BenchmarkResult, BenchmarkSuite
 from src.portfolio_utils import warn_if_sharpe_suspicious
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +235,7 @@ def plot_convergence_curves(suite: BenchmarkSuite, time_budget: float,
     path = os.path.join(output_dir, 'convergence_curves.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 def plot_boxplots(suite: BenchmarkSuite, output_dir: str = 'benchmark_results'):
@@ -262,7 +265,7 @@ def plot_boxplots(suite: BenchmarkSuite, output_dir: str = 'benchmark_results'):
     path = os.path.join(output_dir, 'boxplots.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 def plot_performance_profile(suite: BenchmarkSuite, time_budget: float,
@@ -337,7 +340,7 @@ def plot_performance_profile(suite: BenchmarkSuite, time_budget: float,
     path = os.path.join(output_dir, 'performance_profile.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f"  Saved {path}")
+    logger.info("Saved %s", path)
 
 
 # ---------------------------------------------------------------------------
@@ -349,35 +352,33 @@ def generate_full_report(suite: BenchmarkSuite, time_budget: float,
     """Run all analyses and save outputs."""
     os.makedirs(output_dir, exist_ok=True)
 
-    print("\n" + "=" * 60)
-    print("BENCHMARK ANALYSIS")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("BENCHMARK ANALYSIS")
+    logger.info("=" * 60)
 
     # Summary table
     table = summary_table(suite)
-    print("\nSummary Statistics:")
+    logger.info("Summary Statistics:")
     print(table.to_string())
     csv_path = os.path.join(output_dir, 'summary_table.csv')
     table.to_csv(csv_path)
-    print(f"\n  Saved {csv_path}")
+    logger.info("Saved %s", csv_path)
 
     # Overfitting awareness banner
-    print("\n" + "-" * 60)
-    print("NOTE: All fitness values above are IN-SAMPLE Sharpe ratios")
-    print("computed on training data. These are biased upward and will")
-    print("degrade 30-50% out-of-sample. See CLAUDE.md 'Sharpe Ratio")
-    print("Overfitting' section for details and academic references.")
-    print("-" * 60)
+    logger.warning("-" * 60)
+    logger.warning("NOTE: All fitness values above are IN-SAMPLE Sharpe ratios")
+    logger.warning("computed on training data. These are biased upward and will")
+    logger.warning("degrade 30-50%% out-of-sample. See CLAUDE.md 'Sharpe Ratio")
+    logger.warning("Overfitting' section for details and academic references.")
+    logger.warning("-" * 60)
 
     # Flag suspicious Sharpe ratios
-    import logging
-    _bench_logger = logging.getLogger(__name__)
     for algo in suite.algorithms:
         fitnesses = [r.best_fitness for r in suite.results[algo]
                      if r.best_fitness > -1e3]
         if fitnesses:
             warn_if_sharpe_suspicious(
-                max(fitnesses), f"Benchmark {algo} best IS", _bench_logger,
+                max(fitnesses), f"Benchmark {algo} best IS", logger,
             )
 
     # AOCC
@@ -387,15 +388,15 @@ def generate_full_report(suite: BenchmarkSuite, time_budget: float,
         for r in runs
         if r.best_fitness > -1e3
     )
-    print(f"\nArea Over Convergence Curve (ref={best_overall:.4f}):")
+    logger.info("Area Over Convergence Curve (ref=%.4f):", best_overall)
     for algo in suite.algorithms:
         aocc_values = []
         for r in suite.results[algo]:
             if r.convergence:
                 aocc_values.append(aocc(r.convergence, time_budget, best_overall))
         if aocc_values:
-            print(f"  {algo}: median={np.median(aocc_values):.4f}, "
-                  f"mean={np.mean(aocc_values):.4f}")
+            logger.info("  %s: median=%.4f, mean=%.4f",
+                        algo, np.median(aocc_values), np.mean(aocc_values))
 
     # Friedman test
     if len(suite.algorithms) >= 3:
@@ -433,9 +434,9 @@ def generate_full_report(suite: BenchmarkSuite, time_budget: float,
                           f"p={w['p_value']:.6f}{sig} (n={w['num_pairs']})")
 
     # Plots
-    print("\nGenerating plots...")
+    logger.info("Generating plots...")
     plot_convergence_curves(suite, time_budget, output_dir)
     plot_boxplots(suite, output_dir)
     plot_performance_profile(suite, time_budget, output_dir=output_dir)
 
-    print("\nAnalysis complete.")
+    logger.info("Analysis complete.")
