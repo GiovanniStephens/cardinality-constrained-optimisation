@@ -160,6 +160,14 @@ BACKTEST_TEST_DAYS = 252       # 1 year OOS per window
 BACKTEST_STEP_DAYS = 252       # non-overlapping yearly windows
 BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. ['2015-2019/2020']
 
+# ─── Download defaults ───────────────────────────────────────────────────────
+
+DOWNLOAD_DEFAULT_START = "2014-04-30"
+DOWNLOAD_DEFAULT_END = "2025-04-30"
+DOWNLOAD_DEFAULT_BATCH_SIZE = 500
+DOWNLOAD_MAX_RETRIES = 3
+DOWNLOAD_BACKOFF_BASE = 2  # seconds, for exponential backoff
+
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 20             # was 50 — full 11yr download needs smaller batches

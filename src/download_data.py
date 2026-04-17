@@ -22,8 +22,17 @@ import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
 
-from src.config import (DOWNLOAD_THREADS, DOWNLOAD_TIMEOUT,
-                        TICKER_EXCLUDE_SUFFIXES, TICKER_EXCLUDE_NAME_PATTERNS)
+from src.config import (
+    DOWNLOAD_BACKOFF_BASE,
+    DOWNLOAD_DEFAULT_BATCH_SIZE,
+    DOWNLOAD_DEFAULT_END,
+    DOWNLOAD_DEFAULT_START,
+    DOWNLOAD_MAX_RETRIES,
+    DOWNLOAD_THREADS,
+    DOWNLOAD_TIMEOUT,
+    TICKER_EXCLUDE_SUFFIXES,
+    TICKER_EXCLUDE_NAME_PATTERNS,
+)
 from src.download_validate import validate_tickers, _retry_with_splitting
 from src.exceptions import DownloadError, ValidationError
 
@@ -97,9 +106,9 @@ def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
 def download_data(
     tickers_df: pd.DataFrame,
     ticker_column: str = "Tickers",
-    start: str = "2014-04-30",
-    end: str = "2025-04-30",
-    batch_size: int = 500,
+    start: str = DOWNLOAD_DEFAULT_START,
+    end: str = DOWNLOAD_DEFAULT_END,
+    batch_size: int = DOWNLOAD_DEFAULT_BATCH_SIZE,
 ) -> pd.DataFrame:
     """
     Downloads closing price data from Yahoo Finance for the given tickers.
@@ -124,24 +133,24 @@ def download_data(
         logger.info("Downloading batch %d/%d (%d tickers)...",
                      batch_num, len(batches), len(batch))
         batch_df = None
-        for attempt in range(1, 4):
+        for attempt in range(1, DOWNLOAD_MAX_RETRIES + 1):
             try:
                 batch_df = _download_batch(batch, start, end)
                 break
             except (ConnectionError, OSError, DownloadError) as e:
-                if attempt == 3:
+                if attempt == DOWNLOAD_MAX_RETRIES:
                     raise DownloadError(
-                        f"Failed after 3 retries: {e}") from e
+                        f"Failed after {DOWNLOAD_MAX_RETRIES} retries: {e}") from e
                 logger.warning("Batch %d attempt %d failed: %s",
                                batch_num, attempt, e)
-                time.sleep(2 ** attempt)
+                time.sleep(DOWNLOAD_BACKOFF_BASE ** attempt)
             except Exception as e:
-                if attempt == 3:
+                if attempt == DOWNLOAD_MAX_RETRIES:
                     raise DownloadError(
-                        f"Failed after 3 retries (unexpected): {e}") from e
+                        f"Failed after {DOWNLOAD_MAX_RETRIES} retries (unexpected): {e}") from e
                 logger.warning("Batch %d attempt %d failed (unexpected): %s",
                                batch_num, attempt, e)
-                time.sleep(2 ** attempt)
+                time.sleep(DOWNLOAD_BACKOFF_BASE ** attempt)
         if batch_df is not None:
             for col in batch_df.columns:
                 all_prices[col] = batch_df[col].tolist()
@@ -153,8 +162,8 @@ def download_data(
 
 def download_and_save(
     tickers, conn, exchange, asset_type='etf',
-    start='2014-04-30', end='2025-04-30',
-    batch_size=500, null_threshold=0.9,
+    start=DOWNLOAD_DEFAULT_START, end=DOWNLOAD_DEFAULT_END,
+    batch_size=DOWNLOAD_DEFAULT_BATCH_SIZE, null_threshold=0.9,
     names=None, countries=None, max_retries=3,
     on_batch_complete=None, on_batch_failed=None,
     rate_limit_delay=None, batch_timeout=None,
@@ -257,7 +266,7 @@ def download_and_save(
                     hit_rate_limit = True
                     if _sess._get_state('_tor_enabled'):
                         _sess._rotate_tor_circuit()
-                    current_delay = min(current_delay * 2, max_rate_limit_delay)
+                    current_delay = min(current_delay * DOWNLOAD_BACKOFF_BASE, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
                                    "likely rate-limited. Backing off %.0fs "
@@ -273,7 +282,7 @@ def download_and_save(
                     hit_rate_limit = True
                     if _sess._get_state('_tor_enabled'):
                         _sess._rotate_tor_circuit()
-                    current_delay = min(current_delay * 2, max_rate_limit_delay)
+                    current_delay = min(current_delay * DOWNLOAD_BACKOFF_BASE, max_rate_limit_delay)
                     jittered = current_delay * random.uniform(0.8, 1.2)
                     logger.warning("Rate limited on batch %d (attempt %d/%d), "
                                    "backing off %.0fs (adaptive delay now %.0fs)",
@@ -524,7 +533,7 @@ def main():
                              '(ignored when using FinanceDatabase).')
     parser.add_argument('--exchange', default='US',
                         help='Database exchange code (US, NZX, ASX).')
-    parser.add_argument('--start', default='2014-04-30',
+    parser.add_argument('--start', default=DOWNLOAD_DEFAULT_START,
                         help='Start date for price data.')
     parser.add_argument('--end',
                         default=__import__('datetime').date.today().isoformat(),
