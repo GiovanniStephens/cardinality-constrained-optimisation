@@ -7,6 +7,7 @@ import pmdarima as pmd
 import tqdm
 from arch import arch_model
 
+from src.exceptions import ForecastError
 from src.returns import calculate_log_returns
 from src.config import (
     BACKTEST_NUM_DAYS_OOS, TRADING_DAYS_PER_YEAR,
@@ -111,8 +112,13 @@ def main():
         try:
             expected_returns[ticker] = fit_arima_forecast(
                 training_data[ticker], n_periods)
-        except Exception as e:
+        except (ValueError, np.linalg.LinAlgError, ForecastError) as e:
             logger.warning("ARIMA forecast failed for %s: %s", ticker, e)
+            logger.debug("ARIMA traceback for %s:", ticker, exc_info=True)
+            expected_returns[ticker] = log_returns[ticker].mean() * TRADING_DAYS_PER_YEAR
+            failed_return_tickers.append(ticker)
+        except Exception as e:
+            logger.warning("ARIMA forecast failed for %s (unexpected): %s", ticker, e)
             logger.debug("ARIMA traceback for %s:", ticker, exc_info=True)
             expected_returns[ticker] = log_returns[ticker].mean() * TRADING_DAYS_PER_YEAR
             failed_return_tickers.append(ticker)
@@ -134,8 +140,13 @@ def main():
         try:
             volatilities[ticker] = fit_garch_forecast(
                 log_returns[ticker], n_periods)
-        except Exception as e:
+        except (ValueError, np.linalg.LinAlgError, ForecastError) as e:
             logger.warning("GARCH forecast failed for %s: %s", ticker, e)
+            logger.debug("GARCH traceback for %s:", ticker, exc_info=True)
+            volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
+            failed_vol_tickers.append(ticker)
+        except Exception as e:
+            logger.warning("GARCH forecast failed for %s (unexpected): %s", ticker, e)
             logger.debug("GARCH traceback for %s:", ticker, exc_info=True)
             volatilities[ticker] = log_returns[ticker].var() * TRADING_DAYS_PER_YEAR
             failed_vol_tickers.append(ticker)

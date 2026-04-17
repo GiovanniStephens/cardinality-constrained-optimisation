@@ -25,6 +25,7 @@ from tqdm import tqdm
 from src.config import (DOWNLOAD_THREADS, DOWNLOAD_TIMEOUT,
                         TICKER_EXCLUDE_SUFFIXES, TICKER_EXCLUDE_NAME_PATTERNS)
 from src.download_validate import validate_tickers, _retry_with_splitting
+from src.exceptions import DownloadError, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,8 @@ def _download_batch(tickers, start, end, session=None):
     if not isinstance(prices.index, pd.DatetimeIndex):
         try:
             prices.index = pd.to_datetime(prices.index)
-        except Exception:
-            logger.warning("Batch returned non-date index type: %s", type(prices.index))
+        except (ValueError, TypeError) as e:
+            logger.warning("Batch returned non-date index type: %s (%s)", type(prices.index), e)
             return None
 
     batch_prices = {}
@@ -127,11 +128,18 @@ def download_data(
             try:
                 batch_df = _download_batch(batch, start, end)
                 break
-            except Exception as e:
+            except (ConnectionError, OSError, DownloadError) as e:
                 if attempt == 3:
-                    raise ConnectionError(
+                    raise DownloadError(
                         f"Failed after 3 retries: {e}") from e
                 logger.warning("Batch %d attempt %d failed: %s",
+                               batch_num, attempt, e)
+                time.sleep(2 ** attempt)
+            except Exception as e:
+                if attempt == 3:
+                    raise DownloadError(
+                        f"Failed after 3 retries (unexpected): {e}") from e
+                logger.warning("Batch %d attempt %d failed (unexpected): %s",
                                batch_num, attempt, e)
                 time.sleep(2 ** attempt)
         if batch_df is not None:

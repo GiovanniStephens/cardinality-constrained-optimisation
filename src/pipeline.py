@@ -18,6 +18,7 @@ from src import config, db
 from src.data_quality import validate_universe
 from src.download_data import download_and_save
 from src.download_workers import concurrent_download_and_save
+from src.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +341,7 @@ def _promote_and_cleanup(staging_db_path, prod_db_path, exchange, run_id,
         manifest['promoted_tickers'] = promoted
         manifest['status'] = 'promoted'
         logger.info("Promotion successful: %d tickers", promoted)
-    except Exception as e:
+    except (sqlite3.Error, DatabaseError) as e:
         logger.error("Promotion failed: %s", e)
         manifest['status'] = 'promotion_failed'
         manifest['promotion_error'] = str(e)
