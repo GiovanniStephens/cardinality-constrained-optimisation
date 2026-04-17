@@ -18,6 +18,14 @@ import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
 
+from src.config import (
+    DOWNLOAD_BACKOFF_BASE,
+    DOWNLOAD_DEFAULT_BATCH_SIZE,
+    DOWNLOAD_DEFAULT_END,
+    DOWNLOAD_DEFAULT_START,
+    DOWNLOAD_MAX_RETRIES,
+)
+
 logger = logging.getLogger(__name__)
 
 # Maps FinanceDatabase asset type labels to DB-canonical names.
@@ -260,9 +268,9 @@ def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
 def download_data(
     tickers_df: pd.DataFrame,
     ticker_column: str = "Tickers",
-    start: str = "2014-04-30",
-    end: str = "2025-04-30",
-    batch_size: int = 500,
+    start: str = DOWNLOAD_DEFAULT_START,
+    end: str = DOWNLOAD_DEFAULT_END,
+    batch_size: int = DOWNLOAD_DEFAULT_BATCH_SIZE,
 ) -> pd.DataFrame:
     """
     Downloads closing price data from Yahoo Finance for the given tickers.
@@ -287,17 +295,17 @@ def download_data(
         logger.info("Downloading batch %d/%d (%d tickers)...",
                      batch_num, len(batches), len(batch))
         batch_df = None
-        for attempt in range(1, 4):
+        for attempt in range(1, DOWNLOAD_MAX_RETRIES + 1):
             try:
                 batch_df = _download_batch(batch, start, end)
                 break
             except Exception as e:
-                if attempt == 3:
+                if attempt == DOWNLOAD_MAX_RETRIES:
                     raise ConnectionError(
-                        f"Failed after 3 retries: {e}") from e
+                        f"Failed after {DOWNLOAD_MAX_RETRIES} retries: {e}") from e
                 logger.warning("Batch %d attempt %d failed: %s",
                                batch_num, attempt, e)
-                time.sleep(2 ** attempt)
+                time.sleep(DOWNLOAD_BACKOFF_BASE ** attempt)
         if batch_df is not None:
             for col in batch_df.columns:
                 all_prices[col] = batch_df[col].tolist()
@@ -309,8 +317,8 @@ def download_data(
 
 def download_and_save(
     tickers, conn, exchange, asset_type='etf',
-    start='2014-04-30', end='2025-04-30',
-    batch_size=500, null_threshold=0.9,
+    start=DOWNLOAD_DEFAULT_START, end=DOWNLOAD_DEFAULT_END,
+    batch_size=DOWNLOAD_DEFAULT_BATCH_SIZE, null_threshold=0.9,
     names=None, countries=None, max_retries=3,
     on_batch_complete=None, on_batch_failed=None,
     rate_limit_delay=0.0, batch_timeout=None,
@@ -400,7 +408,7 @@ def download_and_save(
                 # (yfinance doesn't raise on throttle, just returns no data)
                 if attempt < max_retries:
                     hit_rate_limit = True
-                    backoff = 2 ** (attempt + 1)
+                    backoff = DOWNLOAD_BACKOFF_BASE ** (attempt + 1)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
                                    "likely rate-limited. Backing off %ds",
                                    batch_num, attempt, max_retries, backoff)
@@ -409,7 +417,7 @@ def download_and_save(
                 error_msg = str(e).lower()
                 if '429' in error_msg or 'too many' in error_msg or 'rate' in error_msg:
                     hit_rate_limit = True
-                    backoff = 2 ** (attempt + 2)
+                    backoff = DOWNLOAD_BACKOFF_BASE ** (attempt + 2)
                     logger.warning("Rate limited on batch %d, backing off %ds",
                                    batch_num, backoff)
                     time.sleep(backoff)
@@ -418,7 +426,7 @@ def download_and_save(
                                    batch_num, attempt, max_retries, e)
                     logger.debug("Batch %d traceback:", batch_num, exc_info=True)
                     if attempt < max_retries:
-                        time.sleep(2 ** attempt)
+                        time.sleep(DOWNLOAD_BACKOFF_BASE ** attempt)
 
         if batch_df is None or batch_df.empty:
             logger.warning("Batch %d: no data returned, skipping.", batch_num)
@@ -582,7 +590,7 @@ def main():
                              '(ignored when using FinanceDatabase).')
     parser.add_argument('--exchange', default='US',
                         help='Database exchange code (US, NZX, ASX).')
-    parser.add_argument('--start', default='2014-04-30',
+    parser.add_argument('--start', default=DOWNLOAD_DEFAULT_START,
                         help='Start date for price data.')
     parser.add_argument('--end',
                         default=__import__('datetime').date.today().isoformat(),
