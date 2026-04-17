@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from src.config import DB_PATH
-from src.db.schema import SCHEMA_SQL, DEFAULT_EXCHANGES
+from src.db.schema import SCHEMA_SQL, DEFAULT_EXCHANGES, _apply_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ def get_connection(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
+    _apply_migrations(conn)
     # Seed exchanges if empty
     count = conn.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     if count == 0:

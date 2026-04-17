@@ -1,4 +1,10 @@
-"""Database schema definition and default seed data."""
+"""Database schema definition, migrations, and default seed data."""
+
+import logging
+import sqlite3
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 -- Broad market groupings (US, NZX, ASX, etc.)
@@ -161,6 +167,15 @@ CREATE TABLE IF NOT EXISTS backtest_holdings (
     UNIQUE(result_id, ticker_id)
 );
 
+CREATE TABLE IF NOT EXISTS known_bad_tickers (
+    symbol         TEXT NOT NULL,
+    exchange_id    INTEGER NOT NULL REFERENCES exchanges(id),
+    failure_count  INTEGER NOT NULL DEFAULT 1,
+    first_failed   TEXT NOT NULL,
+    last_failed    TEXT NOT NULL,
+    PRIMARY KEY (symbol, exchange_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tickers_exchange ON tickers(exchange_id);
 CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker_id);
 CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);
@@ -176,3 +191,66 @@ DEFAULT_EXCHANGES = [
     ('NZX', 'New Zealand Exchange', 'NZ'),
     ('ASX', 'Australian Securities Exchange', 'AU'),
 ]
+
+SCHEMA_VERSION = 2
+
+
+def _migrate_to_1(conn):
+    """Initial schema — applied by SCHEMA_SQL; this is a no-op sentinel."""
+    pass
+
+
+def _migrate_to_2(conn):
+    """Add sector/industry/category columns to tickers for group constraints."""
+    for col in ('sector', 'industry', 'category_group', 'category'):
+        try:
+            conn.execute(f"ALTER TABLE tickers ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
+MIGRATIONS = {
+    1: _migrate_to_1,
+    2: _migrate_to_2,
+}
+
+
+def _get_schema_version(conn):
+    """Return the current schema version, or 0 if the table doesn't exist."""
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else 0
+    except sqlite3.OperationalError:
+        logger.debug("schema_version table not found, assuming version 0")
+        return 0
+
+
+def _apply_migrations(conn):
+    """Apply any pending migrations to bring the DB up to SCHEMA_VERSION."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version ("
+        "  version    INTEGER PRIMARY KEY,"
+        "  applied_at TEXT NOT NULL"
+        ")"
+    )
+    current = _get_schema_version(conn)
+    if current >= SCHEMA_VERSION:
+        return
+
+    for version in range(current + 1, SCHEMA_VERSION + 1):
+        migrate_fn = MIGRATIONS.get(version)
+        if migrate_fn is None:
+            raise RuntimeError(
+                f"Missing migration function for version {version}"
+            )
+        logger.info("Applying migration %d...", version)
+        migrate_fn(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version, applied_at) "
+            "VALUES (?, ?)",
+            (version, datetime.now(timezone.utc).isoformat()),
+        )
+    conn.commit()
+    logger.info("Schema at version %d", SCHEMA_VERSION)

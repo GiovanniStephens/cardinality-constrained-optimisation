@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
-                names=None, countries=None):
+                names=None, countries=None, sectors=None, industries=None,
+                category_groups=None, categories=None):
     """
     Save a wide-format DataFrame of prices to the database.
 
@@ -30,7 +31,10 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     if dupes:
         raise ValueError(f"DataFrame has duplicate column names: {dupes}")
     ticker_map = _ensure_tickers(conn, symbols, exchange_id, asset_type,
-                                 names=names, countries=countries)
+                                 names=names, countries=countries,
+                                 sectors=sectors, industries=industries,
+                                 category_groups=category_groups,
+                                 categories=categories)
 
     # Normalise index to date strings
     df = prices_df.copy()

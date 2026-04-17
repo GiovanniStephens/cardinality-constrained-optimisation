@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
-                    countries=None):
+                    countries=None, sectors=None, industries=None,
+                    category_groups=None, categories=None):
     """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
 
     asset_type: one of 'etf', 'stock', 'fund', 'managed_fund'.
@@ -57,6 +58,18 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
             [(countries[s], now, existing[s])
              for s in existing if s in countries and countries[s]],
         )
+
+    # Backfill sector/industry/category_group/category
+    for col, mapping in [('sector', sectors), ('industry', industries),
+                         ('category_group', category_groups),
+                         ('category', categories)]:
+        if mapping:
+            conn.executemany(
+                f"UPDATE tickers SET {col} = ?, updated_at = ? "
+                f"WHERE id = ? AND {col} IS NULL",
+                [(mapping[s], now, existing[s])
+                 for s in existing if s in mapping and mapping[s]],
+            )
 
     return existing
 
