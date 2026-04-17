@@ -427,7 +427,7 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
         def side_effect(tickers, start, end, timeout):
             call_count[0] += 1
             if call_count[0] <= 2:
-                raise Exception("HTTP Error 429: Too Many Requests")
+                raise ConnectionError("HTTP Error 429: Too Many Requests")
             return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
 
         mock_dl.side_effect = side_effect
@@ -455,7 +455,7 @@ class TestAdaptiveRateLimit(BaseTmpDirTest):
         def side_effect(tickers, start, end, timeout):
             call_count[0] += 1
             if call_count[0] == 1:
-                raise Exception("HTTP Error 429: Too Many Requests")
+                raise ConnectionError("HTTP Error 429: Too Many Requests")
             return pd.DataFrame({t: range(5) for t in tickers}, index=dates)
 
         mock_dl.side_effect = side_effect

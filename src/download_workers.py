@@ -16,6 +16,7 @@ import random
 import sys
 import threading
 import time
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 
 from tqdm import tqdm
@@ -626,6 +627,8 @@ def _concurrent_thread_download(
         for f in futures:
             try:
                 f.result()
+            except (concurrent.futures.CancelledError, concurrent.futures.TimeoutError) as e:
+                logger.warning("Worker cancelled or timed out: %s", e)
             except Exception as e:
                 logger.error("Worker raised exception: %s", e)
 
