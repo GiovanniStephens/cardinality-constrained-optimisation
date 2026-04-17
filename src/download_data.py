@@ -6,12 +6,16 @@ Supports equities, ETFs, and funds. Can also load tickers from a local CSV
 for working with previously scraped lists.
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os
+import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from typing import Any, Optional
 
 import financedatabase as fd
 import pandas as pd
@@ -29,7 +33,8 @@ ASSET_TYPE_MAP = {'equity': 'stock', 'etf': 'etf', 'fund': 'fund'}
 # Universe building (from FinanceDatabase)
 # ---------------------------------------------------------------------------
 
-def _filter_by_exchange(df, exchanges):
+def _filter_by_exchange(df: pd.DataFrame,
+                        exchanges: Optional[str | list[str]]) -> pd.DataFrame:
     """Post-filter a FinanceDatabase result by exchange column.
 
     The library's select() does not accept 'exchange' as a keyword, so we
@@ -42,8 +47,11 @@ def _filter_by_exchange(df, exchanges):
     return df
 
 
-def get_equities(countries=None, sectors=None, industries=None,
-                 exchanges=None, market_caps=None) -> pd.DataFrame:
+def get_equities(countries: Optional[str | list[str]] = None,
+                 sectors: Optional[str | list[str]] = None,
+                 industries: Optional[str | list[str]] = None,
+                 exchanges: Optional[str | list[str]] = None,
+                 market_caps: Optional[str | list[str]] = None) -> pd.DataFrame:
     """
     Retrieves equity tickers from FinanceDatabase.
 
@@ -70,8 +78,10 @@ def get_equities(countries=None, sectors=None, industries=None,
     return df
 
 
-def get_etfs(category_groups=None, categories=None, families=None,
-             exchanges=None) -> pd.DataFrame:
+def get_etfs(category_groups: Optional[str | list[str]] = None,
+             categories: Optional[str | list[str]] = None,
+             families: Optional[str | list[str]] = None,
+             exchanges: Optional[str | list[str]] = None) -> pd.DataFrame:
     """
     Retrieves ETF tickers from FinanceDatabase.
 
@@ -92,8 +102,10 @@ def get_etfs(category_groups=None, categories=None, families=None,
     return _filter_by_exchange(etfs.select(**kwargs), exchanges)
 
 
-def get_funds(category_groups=None, categories=None, families=None,
-              exchanges=None) -> pd.DataFrame:
+def get_funds(category_groups: Optional[str | list[str]] = None,
+              categories: Optional[str | list[str]] = None,
+              families: Optional[str | list[str]] = None,
+              exchanges: Optional[str | list[str]] = None) -> pd.DataFrame:
     """
     Retrieves fund tickers from FinanceDatabase.
 
@@ -114,10 +126,14 @@ def get_funds(category_groups=None, categories=None, families=None,
     return _filter_by_exchange(funds.select(**kwargs), exchanges)
 
 
-def build_security_universe(asset_types=None, countries=None, sectors=None,
-                            industries=None, exchanges=None,
-                            market_caps=None, etf_categories=None,
-                            etf_category_groups=None) -> pd.DataFrame:
+def build_security_universe(asset_types: Optional[list[str]] = None,
+                            countries: Optional[str | list[str]] = None,
+                            sectors: Optional[str | list[str]] = None,
+                            industries: Optional[str | list[str]] = None,
+                            exchanges: Optional[str | list[str]] = None,
+                            market_caps: Optional[str | list[str]] = None,
+                            etf_categories: Optional[str | list[str]] = None,
+                            etf_category_groups: Optional[str | list[str]] = None) -> pd.DataFrame:
     """
     Builds a combined universe of securities from multiple asset types.
 
@@ -208,7 +224,8 @@ def load_tickers(filename: str, ticker_column: str = 'Tickers') -> pd.DataFrame:
 # Price downloading
 # ---------------------------------------------------------------------------
 
-def _download_batch(tickers, start, end):
+def _download_batch(tickers: list[str], start: str,
+                    end: str) -> Optional[pd.DataFrame]:
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
     tickers_str = " ".join(tickers)
     prices = yf.download(
@@ -245,7 +262,8 @@ def _download_batch(tickers, start, end):
     return pd.DataFrame(batch_prices, index=prices.index)
 
 
-def _download_batch_with_timeout(tickers, start, end, timeout_seconds):
+def _download_batch_with_timeout(tickers: list[str], start: str, end: str,
+                                 timeout_seconds: int) -> Optional[pd.DataFrame]:
     """Wrap _download_batch with a timeout. Returns None on timeout."""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_download_batch, tickers, start, end)
@@ -308,14 +326,20 @@ def download_data(
 
 
 def download_and_save(
-    tickers, conn, exchange, asset_type='etf',
-    start='2014-04-30', end='2025-04-30',
-    batch_size=500, null_threshold=0.9,
-    names=None, countries=None, max_retries=3,
-    on_batch_complete=None, on_batch_failed=None,
-    rate_limit_delay=0.0, batch_timeout=None,
-    circuit_breaker_threshold=None, max_rate_limit_delay=None,
-):
+    tickers: list[str], conn: sqlite3.Connection, exchange: str,
+    asset_type: str = 'etf',
+    start: str = '2014-04-30', end: str = '2025-04-30',
+    batch_size: int = 500, null_threshold: float = 0.9,
+    names: Optional[dict[str, str]] = None,
+    countries: Optional[dict[str, str]] = None,
+    max_retries: int = 3,
+    on_batch_complete: Any = None,
+    on_batch_failed: Any = None,
+    rate_limit_delay: float = 0.0,
+    batch_timeout: Optional[int] = None,
+    circuit_breaker_threshold: Optional[int] = None,
+    max_rate_limit_delay: Optional[float] = None,
+) -> dict[str, Any]:
     """
     Download prices in batches and persist each batch to the database immediately.
 
@@ -370,7 +394,7 @@ def download_and_save(
         for i in range(0, len(tickers), batch_size)
     ]
     total_saved = 0
-    failed_batches = []
+    failed_batches: list[dict[str, Any]] = []
     consecutive_failures = 0
     circuit_breaker_tripped = False
     current_delay = rate_limit_delay
@@ -528,7 +552,7 @@ def save_to_csv(prices: pd.DataFrame, filename: str) -> None:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def _add_file_logging(log_dir='data'):
+def _add_file_logging(log_dir: str = 'data') -> str:
     """Add a file handler so logs survive terminal close during long runs."""
     from datetime import datetime as dt
     os.makedirs(log_dir, exist_ok=True)
@@ -541,7 +565,7 @@ def _add_file_logging(log_dir='data'):
     return log_path
 
 
-def main():
+def main() -> None:
     from src.logging_config import setup_logging
     setup_logging()
     parser = argparse.ArgumentParser(
@@ -859,7 +883,8 @@ def main():
                        else [('all', manifest)], log_path)
 
 
-def _log_final_summary(manifests, log_path):
+def _log_final_summary(manifests: list[tuple[str, dict[str, Any]]],
+                       log_path: str) -> None:
     """Print a clear final summary with key stats and file locations."""
     logger.info("=" * 60)
     logger.info("DOWNLOAD COMPLETE")

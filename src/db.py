@@ -5,11 +5,14 @@ Stores prices, forecasts, optimisation runs, and backtest results.
 Uses sqlite3 (stdlib) + pandas. All timestamps are ISO 8601 UTC.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -195,11 +198,11 @@ DEFAULT_EXCHANGES = [
 ]
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def get_connection(db_path=None):
+def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     """Open a database connection, create tables if needed, seed exchanges."""
     if db_path is None:
         db_path = DB_PATH
@@ -221,7 +224,7 @@ def get_connection(db_path=None):
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_exchange_id(conn, code):
+def _get_exchange_id(conn: sqlite3.Connection, code: str) -> int:
     """Look up exchange id by code. Raises ValueError if not found."""
     row = conn.execute(
         "SELECT id FROM exchanges WHERE code = ?", (code,)
@@ -231,8 +234,10 @@ def _get_exchange_id(conn, code):
     return row[0]
 
 
-def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
-                    countries=None):
+def _ensure_tickers(conn: sqlite3.Connection, symbols: list[str],
+                    exchange_id: int, asset_type: str = 'etf',
+                    names: Optional[dict[str, str]] = None,
+                    countries: Optional[dict[str, str]] = None) -> dict[str, int]:
     """Ensure all symbols exist in tickers table. Returns {symbol: ticker_id}.
 
     asset_type: one of 'etf', 'stock', 'fund', 'managed_fund'.
@@ -287,8 +292,11 @@ def _ensure_tickers(conn, symbols, exchange_id, asset_type='etf', names=None,
 
 # ─── Data storage ─────────────────────────────────────────────────────────────
 
-def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
-                names=None, countries=None):
+def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
+                exchange: str, asset_type: str = 'etf',
+                source: Optional[str] = None,
+                names: Optional[dict[str, str]] = None,
+                countries: Optional[dict[str, str]] = None) -> int:
     """
     Save a wide-format DataFrame of prices to the database.
 
@@ -347,9 +355,13 @@ def save_prices(conn, prices_df, exchange, asset_type='etf', source=None,
     return ds_id
 
 
-def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
-                tickers=None, exclude_countries=None, exclude_flagged=True,
-                min_coverage=0.95, ffill_limit=5):
+def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
+                asset_type: Optional[str] = None, start: Optional[str] = None,
+                end: Optional[str] = None, tickers: Optional[list[str]] = None,
+                exclude_countries: Optional[list[str]] = None,
+                exclude_flagged: bool = True,
+                min_coverage: Optional[float] = 0.95,
+                ffill_limit: Optional[int] = 5) -> pd.DataFrame:
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
@@ -364,8 +376,8 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
         FROM prices p
         JOIN tickers t ON p.ticker_id = t.id
     """
-    conditions = []
-    params = []
+    conditions: list[str] = []
+    params: list[Any] = []
 
     if exchange is not None:
         exchange_id = _get_exchange_id(conn, exchange)
@@ -422,7 +434,8 @@ def load_prices(conn, exchange=None, asset_type=None, start=None, end=None,
     return df
 
 
-def set_ticker_excluded(conn, ticker_id, reason):
+def set_ticker_excluded(conn: sqlite3.Connection, ticker_id: int,
+                        reason: str) -> None:
     """Flag a ticker as excluded with a reason string."""
     conn.execute(
         "UPDATE tickers SET excluded = ?, updated_at = ? WHERE id = ?",
@@ -430,7 +443,7 @@ def set_ticker_excluded(conn, ticker_id, reason):
     )
 
 
-def clear_ticker_excluded(conn, ticker_id):
+def clear_ticker_excluded(conn: sqlite3.Connection, ticker_id: int) -> None:
     """Remove the exclusion flag from a ticker."""
     conn.execute(
         "UPDATE tickers SET excluded = NULL, updated_at = ? WHERE id = ?",
@@ -438,10 +451,11 @@ def clear_ticker_excluded(conn, ticker_id):
     )
 
 
-def get_excluded_tickers(conn, exchange=None):
+def get_excluded_tickers(conn: sqlite3.Connection,
+                         exchange: Optional[str] = None) -> list[sqlite3.Row]:
     """Get all excluded tickers with their reasons."""
     query = "SELECT t.id, t.symbol, t.excluded FROM tickers t WHERE t.excluded IS NOT NULL"
-    params = []
+    params: list[Any] = []
     if exchange is not None:
         exchange_id = _get_exchange_id(conn, exchange)
         query += " AND t.exchange_id = ?"
@@ -450,15 +464,16 @@ def get_excluded_tickers(conn, exchange=None):
     return conn.execute(query, params).fetchall()
 
 
-def get_latest_prices_date(conn, exchange=None, asset_type=None):
+def get_latest_prices_date(conn: sqlite3.Connection, exchange: Optional[str] = None,
+                           asset_type: Optional[str] = None) -> Optional[str]:
     """Return the most recent date string in the prices table, or None.
 
     Useful for incremental downloads: start from the day after this date.
     """
     query = "SELECT MAX(p.date) FROM prices p"
-    joins = []
-    conditions = []
-    params = []
+    joins: list[str] = []
+    conditions: list[str] = []
+    params: list[Any] = []
 
     if exchange is not None or asset_type is not None:
         joins.append("JOIN tickers t ON p.ticker_id = t.id")
@@ -479,9 +494,13 @@ def get_latest_prices_date(conn, exchange=None, asset_type=None):
     return row[0] if row else None
 
 
-def save_forecast_results(conn, expected_returns_s, variances_s,
-                          n_periods=None, elapsed_seconds=None,
-                          notes=None, exchange='US'):
+def save_forecast_results(conn: sqlite3.Connection,
+                          expected_returns_s: pd.Series,
+                          variances_s: pd.Series,
+                          n_periods: Optional[int] = None,
+                          elapsed_seconds: Optional[float] = None,
+                          notes: Optional[str] = None,
+                          exchange: str = 'US') -> int:
     """
     Save expected returns and variances from a forecast run.
 
@@ -502,7 +521,7 @@ def save_forecast_results(conn, expected_returns_s, variances_s,
             "elapsed_seconds, notes) VALUES (?, ?, ?, ?, ?, ?)",
             (exchange_id, now, len(all_symbols), n_periods, elapsed_seconds, notes),
         )
-        run_id = cur.lastrowid
+        run_id: int = cur.lastrowid  # type: ignore[assignment]
 
         # Insert expected returns
         er_rows = []
@@ -529,7 +548,8 @@ def save_forecast_results(conn, expected_returns_s, variances_s,
     return run_id
 
 
-def load_expected_returns(conn, forecast_run_id=None):
+def load_expected_returns(conn: sqlite3.Connection,
+                          forecast_run_id: Optional[int] = None) -> pd.Series:
     """Load expected returns as a Series indexed by ticker symbol."""
     if forecast_run_id is None:
         row = conn.execute(
@@ -550,7 +570,8 @@ def load_expected_returns(conn, forecast_run_id=None):
     )
 
 
-def load_variances(conn, forecast_run_id=None):
+def load_variances(conn: sqlite3.Connection,
+                    forecast_run_id: Optional[int] = None) -> pd.Series:
     """Load variances as a Series indexed by ticker symbol."""
     if forecast_run_id is None:
         row = conn.execute(
@@ -573,7 +594,10 @@ def load_variances(conn, forecast_run_id=None):
 
 # ─── Run history ──────────────────────────────────────────────────────────────
 
-def save_optimisation_run(conn, params, results, holdings, exchange='US'):
+def save_optimisation_run(conn: sqlite3.Connection, params: dict[str, Any],
+                          results: dict[str, Any],
+                          holdings: list[tuple[str, float]],
+                          exchange: str = 'US') -> int:
     """
     Save an optimisation run and its portfolio holdings.
 
@@ -639,7 +663,7 @@ def save_optimisation_run(conn, params, results, holdings, exchange='US'):
                 all_fields.get('notes'),
             ),
         )
-        run_id = cur.lastrowid
+        run_id: int = cur.lastrowid  # type: ignore[assignment]
 
         if holdings:
             symbols = [ticker for ticker, _ in holdings]
@@ -653,10 +677,11 @@ def save_optimisation_run(conn, params, results, holdings, exchange='US'):
     return run_id
 
 
-def get_recent_runs(conn, n=10, script=None):
+def get_recent_runs(conn: sqlite3.Connection, n: int = 10,
+                    script: Optional[str] = None) -> list[sqlite3.Row]:
     """Get the most recent optimisation runs."""
     query = "SELECT * FROM optimisation_runs"
-    params = []
+    params: list[Any] = []
     if script is not None:
         query += " WHERE script = ?"
         params.append(script)
@@ -665,7 +690,8 @@ def get_recent_runs(conn, n=10, script=None):
     return conn.execute(query, params).fetchall()
 
 
-def get_run_holdings(conn, run_id):
+def get_run_holdings(conn: sqlite3.Connection,
+                     run_id: int) -> list[sqlite3.Row]:
     """Get portfolio holdings for a given run. Returns rows with ticker (symbol) and weight."""
     return conn.execute(
         "SELECT t.symbol AS ticker, ph.weight "
@@ -678,7 +704,8 @@ def get_run_holdings(conn, run_id):
 
 # ─── Backtest ─────────────────────────────────────────────────────────────────
 
-def save_backtest_session(conn, params):
+def save_backtest_session(conn: sqlite3.Connection,
+                          params: dict[str, Any]) -> int:
     """
     Save a backtest session.
 
@@ -720,11 +747,14 @@ def save_backtest_session(conn, params):
                 params.get('run_group_id'),
             ),
         )
-    return cur.lastrowid
+    return cur.lastrowid  # type: ignore[return-value]
 
 
-def save_backtest_result(conn, session_id, category, index, metrics,
-                         holdings=None, exchange='US'):
+def save_backtest_result(conn: sqlite3.Connection, session_id: int,
+                         category: str, index: int,
+                         metrics: dict[str, Any],
+                         holdings: Optional[list[tuple[str, float]]] = None,
+                         exchange: str = 'US') -> None:
     """
     Save a single portfolio result within a backtest session.
 
@@ -773,14 +803,16 @@ def save_backtest_result(conn, session_id, category, index, metrics,
             )
 
 
-def get_recent_backtests(conn, n=5):
+def get_recent_backtests(conn: sqlite3.Connection,
+                         n: int = 5) -> list[sqlite3.Row]:
     """Get the most recent backtest sessions."""
     return conn.execute(
         "SELECT * FROM backtest_sessions ORDER BY id DESC LIMIT ?", (n,)
     ).fetchall()
 
 
-def get_backtest_results(conn, session_id):
+def get_backtest_results(conn: sqlite3.Connection,
+                         session_id: int) -> list[sqlite3.Row]:
     """Get all results for a backtest session."""
     return conn.execute(
         "SELECT * FROM backtest_results WHERE session_id = ? ORDER BY category, portfolio_index",
@@ -790,9 +822,13 @@ def get_backtest_results(conn, session_id):
 
 # ─── Metadata ─────────────────────────────────────────────────────────────────
 
-def _save_data_source_no_commit(conn, source, exchange_id=None,
-                                date_range_start=None, date_range_end=None,
-                                num_tickers=None, num_rows=None, notes=None):
+def _save_data_source_no_commit(conn: sqlite3.Connection, source: str,
+                                exchange_id: Optional[int] = None,
+                                date_range_start: Optional[str] = None,
+                                date_range_end: Optional[str] = None,
+                                num_tickers: Optional[int] = None,
+                                num_rows: Optional[int] = None,
+                                notes: Optional[str] = None) -> int:
     """Insert a data_source row without committing (for use inside transactions)."""
     now = _now()
     cur = conn.execute(
@@ -804,12 +840,16 @@ def _save_data_source_no_commit(conn, source, exchange_id=None,
         (exchange_id, source, now, date_range_start, date_range_end,
          num_tickers, num_rows, notes),
     )
-    return cur.lastrowid
+    return cur.lastrowid  # type: ignore[return-value]
 
 
-def save_data_source(conn, source, exchange_id=None, date_range_start=None,
-                     date_range_end=None, num_tickers=None, num_rows=None,
-                     notes=None):
+def save_data_source(conn: sqlite3.Connection, source: str,
+                     exchange_id: Optional[int] = None,
+                     date_range_start: Optional[str] = None,
+                     date_range_end: Optional[str] = None,
+                     num_tickers: Optional[int] = None,
+                     num_rows: Optional[int] = None,
+                     notes: Optional[str] = None) -> int:
     """Record a data download event. Returns data_source id."""
     with conn:
         return _save_data_source_no_commit(
@@ -818,7 +858,8 @@ def save_data_source(conn, source, exchange_id=None, date_range_start=None,
         )
 
 
-def get_latest_data_source(conn, source=None):
+def get_latest_data_source(conn: sqlite3.Connection,
+                           source: Optional[str] = None) -> Optional[sqlite3.Row]:
     """Get the most recent data source entry."""
     if source:
         return conn.execute(
@@ -830,7 +871,7 @@ def get_latest_data_source(conn, source=None):
     ).fetchone()
 
 
-def get_latest_forecast(conn):
+def get_latest_forecast(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     """Get the most recent forecast run."""
     return conn.execute(
         "SELECT * FROM forecast_runs ORDER BY id DESC LIMIT 1"
@@ -839,7 +880,8 @@ def get_latest_forecast(conn):
 
 # ─── CSV Migration ────────────────────────────────────────────────────────────
 
-def migrate_csvs(conn, data_dir=None):
+def migrate_csvs(conn: sqlite3.Connection,
+                  data_dir: Optional[str] = None) -> None:
     """One-time import of existing CSV data into the database."""
     if data_dir is None:
         data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Data')
@@ -869,7 +911,9 @@ def migrate_csvs(conn, data_dir=None):
         logger.info("  %s: %d rows", table, count)
 
 
-def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
+def _migrate_price_csv(conn: sqlite3.Connection, data_dir: str,
+                       filename: str, exchange: str,
+                       asset_type: str) -> None:
     """Import a single price CSV file."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):
@@ -899,7 +943,9 @@ def _migrate_price_csv(conn, data_dir, filename, exchange, asset_type):
                 source='csv_migration')
 
 
-def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
+def _migrate_forecasts(conn: sqlite3.Connection, data_dir: str,
+                       er_filename: str, var_filename: str,
+                       exchange: str) -> None:
     """Import paired expected returns and variances CSVs."""
     er_path = os.path.join(data_dir, er_filename)
     var_path = os.path.join(data_dir, var_filename)
@@ -921,7 +967,9 @@ def _migrate_forecasts(conn, data_dir, er_filename, var_filename, exchange):
                           notes=f'Migrated from {er_filename} + {var_filename}')
 
 
-def _migrate_ticker_list(conn, data_dir, filename, exchange, asset_type):
+def _migrate_ticker_list(conn: sqlite3.Connection, data_dir: str,
+                         filename: str, exchange: str,
+                         asset_type: str) -> None:
     """Import a ticker list CSV (single column of symbols)."""
     filepath = os.path.join(data_dir, filename)
     if not os.path.exists(filepath):
