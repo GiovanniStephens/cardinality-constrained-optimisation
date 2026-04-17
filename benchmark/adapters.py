@@ -117,6 +117,18 @@ class SimpleGAAdapter(OptimiserAdapter):
                 except Exception:
                     pass
 
+        # Record final convergence point including SLSQP refinement time
+        total_elapsed = time.time() - start_time
+        last_evals = convergence[-1].function_evaluations if convergence else 0
+        last_gen = convergence[-1].generation if convergence else 0
+        convergence.append(ConvergenceRecord(
+            wall_clock_seconds=total_elapsed,
+            function_evaluations=last_evals,
+            best_fitness=best_fitness,
+            mean_fitness=best_fitness,
+            generation=last_gen,
+        ))
+
         return BenchmarkResult(
             algorithm=self.name,
             seed=seed,
@@ -250,7 +262,18 @@ class PygadGAAdapter(OptimiserAdapter):
             opt_mod.MAX_NUM_STOCKS = saved_max
             opt_mod.MIN_NUM_STOCKS = saved_min
 
+        # Record final convergence point including SLSQP refinement time
         elapsed = time.time() - start_time
+        last_evals = convergence[-1].function_evaluations if convergence else 0
+        last_gen = convergence[-1].generation if convergence else 0
+        convergence.append(ConvergenceRecord(
+            wall_clock_seconds=elapsed,
+            function_evaluations=last_evals,
+            best_fitness=best_fitness,
+            mean_fitness=best_fitness,
+            generation=last_gen,
+        ))
+
         return BenchmarkResult(
             algorithm=self.name,
             seed=seed,
@@ -616,6 +639,19 @@ class CppGAAdapter(OptimiserAdapter):
                     selected_etfs = slsqp_etfs
                     optimised_weights = slsqp_weights
 
+            # Record final convergence point including SLSQP refinement time
+            # so the convergence curve honestly reflects total wall time used
+            total_elapsed = time.time() - start_time
+            last_evals = convergence[-1].function_evaluations if convergence else 0
+            last_gen = convergence[-1].generation if convergence else 0
+            convergence.append(ConvergenceRecord(
+                wall_clock_seconds=total_elapsed,
+                function_evaluations=last_evals,
+                best_fitness=best_fitness,
+                mean_fitness=best_fitness,
+                generation=last_gen,
+            ))
+
         except Exception as e:
             return BenchmarkResult(
                 algorithm=self.name, seed=seed, time_budget=time_budget,
@@ -714,6 +750,19 @@ class CppMonteCarloAdapter(OptimiserAdapter):
                     best_fitness = slsqp_fitness
                     selected_etfs = slsqp_etfs
                     optimised_weights = slsqp_weights
+
+            # Record final convergence point including SLSQP refinement time
+            # so the convergence curve honestly reflects total wall time used
+            total_elapsed = time.time() - start_time
+            last_evals = convergence[-1].function_evaluations if convergence else 0
+            last_gen = convergence[-1].generation if convergence else 0
+            convergence.append(ConvergenceRecord(
+                wall_clock_seconds=total_elapsed,
+                function_evaluations=last_evals,
+                best_fitness=best_fitness,
+                mean_fitness=best_fitness,
+                generation=last_gen,
+            ))
 
         except Exception as e:
             return BenchmarkResult(

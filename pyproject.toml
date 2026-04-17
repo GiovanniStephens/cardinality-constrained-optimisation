@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
     "arch>=5.0,<7",
     "copulae>=0.7,<1",
+    "curl_cffi>=0.5",
     "financedatabase>=2.0",
     "matplotlib>=3.3",
     "muarch>=1.0",
@@ -17,6 +18,7 @@ dependencies = [
     "pmdarima>=2.0,<3",
     "pulp>=2.7,<3",
     "pygad>=3.0,<4",
+    "scikit-learn>=1.0,<2",
     "scikit-posthocs>=0.7",
     "scipy>=1.7,<2",
     "seaborn>=0.11",
@@ -24,5 +26,43 @@ dependencies = [
     "yfinance>=0.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build",
+    "pip-tools",
+    "coverage>=7.0",
+    "mypy>=1.10",
+    "ruff>=0.4",
+]
+tor = [
+    "stem>=1.8.0",
+    "PySocks>=1.7.1",
+]
+
+[project.scripts]
+portfolio-backtest = "src.backtest:main"
+portfolio-forecast = "src.forecast:main"
+portfolio-download = "src.download_data:main"
+portfolio-benchmark = "run_benchmark:main"
+
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["src*", "benchmark*"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E402",   # module-level imports not at top (intentional lazy imports)
+    "E501",   # line too long (not enforcing yet)
+    "F401",   # imported but unused (re-export facades)
+    "E741",   # ambiguous variable name (single-letter math vars)
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = false
