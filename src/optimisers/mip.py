@@ -8,8 +8,7 @@ from src.returns import calculate_log_returns, calculate_expected_returns, calcu
 from src.covariance import calculate_covariance_matrix
 from src.weights import calculate_portfolio_variance, calculate_portfolio_return, optimise_weights
 from src.data_loading import load_prices_csv
-from src.portfolio_utils import OptimisationResult
-from src.optimisers.base import BaseOptimiser
+from src.optimisers.base import BaseOptimiser, OptimisationResult
 from src.config import (
     GA_MAX_SECURITIES, ETF_PRICES_CSV, MIP_DEFAULT_RISK_AVERSION, MIP_DEFAULT_MAX_ETFS,
     BACKTEST_NUM_DAYS_OOS,

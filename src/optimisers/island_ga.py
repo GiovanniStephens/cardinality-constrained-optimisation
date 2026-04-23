@@ -7,10 +7,9 @@ import pandas as pd
 from multiprocessing import Pool, Manager
 
 from src.returns import calculate_log_returns, calculate_expected_returns
-from src.portfolio_utils import OptimisationResult
+from src.optimisers.base import BaseOptimiser, OptimisationResult
 from src.metrics import CONSTRAINT_VIOLATION_FITNESS
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
-from src.optimisers.base import BaseOptimiser
 from src.config import (
     ISLAND_GA_NUM_GENERATIONS, ISLAND_GA_POPULATION_SIZE,
     ISLAND_GA_NUM_ELITES, ISLAND_GA_MIGRATION_INTERVAL,

@@ -9,9 +9,8 @@ from multiprocessing import Pool
 from src.returns import calculate_log_returns, calculate_expected_returns
 from src.metrics import equal_weight_fitness
 from src.weights import optimise_weights
-from src.portfolio_utils import OptimisationResult
+from src.optimisers.base import BaseOptimiser, OptimisationResult
 from src.config import TRADING_DAYS_PER_YEAR as _TRADING_DAYS
-from src.optimisers.base import BaseOptimiser
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
     ISLAND_GA_MIN_SECURITIES, ISLAND_GA_MAX_SECURITIES,

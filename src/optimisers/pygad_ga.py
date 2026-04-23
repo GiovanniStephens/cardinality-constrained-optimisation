@@ -9,8 +9,7 @@ from src.returns import calculate_log_returns
 from src.covariance import calculate_covariance_matrix
 from src.weights import optimise_weights as _optimise_weights
 from src.data_loading import load_data
-from src.portfolio_utils import OptimisationResult
-from src.optimisers.base import BaseOptimiser
+from src.optimisers.base import BaseOptimiser, OptimisationResult
 from src.config import (
     GA_MIN_SECURITIES, GA_MAX_SECURITIES,
     GA_MIN_WEIGHT, GA_MAX_WEIGHT,

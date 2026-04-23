@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from src import db
-from src.portfolio_utils import OptimisationResult  # defined there
+from src.optimisers.base import OptimisationResult
 
 
 def make_synthetic_prices(n_days=500, n_tickers=30, seed=42,
