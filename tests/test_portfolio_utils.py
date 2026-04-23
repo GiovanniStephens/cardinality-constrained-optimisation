@@ -642,5 +642,161 @@ class TestRiskBudgetObjective(unittest.TestCase):
         self.assertGreater(result, 0.0)
 
 
+# ---------------------------------------------------------------------------
+# P1.1  Weight optimisation edge cases
+# ---------------------------------------------------------------------------
+
+class TestOptimiseWeightsEdgeCases(unittest.TestCase):
+    """Edge cases for optimise_weights (SLSQP)."""
+
+    def test_single_asset(self):
+        """1-asset portfolio → weight=[1.0]."""
+        er = np.array([0.10])
+        cov = np.array([[0.04]])
+        result = optimise_weights(expected_returns=er, cov_matrix=cov)
+        self.assertAlmostEqual(result.x[0], 1.0, places=4)
+
+    def test_two_assets_perfect_correlation(self):
+        """Perfect correlation should not crash SLSQP."""
+        er = np.array([0.10, 0.12])
+        cov = np.array([[0.04, 0.04], [0.04, 0.04]])
+        result = optimise_weights(expected_returns=er, cov_matrix=cov)
+        self.assertAlmostEqual(sum(result.x), 1.0, places=4)
+
+    def test_infeasible_min_weight(self):
+        """min_weight=0.6 with 3 assets is infeasible (3×0.6 > 1.0)."""
+        er = np.array([0.10, 0.12, 0.08])
+        cov = np.diag([0.04, 0.04, 0.04])
+        result = optimise_weights(
+            expected_returns=er, cov_matrix=cov, min_weight=0.6,
+        )
+        # SLSQP may not converge or may still return weights; either is ok
+        # but weights should NOT sum to 1 within tolerance or success=False
+        if result.success:
+            # If it "succeeds", the result is the fallback equal weights
+            self.assertAlmostEqual(sum(result.x), 1.0, places=3)
+
+    def test_zero_expected_returns(self):
+        """All zero returns — should not divide by zero."""
+        er = np.array([0.0, 0.0, 0.0])
+        cov = np.diag([0.04, 0.04, 0.04])
+        result = optimise_weights(expected_returns=er, cov_matrix=cov)
+        self.assertAlmostEqual(sum(result.x), 1.0, places=4)
+        self.assertTrue(np.all(np.isfinite(result.x)))
+
+
+# ---------------------------------------------------------------------------
+# P1.2  Covariance edge cases
+# ---------------------------------------------------------------------------
+
+class TestCovarianceEdgeCases(unittest.TestCase):
+
+    def test_single_column_dataframe(self):
+        """1 ticker → 1×1 covariance matrix."""
+        returns = pd.DataFrame(np.random.randn(100, 1), columns=['A'])
+        cov = calculate_covariance_matrix(returns, annualise=False)
+        self.assertEqual(cov.shape, (1, 1))
+        self.assertGreater(cov.iloc[0, 0], 0)
+
+    def test_constant_returns_ledoit_wolf(self):
+        """Zero-variance column with Ledoit-Wolf should not crash."""
+        data = np.random.randn(100, 3)
+        data[:, 0] = 0.0  # constant
+        returns = pd.DataFrame(data, columns=['A', 'B', 'C'])
+        cov = calculate_covariance_matrix(returns, annualise=False, shrinkage=True)
+        self.assertEqual(cov.shape, (3, 3))
+        self.assertTrue(np.all(np.isfinite(cov.values)))
+
+    def test_observation_ratio_error(self):
+        """T=5, N=10 → T/N=0.5 < 1.0, should raise ValueError."""
+        with self.assertRaises(ValueError):
+            check_observation_ratio(5, 10)
+
+
+# ---------------------------------------------------------------------------
+# P1.4  Metrics edge cases
+# ---------------------------------------------------------------------------
+
+class TestMetricsEdgeCases(unittest.TestCase):
+
+    def test_maximum_drawdown_no_drawdown(self):
+        """Monotonically increasing returns → drawdown = 0."""
+        returns = [0.01, 0.02, 0.01, 0.03, 0.01]
+        dd = maximum_drawdown(returns)
+        self.assertEqual(dd, 0)
+
+    def test_maximum_drawdown_constant(self):
+        """All-zero returns → drawdown = 0."""
+        returns = [0.0, 0.0, 0.0, 0.0]
+        dd = maximum_drawdown(returns)
+        self.assertEqual(dd, 0)
+
+    def test_sortino_zero_downside(self):
+        """No negative returns → downside_deviation=0 → sortino=0."""
+        dd = downside_deviation([0.01, 0.02, 0.03])
+        self.assertEqual(dd, 0.0)
+        self.assertEqual(sortino_ratio(0.10, dd), 0.0)
+
+    def test_deflated_sharpe_extreme_kurtosis(self):
+        """Fat-tailed distribution should inflate SR variance → lower DSR."""
+        dsr_normal = deflated_sharpe_ratio(
+            observed_sr=1.0, n=252, num_trials=100,
+            excess_kurtosis=0.0,
+        )
+        dsr_fat = deflated_sharpe_ratio(
+            observed_sr=1.0, n=252, num_trials=100,
+            excess_kurtosis=10.0,
+        )
+        # Fat tails increase SR variance → harder to be significant
+        self.assertLessEqual(dsr_fat, dsr_normal)
+
+
+# ---------------------------------------------------------------------------
+# P1.5  Empty data handling
+# ---------------------------------------------------------------------------
+
+class TestEmptyDataEdgeCases(unittest.TestCase):
+
+    def test_log_returns_empty_df(self):
+        empty = pd.DataFrame()
+        result = calculate_log_returns(empty)
+        self.assertTrue(result.empty)
+
+    def test_expected_returns_empty(self):
+        empty = pd.DataFrame()
+        result = calculate_expected_returns(empty)
+        self.assertEqual(len(result), 0)
+
+    def test_covariance_empty_df(self):
+        empty = pd.DataFrame()
+        result = calculate_covariance_matrix(empty, annualise=False)
+        self.assertTrue(result.empty)
+
+
+# ---------------------------------------------------------------------------
+# P2.1  Exception hierarchy
+# ---------------------------------------------------------------------------
+
+class TestExceptionHierarchy(unittest.TestCase):
+    """All domain exceptions should subclass PortfolioError."""
+
+    def test_all_subclass_portfolio_error(self):
+        from src.exceptions import (
+            PortfolioError, DownloadError, ValidationError,
+            OptimisationError, DatabaseError, ForecastError,
+        )
+        for exc_cls in (DownloadError, ValidationError, OptimisationError,
+                        DatabaseError, ForecastError):
+            self.assertTrue(
+                issubclass(exc_cls, PortfolioError),
+                f"{exc_cls.__name__} is not a subclass of PortfolioError",
+            )
+
+    def test_catch_all_with_portfolio_error(self):
+        from src.exceptions import PortfolioError, DownloadError
+        with self.assertRaises(PortfolioError):
+            raise DownloadError("test")
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -7,7 +7,10 @@ from unittest.mock import patch
 import pandas as pd
 
 from src import db
-from src import download_data as dd
+from src import download as dd
+from src.download.core import _download_batch
+from src.download.session import _rotate_tor_circuit
+from src.download.workers import _partition_tickers, _reset_yf_singleton, _subprocess_worker
 import src.download.session as dl_sess
 from tests import requires_network
 
@@ -172,13 +175,13 @@ class TestDownloadBatchValidation(unittest.TestCase):
     @patch('src.download.core.yf.download')
     def test_handles_empty_dataframe(self, mock_yf):
         mock_yf.return_value = pd.DataFrame()
-        result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
+        result = _download_batch(['SPY'], '2024-01-01', '2024-02-01')
         self.assertIsNone(result)
 
     @patch('src.download.core.yf.download')
     def test_handles_none_return(self, mock_yf):
         mock_yf.return_value = None
-        result = dd._download_batch(['SPY'], '2024-01-01', '2024-02-01')
+        result = _download_batch(['SPY'], '2024-01-01', '2024-02-01')
         self.assertIsNone(result)
 
     @patch('src.download.core.yf.download')
@@ -187,7 +190,7 @@ class TestDownloadBatchValidation(unittest.TestCase):
         dates = pd.date_range('2024-01-01', periods=3, freq='B')
         df = pd.DataFrame({'Close': [100, 101, 102]}, index=dates.strftime('%Y-%m-%d'))
         mock_yf.return_value = df
-        result = dd._download_batch(['SPY'], '2024-01-01', '2024-01-05')
+        result = _download_batch(['SPY'], '2024-01-01', '2024-01-05')
         # Should succeed after coercing index
         self.assertIsNotNone(result)
 
@@ -195,7 +198,7 @@ class TestDownloadBatchValidation(unittest.TestCase):
     def test_handles_unconvertible_index(self, mock_yf):
         df = pd.DataFrame({'Close': [100, 101]}, index=['not-a-date', 'also-not'])
         mock_yf.return_value = df
-        result = dd._download_batch(['SPY'], '2024-01-01', '2024-01-05')
+        result = _download_batch(['SPY'], '2024-01-01', '2024-01-05')
         self.assertIsNone(result)
 
 
@@ -247,7 +250,7 @@ class TestLogAggregation(unittest.TestCase):
         with self.assertLogs('src.download.core', level='INFO') as cm:
             # Request many tickers but only SPY has data
             tickers = ['SPY'] + [f'BAD{i}' for i in range(20)]
-            dd._download_batch(tickers, '2024-01-01', '2024-02-01')
+            _download_batch(tickers, '2024-01-01', '2024-02-01')
 
         # Should have exactly one log line about skipped tickers (not 20)
         skipped_logs = [l for l in cm.output if 'had no data' in l]
@@ -564,7 +567,7 @@ class TestProxyIntegration(unittest.TestCase):
             'stem': mock_stem,
             'stem.control': mock_stem_control,
         }):
-            dd._rotate_tor_circuit()
+            _rotate_tor_circuit()
 
         mock_controller_instance.authenticate.assert_called_once()
         mock_controller_instance.signal.assert_called_once_with('NEWNYM')
@@ -575,7 +578,7 @@ class TestPartitionTickers(unittest.TestCase):
 
     def test_even_split(self):
         tickers = [f'T{i}' for i in range(20)]
-        parts = dd._partition_tickers(tickers, 4)
+        parts = _partition_tickers(tickers, 4)
         self.assertEqual(len(parts), 4)
         self.assertTrue(all(len(p) == 5 for p in parts))
         # All tickers accounted for
@@ -583,7 +586,7 @@ class TestPartitionTickers(unittest.TestCase):
 
     def test_uneven_split(self):
         tickers = [f'T{i}' for i in range(22)]
-        parts = dd._partition_tickers(tickers, 4)
+        parts = _partition_tickers(tickers, 4)
         self.assertEqual(len(parts), 4)
         sizes = sorted([len(p) for p in parts])
         self.assertEqual(sizes, [5, 5, 6, 6])
@@ -591,18 +594,18 @@ class TestPartitionTickers(unittest.TestCase):
 
     def test_fewer_tickers_than_workers(self):
         tickers = ['A', 'B']
-        parts = dd._partition_tickers(tickers, 4)
+        parts = _partition_tickers(tickers, 4)
         self.assertEqual(len(parts), 2)
         self.assertTrue(all(len(p) == 1 for p in parts))
 
     def test_single_worker(self):
         tickers = [f'T{i}' for i in range(10)]
-        parts = dd._partition_tickers(tickers, 1)
+        parts = _partition_tickers(tickers, 1)
         self.assertEqual(len(parts), 1)
         self.assertEqual(parts[0], tickers)
 
     def test_empty_tickers(self):
-        parts = dd._partition_tickers([], 4)
+        parts = _partition_tickers([], 4)
         self.assertEqual(len(parts), 0)
 
 
@@ -683,7 +686,7 @@ class TestSubprocessWorker(unittest.TestCase):
         _ = yd.YfData()
         self.assertIn(yd.YfData, yd.SingletonMeta._instances)
 
-        dd._reset_yf_singleton()
+        _reset_yf_singleton()
 
         self.assertNotIn(yd.YfData, yd.SingletonMeta._instances)
 
@@ -691,7 +694,7 @@ class TestSubprocessWorker(unittest.TestCase):
         """_subprocess_worker always sends a None sentinel, even with empty tickers."""
         result_queue = multiprocessing.Queue()
 
-        dd._subprocess_worker(
+        _subprocess_worker(
             worker_id=0, tickers=[], proxy_url=None,
             proxy_counter_start=0, result_queue=result_queue,
             start='2024-01-01', end='2024-02-01', batch_size=5,

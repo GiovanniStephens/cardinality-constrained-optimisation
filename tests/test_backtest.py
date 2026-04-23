@@ -6,21 +6,11 @@ from src.data_loading import load_data
 from src.returns import calculate_log_returns, calculate_expected_returns
 from src.metrics import maximum_drawdown, downside_deviation, sortino_ratio, calmar_ratio
 from src.config import BACKTEST_TEST_DAYS, TRADING_DAYS_PER_YEAR
+from tests.helpers import make_synthetic_prices
 import numpy as np
 import pandas as pd
 
 _SLOW = os.getenv('RUN_SLOW_TESTS')
-
-
-def _make_synthetic_prices(n_days=300, n_tickers=10, seed=42):
-    """Generate synthetic price data for fast tests."""
-    np.random.seed(seed)
-    dates = pd.bdate_range('2020-01-01', periods=n_days, freq='B')
-    tickers = [f'SYN{i}' for i in range(n_tickers)]
-    log_rets = np.random.randn(n_days, n_tickers) * 0.015 + 0.0003
-    log_rets[0] = 0
-    prices = 100 * np.exp(np.cumsum(log_rets, axis=0))
-    return pd.DataFrame(prices, index=dates, columns=tickers)
 
 
 def _load_test_data():
@@ -48,7 +38,7 @@ class TestBacktest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.data = _make_synthetic_prices()
+        cls.data = make_synthetic_prices(n_days=300, n_tickers=10, daily_vol=0.015, daily_drift=0.0003)
         test_days = min(BACKTEST_TEST_DAYS, len(cls.data) // 3)
         training = cls.data.iloc[:-test_days, :]
         _sim._backtest_data = training
@@ -239,6 +229,32 @@ class TestGenerateWindows(unittest.TestCase):
             self.assertIsInstance(w.test_start, pd.Timestamp)
             self.assertIsInstance(w.test_end, pd.Timestamp)
             self.assertIsInstance(w.label, str)
+
+
+# ---------------------------------------------------------------------------
+# P1.3  Window generation edge cases
+# ---------------------------------------------------------------------------
+
+class TestGenerateWindowsEdgeCases(unittest.TestCase):
+    """Edge cases for generate_windows beyond the existing tests."""
+
+    def test_exact_minimum_data(self):
+        """Exactly train+test dates should produce exactly 1 window."""
+        dates = pd.bdate_range('2020-01-01', periods=100, freq='B')
+        windows = backtest.generate_windows(
+            dates, train_days=70, test_days=30, step_days=30,
+        )
+        self.assertEqual(len(windows), 1)
+
+    def test_step_larger_than_test(self):
+        """Non-overlapping windows when step > test days."""
+        dates = pd.bdate_range('2014-01-02', periods=3000, freq='B')
+        windows = backtest.generate_windows(
+            dates, train_days=1000, test_days=200, step_days=500,
+        )
+        # Windows should not overlap
+        for i in range(len(windows) - 1):
+            self.assertLessEqual(windows[i].test_end, windows[i + 1].test_start)
 
 
 class TestRunPortfolio(unittest.TestCase):

@@ -748,5 +748,78 @@ class TestLoadTickerMetadata(unittest.TestCase):
         self.assertNotIn('UNKNOWN', meta)
 
 
+# ---------------------------------------------------------------------------
+# P1.6  Database constraint edge cases
+# ---------------------------------------------------------------------------
+
+class TestDbConstraintEdgeCases(unittest.TestCase):
+    """Edge cases for database constraints and upsert behavior."""
+
+    def setUp(self):
+        self.conn = db.get_connection(':memory:')
+        dates = pd.date_range('2024-01-01', periods=3, freq='D')
+        self.prices_df = pd.DataFrame({
+            'SPY': [100.0, 101.0, 102.0],
+            'QQQ': [200.0, 201.0, 202.0],
+        }, index=dates)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_duplicate_ticker_same_exchange_upserts(self):
+        """Saving the same ticker twice on same exchange should upsert, not error."""
+        db.save_prices(self.conn, self.prices_df, exchange='US', asset_type='etf')
+        # Save again with updated name
+        db.save_prices(self.conn, self.prices_df, exchange='US', asset_type='etf',
+                       names={'SPY': 'Updated Name'})
+        row = self.conn.execute(
+            "SELECT name FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()
+        self.assertEqual(row['name'], 'Updated Name')
+        # Should still only have one SPY ticker
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM tickers WHERE symbol = 'SPY'"
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_save_prices_duplicate_dates(self):
+        """Overlapping date ranges should upsert prices, not duplicate rows."""
+        db.save_prices(self.conn, self.prices_df, exchange='US')
+        # Save overlapping data with updated price
+        dates2 = pd.date_range('2024-01-02', periods=3, freq='D')
+        prices2 = pd.DataFrame({
+            'SPY': [999.0, 998.0, 997.0],
+        }, index=dates2)
+        db.save_prices(self.conn, prices2, exchange='US')
+
+        loaded = db.load_prices(self.conn, exchange='US', tickers=['SPY'])
+        # Jan 2 price should be updated to 999.0
+        self.assertAlmostEqual(loaded.loc['2024-01-02', 'SPY'], 999.0)
+
+    def test_save_optimisation_run_empty_holdings(self):
+        """An optimisation run with no holdings should save without error."""
+        db.save_prices(self.conn, self.prices_df, exchange='US', asset_type='etf')
+        run_id = db.save_optimisation_run(
+            self.conn,
+            params={'script': 'test_empty'},
+            results={'best_sharpe': 0.0},
+            holdings=[],
+            exchange='US',
+        )
+        self.assertIsInstance(run_id, int)
+        holdings = db.get_run_holdings(self.conn, run_id)
+        self.assertEqual(len(holdings), 0)
+
+    def test_foreign_key_violation_backtest(self):
+        """Inserting a backtest result with non-existent session_id should fail."""
+        with self.assertRaises(Exception):
+            self.conn.execute(
+                "INSERT INTO backtest_results "
+                "(session_id, category, portfolio_index, sharpe_ratio) "
+                "VALUES (?, ?, ?, ?)",
+                (99999, 'cc_optimised', 0, 1.0),
+            )
+
+
 if __name__ == '__main__':
     unittest.main()

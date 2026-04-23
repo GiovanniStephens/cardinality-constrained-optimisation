@@ -6,24 +6,15 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.portfolio_utils import OptimisationResult
+from src.optimisers.base import OptimisationResult
 from src.returns import calculate_log_returns
 from tests.helpers import (
     OptimiserTestMixin,
     make_small_divergent_prices,
+    make_synthetic_prices,
     brute_force_optimal,
     assert_result_integrity,
 )
-
-
-def _make_synthetic_prices(n_days=200, n_tickers=10, seed=42):
-    """Small synthetic price matrix for fast tests."""
-    np.random.seed(seed)
-    dates = pd.bdate_range('2020-01-01', periods=n_days, freq='B')
-    tickers = [f'T{i}' for i in range(n_tickers)]
-    log_rets = np.random.randn(n_days, n_tickers) * 0.01
-    prices = 100 * np.exp(log_rets.cumsum(axis=0))
-    return pd.DataFrame(prices, index=dates, columns=tickers)
 
 
 class TestMIPOptimiser(OptimiserTestMixin, unittest.TestCase):
@@ -31,7 +22,7 @@ class TestMIPOptimiser(OptimiserTestMixin, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices()
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def _run(self, **kwargs):
         from src.optimisers.mip import MIPOptimiser
@@ -62,7 +53,7 @@ class TestMonteCarloOptimiser(OptimiserTestMixin, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices()
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def _run(self, **kwargs):
         from src.optimisers.monte_carlo import MonteCarloOptimiser
@@ -93,7 +84,7 @@ class TestIslandGAOptimiser(OptimiserTestMixin, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices()
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def _run(self, **kwargs):
         from src.optimisers.island_ga import IslandGAOptimiser
@@ -114,7 +105,7 @@ class TestPygadOptimiser(OptimiserTestMixin, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices()
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def _run(self, **kwargs):
         from src.optimisers.pygad_ga import PygadOptimiser
@@ -137,7 +128,7 @@ class TestSeedDeterminism(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices(n_days=200, n_tickers=20)
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=20, daily_drift=0)
 
     def test_monte_carlo_same_seed_same_result(self):
         from src.optimisers.monte_carlo import MonteCarloOptimiser
@@ -178,7 +169,7 @@ class TestMIPMaxSecurities(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices()
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def test_max_securities_3(self):
         from src.optimisers.mip import MIPOptimiser
@@ -196,7 +187,7 @@ class TestOptimiserDataBoundary(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         # Training subset: first 150 days
         cls.train_prices = cls.prices.iloc[:150]
         # Future data that must not leak in
@@ -309,7 +300,7 @@ class TestBatchFitnessSubsetCov(unittest.TestCase):
         )
         from src.config import TRADING_DAYS_PER_YEAR
 
-        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         log_returns = calculate_log_returns(prices)
         expected_returns = calculate_expected_returns(log_returns).values
         centered = (log_returns - log_returns.mean(axis=0)).values
@@ -462,7 +453,7 @@ class TestWeightBoundCompliance(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices(n_days=300, n_tickers=15, seed=42)
+        cls.prices = make_synthetic_prices(n_days=300, n_tickers=15, daily_drift=0)
 
     def test_pygad_custom_bounds(self):
         from src.optimisers.pygad_ga import PygadOptimiser
@@ -497,13 +488,13 @@ class TestDateAlignmentValidation(unittest.TestCase):
     """Verify date alignment assumptions hold."""
 
     def test_synthetic_prices_have_uniform_dates(self):
-        prices = _make_synthetic_prices(n_days=200, n_tickers=10)
+        prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         for col in prices.columns:
             self.assertEqual(prices[col].dropna().shape[0], 200)
 
     def test_misaligned_concat_produces_nan(self):
-        p1 = _make_synthetic_prices(n_days=100, n_tickers=3, seed=1)
-        p2 = _make_synthetic_prices(n_days=80, n_tickers=3, seed=2)
+        p1 = make_synthetic_prices(n_days=100, n_tickers=3, seed=1, daily_drift=0)
+        p2 = make_synthetic_prices(n_days=80, n_tickers=3, seed=2, daily_drift=0)
         p2.columns = ['X0', 'X1', 'X2']
         # Shift p2 dates forward so they only partially overlap
         p2.index = pd.bdate_range(p1.index[50], periods=80, freq='B')
@@ -513,13 +504,13 @@ class TestDateAlignmentValidation(unittest.TestCase):
                         "Misaligned concat should produce NaN")
 
     def test_unsorted_index_raises(self):
-        prices = _make_synthetic_prices(n_days=100, n_tickers=5)
+        prices = make_synthetic_prices(n_days=100, n_tickers=5, daily_drift=0)
         shuffled = prices.sample(frac=1)  # shuffle rows
         with self.assertRaises(ValueError):
             calculate_log_returns(shuffled)
 
     def test_aligned_data_works(self):
-        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         from src.optimisers.monte_carlo import MonteCarloOptimiser
         opt = MonteCarloOptimiser(
             n_trials=100, min_securities=2, max_securities=5,
@@ -534,20 +525,20 @@ class TestNaNPropagation(unittest.TestCase):
     """Verify NaN/inf handling in the pipeline."""
 
     def test_nan_in_prices_gives_zero_log_return(self):
-        prices = _make_synthetic_prices(n_days=50, n_tickers=3, seed=42)
+        prices = make_synthetic_prices(n_days=50, n_tickers=3, daily_drift=0)
         prices.iloc[10, 0] = np.nan
         lr = calculate_log_returns(prices)
         # The NaN should become 0 in log returns
         self.assertEqual(lr.iloc[10, 0], 0.0)
 
     def test_zero_price_gives_zero_log_return(self):
-        prices = _make_synthetic_prices(n_days=50, n_tickers=3, seed=42)
+        prices = make_synthetic_prices(n_days=50, n_tickers=3, daily_drift=0)
         prices.iloc[10, 1] = 0.0  # will cause -inf in log
         lr = calculate_log_returns(prices)
         self.assertEqual(lr.iloc[10, 1], 0.0)
 
     def test_partial_nan_column_doesnt_crash(self):
-        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         # Inject NaN in 10% of one column
         prices.iloc[5:25, 3] = np.nan
         from src.optimisers.monte_carlo import MonteCarloOptimiser
@@ -559,7 +550,7 @@ class TestNaNPropagation(unittest.TestCase):
         self.assertIsInstance(result, OptimisationResult)
 
     def test_no_nan_inf_in_output_weights(self):
-        prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
         prices.iloc[5:15, 2] = np.nan
         from src.optimisers.monte_carlo import MonteCarloOptimiser
         opt = MonteCarloOptimiser(
@@ -576,7 +567,7 @@ class TestResultIntegrity(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.prices = _make_synthetic_prices(n_days=200, n_tickers=10, seed=42)
+        cls.prices = make_synthetic_prices(n_days=200, n_tickers=10, daily_drift=0)
 
     def test_mip_integrity(self):
         from src.optimisers.mip import MIPOptimiser
