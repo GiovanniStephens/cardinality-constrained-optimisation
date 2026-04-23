@@ -327,20 +327,31 @@ def main():
                     holdings=list(zip(pr.portfolio, pr.weights)))
         logger.info("  Saved to DB (session id=%d)", session_id)
 
-    # -- Cross-window aggregation ----------------------------------------------
+    _report_results(all_results)
+
+    bt_elapsed = time.time() - bt_start
+    logger.info("Full rolling backtest completed in %.1fs (%d windows)",
+                bt_elapsed, len(windows))
+    conn.close()
+
+
+def _report_results(all_results: List[WindowResult]) -> None:
+    """Cross-window aggregation, hypothesis tests, and Friedman omnibus test."""
+    # -- Aggregation -----------------------------------------------------------
     logger.info("=" * 60)
     logger.info("CROSS-WINDOW SUMMARY")
     summary_df = aggregate_cross_window(all_results)
     logger.info("\n%s", summary_df.to_string())
 
-    # -- Within-window hypothesis tests ----------------------------------------
-    logger.info("WITHIN-WINDOW HYPOTHESIS TESTS (per window):")
     comparisons = [
         ('CC optimised vs Random random', 'cc_optimised', 'random_random'),
         ('MC optimised vs Random random', 'mc_optimised', 'random_random'),
         ('CC optimised vs MC optimised',  'cc_optimised', 'mc_optimised'),
         ('CC copulae vs CC optimised',    'cc_optimised', 'cc_copulae'),
     ]
+
+    # -- Within-window hypothesis tests ----------------------------------------
+    logger.info("WITHIN-WINDOW HYPOTHESIS TESTS (per window):")
     for wr in all_results:
         logger.info("  Window %s:", wr.window.label)
         for label, cat_a, cat_b in comparisons:
@@ -358,17 +369,10 @@ def main():
     all_categories = set()
     for wr in all_results:
         all_categories.update(wr.method_results.keys())
-    # Only test categories present in all windows
     core_categories = [c for c in sorted(all_categories)
                        if all(c in wr.method_results for wr in all_results)]
 
-    paired_comparisons = [
-        ('CC optimised vs Random random', 'cc_optimised', 'random_random'),
-        ('MC optimised vs Random random', 'mc_optimised', 'random_random'),
-        ('CC optimised vs MC optimised',  'cc_optimised', 'mc_optimised'),
-        ('CC copulae vs CC optimised',    'cc_optimised', 'cc_copulae'),
-    ]
-    for label, cat_a, cat_b in paired_comparisons:
+    for label, cat_a, cat_b in comparisons:
         if cat_a in core_categories and cat_b in core_categories:
             a_sharpes = {wr.window.label: wr.method_results[cat_a].mean_sharpe
                          for wr in all_results}
@@ -387,8 +391,3 @@ def main():
             logger.info("FRIEDMAN TEST: chi2=%.4f  p=%.4f", chi2, p_val)
         except ValueError as e:
             logger.warning("Friedman test skipped: %s", e)
-
-    bt_elapsed = time.time() - bt_start
-    logger.info("Full rolling backtest completed in %.1fs (%d windows)",
-                bt_elapsed, len(windows))
-    conn.close()
