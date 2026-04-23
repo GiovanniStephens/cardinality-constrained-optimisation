@@ -19,7 +19,7 @@ src/                         # Python source package
 ├── __init__.py
 ├── optimisers/              # All portfolio optimisation algorithms
 │   ├── __init__.py          # Re-exports all optimisers + BaseOptimiser
-│   ├── base.py              # BaseOptimiser ABC
+│   ├── base.py              # BaseOptimiser ABC + OptimisationResult dataclass
 │   ├── pygad_ga.py          # PyGAD GA + SLSQP + copula/CCC correlation
 │   ├── island_ga.py         # Parallel island-based GA
 │   ├── monte_carlo.py       # Monte Carlo brute-force baseline
@@ -46,7 +46,7 @@ src/                         # Python source package
 │   ├── backtest.py          # Backtest session and result storage
 │   ├── metadata.py          # Data source and metadata functions
 │   └── migrations.py        # CSV migration functions for importing legacy data
-├── portfolio_utils.py       # OptimisationResult dataclass + save_optimisation_result DB helper
+├── portfolio_utils.py       # save_optimisation_result DB helper (OptimisationResult re-exported for compat)
 ├── returns.py               # Log returns, expected returns, variances
 ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance estimation
 ├── metrics.py               # Sharpe, Sortino, Calmar, drawdown, overfitting detection
@@ -73,6 +73,7 @@ tests/                       # Unit and integration tests
 ├── helpers.py               # Shared test utilities + base classes (BaseDBTest, BaseTmpDirTest, OptimiserTestMixin)
 ├── test_optimisers.py       # Tests for optimisation algorithms
 ├── test_backtest.py         # Tests for backtest module
+├── test_backtest_runner.py  # Tests for src/backtest/runner.py
 ├── test_db.py               # Tests for database module
 ├── test_portfolio_utils.py  # Tests for portfolio utilities
 ├── test_securities.py       # Tests for security universe/download
@@ -80,8 +81,12 @@ tests/                       # Unit and integration tests
 ├── test_group_constraints.py # Tests for group allocation constraints
 ├── test_download_session.py  # Tests for download session/proxy management
 ├── test_download_validate.py # Tests for ticker validation
+├── test_download_workers.py  # Tests for multi-worker concurrent download
 ├── test_data_quality.py     # Tests for data validation
 ├── test_pipeline.py         # Tests for pipeline orchestration
+├── test_cli_entrypoints.py  # Tests that every console_script / `python -m` entry still imports
+├── test_logging_config.py   # Tests for centralised logging setup
+├── test_benchmark_analysis.py       # Tests for benchmark/analysis.py
 ├── test_cpp_equivalence.py  # Tests for C++/Python parity + Metal GPU equivalence
 ├── test_backtest_integration.py     # Integration tests for backtesting
 ├── test_benchmark_integration.py    # Integration tests for benchmarks
@@ -105,9 +110,11 @@ benchmark/                   # Benchmarking framework package
 ├── analysis.py              # Result analysis and reporting
 └── results.py               # Data structures for benchmark results
 data/                        # CSV price data, ETF lists, forecast outputs (~112 MB)
-├── portfolio.db             # SQLite database (gitignored, created by src/db)
-├── ETF_Prices.csv           # Daily adjusted close for ~1792 ETFs
-└── ...                      # Other CSV data files
+├── portfolio.db             # SQLite database (gitignored, primary store, created by src/db)
+├── Prices.csv               # Daily adjusted close, equities + ETFs (gitignored, ~287 MB)
+├── Securities.csv           # Ticker metadata from FinanceDatabase
+├── ETF_Prices.csv           # Legacy ETF-only CSV; used by migration path in src/db/migrations.py
+└── ...                      # Other CSV data files (forecast outputs, bad-ticker caches, etc.)
 images/                      # Visualisation outputs
 benchmark_results/           # Benchmark run outputs (JSON/PKL)
 run_benchmark.py             # CLI entry point for benchmarking
@@ -153,6 +160,9 @@ python -m src.db migrate        # Import existing CSVs into database
 
 # Run benchmarks (also: portfolio-benchmark)
 python run_benchmark.py
+python run_benchmark.py --quick                                  # fast smoke run
+python run_benchmark.py --algorithms pygad_ga island_ga --runs 10 --time-budget 30
+python run_throughput_benchmark.py                               # evals/sec throughput comparison
 
 # Build C++ optimiser (requires CMake 3.14+, Eigen and csv-parser submodules)
 # On macOS with Metal, GPU support is auto-detected and compiled in.

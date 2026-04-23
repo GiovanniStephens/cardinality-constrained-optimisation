@@ -2,75 +2,126 @@
 
 Select N instruments from a universe of ~25,000 equities and ETFs to maximise the Sharpe Ratio, subject to constraints on holdings count, weights, and optionally return/risk targets. The core idea: use a genetic algorithm to choose *which* instruments to hold (the cardinality problem), then use SLSQP to optimise *how much* of each to hold (the weight problem).
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [How It Works](#how-it-works)
+- [Key Configuration](#key-configuration)
+- [Group Allocation Constraints](#group-allocation-constraints)
+- [Covariance Estimation Methods](#covariance-estimation-methods)
+- [Alternative Optimisation Approaches](#alternative-optimisation-approaches)
+- [Backtest](#backtest)
+- [Building the C++ Optimiser](#building-the-c-optimiser)
+- [Methodology Notes](#methodology-notes)
+- [Running Tests](#running-tests)
+
 ## Quick Start
 
 ```bash
 pip install -e ".[dev]"
 
-# 1. Download price data from Yahoo Finance (equities + ETFs)
-python -m src.download_data --asset-types equities etfs
+# 1. Download price data from Yahoo Finance into the SQLite DB (equities + ETFs)
+python -m src.download --asset-types equities etfs
 
 # 2. (Optional) Forecast returns and variances
 python -m src.forecast
 
 # 3. Run the optimisation
+#    pygad_ga is the single-process default; use island_ga for the parallel variant.
 python -m src.optimisers.pygad_ga
 
 # 4. Run the backtest to validate performance
 python -m src.backtest
 ```
 
+**Data storage:** All price data, forecasts, optimisation runs, and backtest results live in `data/portfolio.db` (SQLite). CSVs (`data/Prices.csv`, `data/Securities.csv`, etc.) are retained as a fallback for legacy code paths and can be imported with `python -m src.db migrate`.
+
 ## Project Structure
 
 ```
 .
 ├── src/
-│   ├── optimisers/              # All optimisation algorithms (BaseOptimiser ABC)
-│   │   ├── base.py              # BaseOptimiser ABC
-│   │   ├── pygad_ga.py          # PyGAD GA + SLSQP + copula/CCC correlation
-│   │   ├── island_ga.py         # Parallel island-model GA
-│   │   ├── monte_carlo.py       # Random search (10M+ trials)
-│   │   └── mip.py               # Mixed integer programming (PuLP)
-│   ├── backtest.py              # Forward-walk backtesting orchestrator
-│   ├── backtest_types.py        # Dataclasses for backtest results
-│   ├── backtest_windows.py      # Window generation, data slicing
-│   ├── backtest_simulation.py   # Portfolio simulation (buy-and-hold)
-│   ├── backtest_statistics.py   # Hypothesis tests (t-test, Friedman)
-│   ├── forecast.py              # ARIMA return + GARCH variance forecasts
-│   ├── download_data.py         # Fetches prices from Yahoo Finance
-│   ├── data_loading.py          # DB-first / CSV-fallback price loading
-│   ├── data_quality.py          # Data validation and bad-ticker flagging
-│   ├── pipeline.py              # Orchestrates download, quality checks, forecasting
-│   ├── portfolio_utils.py       # OptimisationResult + DB save helper
-│   ├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
-│   ├── config.py                # Centralised algorithm/pipeline/universe configuration
-│   ├── db.py                    # SQLite database module (schema, migrations)
-│   ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance
-│   ├── metrics.py               # Sharpe, Sortino, Calmar, drawdown, DSR
-│   ├── weights.py               # SLSQP weight optimisation, risk-parity
-│   ├── returns.py               # Log returns, expected returns, variances
-│   ├── binary_io.py             # Binary data format for C++ optimiser
-│   └── logging_config.py        # Centralised logging setup
-├── cpp/
-│   ├── optimisation.cpp         # C++ parallel island GA (CPU + Metal GPU)
-│   ├── metal_fitness.h          # PIMPL header for GPU evaluator
-│   ├── metal_fitness.mm         # ObjC++ Metal compute shader implementation
-│   └── CMakeLists.txt           # Build config (auto-detects Metal on macOS)
-├── benchmark/                   # Benchmarking framework
-│   ├── adapters.py              # Adapter wrappers for all optimisation methods
-│   ├── runner.py                # Orchestrates parallel benchmark runs
-│   ├── analysis.py              # Result analysis and reporting
-│   └── results.py               # Data structures for benchmark results
-├── tests/                       # Unit and integration tests
-│
+│   ├── optimisers/                    # All optimisation algorithms
+│   │   ├── base.py                    # BaseOptimiser ABC + OptimisationResult
+│   │   ├── pygad_ga.py                # PyGAD GA + SLSQP + copula/CCC correlation
+│   │   ├── island_ga.py               # Parallel island-model GA
+│   │   ├── monte_carlo.py             # Random search (10M+ trials)
+│   │   └── mip.py                     # Mixed integer programming (PuLP)
+│   ├── backtest/                      # Forward-walk backtesting package
+│   │   ├── __main__.py                # `python -m src.backtest`
+│   │   ├── runner.py                  # Orchestrator: evaluate_window(), main()
+│   │   ├── types.py                   # Dataclasses: WindowSpec, PortfolioResult, ...
+│   │   ├── windows.py                 # Window generation, data slicing
+│   │   ├── simulation.py              # Portfolio simulation (buy-and-hold)
+│   │   └── statistics.py              # Hypothesis tests (t-test, Friedman)
+│   ├── download/                      # Yahoo Finance data download package
+│   │   ├── __main__.py                # `python -m src.download`
+│   │   ├── cli.py                     # Argparse CLI + logging
+│   │   ├── core.py                    # Download primitives, download_and_save
+│   │   ├── session.py                 # Proxy/Tor session management
+│   │   ├── validate.py                # Ticker validation with resumable caching
+│   │   └── workers.py                 # Multi-worker concurrent download
+│   ├── db/                            # SQLite database package
+│   │   ├── __main__.py                # `python -m src.db [migrate|backfill]`
+│   │   ├── schema.py                  # Schema DDL, version, seed data
+│   │   ├── connection.py              # Connection management
+│   │   ├── tickers.py                 # Ticker CRUD and metadata backfill
+│   │   ├── prices.py                  # Price storage/retrieval
+│   │   ├── forecasts.py               # Forecast storage/retrieval
+│   │   ├── optimisation.py            # Optimisation run persistence
+│   │   ├── backtest.py                # Backtest session/result persistence
+│   │   ├── bad_tickers.py             # Known-bad ticker cache
+│   │   ├── metadata.py                # Data source metadata
+│   │   └── migrations.py              # CSV → DB migration functions
+│   ├── forecast.py                    # ARIMA returns + GARCH variance forecasts
+│   ├── data_loading.py                # DB-first / CSV-fallback price loading
+│   ├── data_quality.py                # Data validation and bad-ticker flagging
+│   ├── pipeline.py                    # Orchestrates download, quality checks, forecasting
+│   ├── portfolio_utils.py             # OptimisationResult + DB save helper
+│   ├── group_constraints.py           # Group allocation constraints (country, sector)
+│   ├── config.py                      # Centralised configuration
+│   ├── universe.py                    # Security universe building (FinanceDatabase)
+│   ├── covariance.py                  # Ledoit-Wolf, copula-CCC, shrinkage covariance
+│   ├── metrics.py                     # Sharpe, Sortino, Calmar, drawdown, DSR
+│   ├── weights.py                     # SLSQP weight optimisation, risk-parity
+│   ├── returns.py                     # Log returns, expected returns, variances
+│   ├── binary_io.py                   # Binary data format for C++ optimiser
+│   ├── exceptions.py                  # Domain exception hierarchy
+│   └── logging_config.py              # Centralised logging setup
+├── cpp/                               # C++ parallel island GA (CPU + Metal GPU)
+│   ├── optimisation.cpp               # GA orchestrator, CLI, island dispatch
+│   ├── ga_types.h                     # GA types, operators, fitness (header-only)
+│   ├── data_io.{h,cpp}                # Data I/O and preprocessing
+│   ├── monte_carlo.{h,cpp}            # Monte Carlo worker
+│   ├── metal_fitness.h                # PIMPL header for GPU evaluator
+│   ├── metal_fitness.mm               # ObjC++ Metal compute shader implementation
+│   └── CMakeLists.txt                 # Build config (auto-detects Metal on macOS)
+├── benchmark/                         # Benchmarking framework
+│   ├── adapters.py                    # Adapter wrappers for all optimisation methods
+│   ├── runner.py                      # Parallel benchmark orchestration
+│   ├── analysis.py                    # Result analysis and reporting
+│   └── results.py                     # Data structures for benchmark results
+├── tests/                             # Unit and integration tests
+├── run_benchmark.py                   # Benchmark CLI entry point
+├── run_throughput_benchmark.py        # Throughput benchmark CLI entry point
 └── data/
-    ├── portfolio.db             # SQLite database (gitignored)
-    ├── Prices.csv               # Daily adjusted close prices (~287 MB)
-    ├── Securities.csv           # Ticker metadata from FinanceDatabase
-    ├── expected_returns.csv     # Output from forecast (ARIMA)
-    ├── variances.csv            # Output from forecast (GARCH)
+    ├── portfolio.db                   # SQLite database (gitignored, primary store)
+    ├── Prices.csv                     # Daily adjusted close (gitignored; legacy/regenerable)
+    ├── Securities.csv                 # Ticker metadata from FinanceDatabase
+    ├── expected_returns.csv           # Forecast output (ARIMA)
+    ├── variances.csv                  # Forecast output (GARCH)
     └── ...
 ```
+
+Console scripts (installed by `pip install -e .`, defined in `pyproject.toml`):
+
+| Command | Equivalent `python -m` |
+|---|---|
+| `portfolio-download`  | `python -m src.download` |
+| `portfolio-forecast`  | `python -m src.forecast` |
+| `portfolio-backtest`  | `python -m src.backtest` |
+| `portfolio-benchmark` | `python run_benchmark.py` |
 
 ## How It Works
 
@@ -88,13 +139,13 @@ Given the selected ETFs, `scipy.optimize.minimize` finds weights that maximise t
 ### Data Pipeline
 
 ```
-src.download_data         src.forecast             src.optimisers.pygad_ga
-Yahoo Finance  ──>  Prices.csv      ──>  expected_returns.csv  ──>  Portfolio
-                                    ──>  variances.csv              selection
-                                         (optional)                 + weights
+src.download              src.forecast             src.optimisers.pygad_ga
+Yahoo Finance  ──>  portfolio.db    ──>  expected_returns   ──>  Portfolio
+                    (+ Prices.csv)       variances              selection
+                                         (optional)             + weights
 ```
 
-1. **`src.download_data`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025). Supports equities, ETFs, and funds. Filters instruments with <90% data availability.
+1. **`src.download`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025) into `data/portfolio.db` (and optionally `data/Prices.csv`). Supports equities, ETFs, and funds. Filters instruments with <90% data availability.
 
 2. **`src.forecast`** -- Generates forward-looking inputs:
    - **Returns**: Auto-ARIMA per ETF, projects price 252 days out, computes log return.
@@ -200,14 +251,14 @@ After the GA selects ETFs, weights can be re-optimised using correlations estima
 
 The repo includes three alternative solvers beyond the primary PyGAD-based approach:
 
-| File | Method | Pros | Cons |
-|------|--------|------|------|
-| `optimisers/pygad_ga.py` | PyGAD genetic algorithm | Flexible constraints, good results | ~100s per portfolio |
-| `optimisers/island_ga.py` | Island-model parallel GA | Multi-threaded, 8000 population with migration | More complex, harder to tune |
-| `optimisers/monte_carlo.py` | Random search (10M+ trials) | Dead simple, embarrassingly parallel | Inefficient convergence |
-| `optimisers/mip.py` | Mixed integer linear program (PuLP) | Exact solution | Linear approximation of Sharpe Ratio |
+| File | Method | When to use | Pros | Cons |
+|------|--------|-------------|------|------|
+| `optimisers/pygad_ga.py` | PyGAD genetic algorithm | Default single-run; interactive use | Flexible constraints, good results | ~100s per portfolio |
+| `optimisers/island_ga.py` | Island-model parallel GA | Production benchmarks; large universes | Multi-threaded, 8000 population with migration; pairs with the C++/Metal binary for the fastest path | More complex, harder to tune |
+| `optimisers/monte_carlo.py` | Random search (10M+ trials) | Baseline for comparison only | Dead simple, embarrassingly parallel | Inefficient convergence |
+| `optimisers/mip.py` | Mixed integer linear program (PuLP) | Smoke-test an exact solution on a small universe | Exact solution | Linear approximation of Sharpe Ratio |
 
-All optimisers implement `BaseOptimiser.optimise(prices) -> OptimisationResult`. The PyGAD approach gives the best balance of result quality and complexity.
+All optimisers implement `BaseOptimiser.optimise(prices) -> OptimisationResult`. The PyGAD approach gives the best balance of result quality and complexity for single runs; the island GA is the fastest when benchmarking at scale.
 
 ## Backtest
 
@@ -243,6 +294,22 @@ Each portfolio is run forward for 252 days out-of-sample without rebalancing. Pe
 The t-statistics confirm the GA-selected portfolios significantly outperform random selection (t ~ -37 to -42, p effectively 0). The copula-based weight optimisation gives a slight edge (~3.06 vs 2.95) but is much slower.
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
+
+## Building the C++ Optimiser
+
+The `cpp/` directory contains a parallel island-model GA written in C++ that is the fastest path for large universes. On Apple Silicon, fitness evaluation can optionally run on the GPU via Metal compute shaders — CMake auto-detects Metal and compiles it in when available. On other platforms the binary compiles CPU-only and `--gpu` falls back with a warning.
+
+```bash
+# Requires CMake 3.14+. Eigen and csv-parser are header-only git submodules.
+git submodule update --init --recursive
+make build-cpp
+
+# Run the binary directly
+./cpp/optimisation --binary --data data.bin --time-budget 10
+./cpp/optimisation --binary --data data.bin --gpu --time-budget 10   # Apple Silicon
+```
+
+See `CLAUDE.md` for the Metal GPU architecture, correctness guarantees (FP32 search, FP64 final re-evaluation), and performance numbers.
 
 ## Methodology Notes
 
