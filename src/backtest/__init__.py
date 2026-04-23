@@ -34,3 +34,19 @@ from src.backtest.statistics import (
     aggregate_cross_window,
 )
 from src.backtest.runner import evaluate_window, main
+
+__all__ = [
+    # types
+    'WindowSpec', 'PortfolioResult', 'MethodResults', 'WindowResult',
+    # windows
+    'generate_windows', 'slice_window_data',
+    # simulation
+    'METRIC_NAMES', 'get_random_weights', 'optimal_weights',
+    'run_portfolio', 'get_statistics', 'fitness',
+    'create_random_portfolios', 'evaluate_portfolios', 'create_portfolio',
+    # statistics
+    'difference_of_means_hypothesis_test', 'paired_t_test',
+    'friedman_test', 'aggregate_cross_window',
+    # runner
+    'evaluate_window', 'main',
+]

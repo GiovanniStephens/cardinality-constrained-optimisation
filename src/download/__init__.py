@@ -33,3 +33,20 @@ from src.universe import (
     filter_unwanted_tickers,
     load_tickers,
 )
+
+__all__ = [
+    # core
+    'download_data', 'download_and_save',
+    # cli
+    'main',
+    # session
+    'set_proxy_state', 'is_rate_limit_error',
+    # validate
+    'validate_tickers',
+    # workers
+    'concurrent_download_and_save',
+    # universe (re-exports)
+    'ASSET_TYPE_MAP', 'ALL_ASSET_TYPES',
+    'get_equities', 'get_etfs', 'get_funds', 'get_cryptos', 'get_currencies',
+    'build_security_universe', 'filter_unwanted_tickers', 'load_tickers',
+]
