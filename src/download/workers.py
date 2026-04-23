@@ -69,6 +69,159 @@ def _reset_yf_singleton():
         pass
 
 
+def _batch_download_loop(
+    worker_id, tickers, start, end, batch_size, null_threshold,
+    result_queue, names, countries, sectors, industries,
+    category_groups, categories, max_retries, rate_limit_delay,
+    batch_timeout, circuit_breaker_threshold, max_rate_limit_delay,
+    circuit_breaker_max_trips, circuit_breaker_cooldown,
+    session_rotate_interval, tor_enabled,
+    download_fn, make_session_fn, rotate_tor_fn, build_metadata_fn,
+    is_rate_limit_fn, enable_sub_batch_splitting=False,
+    retry_splitting_fn=None, log=None,
+):
+    """Core batch-download-with-retry loop shared by thread and subprocess workers.
+
+    Parameterised by injected dependencies so it works in both thread
+    (module-level imports) and subprocess (absolute-import) contexts.
+    """
+    if log is None:
+        log = logger
+
+    batches = [
+        tickers[i:i + batch_size]
+        for i in range(0, len(tickers), batch_size)
+    ]
+
+    session = make_session_fn()
+    session_age = 0
+    consecutive_failures = 0
+    current_delay = rate_limit_delay
+    circuit_breaker_trip_count = 0
+
+    for batch_num, batch in enumerate(batches, 1):
+        batch_df = None
+        hit_rate_limit = False
+
+        if session_age >= session_rotate_interval:
+            session = make_session_fn()
+            _reset_yf_singleton()
+            session_age = 0
+            log.info("Worker %d: rotated session at batch %d",
+                     worker_id, batch_num)
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                batch_df = download_fn(batch, start, end, session=session)
+                if batch_df is not None and not batch_df.empty:
+                    break
+                if attempt < max_retries:
+                    hit_rate_limit = True
+                    session = make_session_fn()
+                    _reset_yf_singleton()
+                    session_age = 0
+                    if tor_enabled and rotate_tor_fn:
+                        rotate_tor_fn()
+                    jittered = rate_limit_delay * random.uniform(0.8, 1.2)
+                    log.warning(
+                        "Worker %d batch %d attempt %d/%d: no data, "
+                        "rotating session, retrying in %.0fs",
+                        worker_id, batch_num, attempt, max_retries, jittered)
+                    time.sleep(jittered)
+            except Exception as e:
+                if is_rate_limit_fn(e):
+                    hit_rate_limit = True
+                    session = make_session_fn()
+                    _reset_yf_singleton()
+                    session_age = 0
+                    if tor_enabled and rotate_tor_fn:
+                        rotate_tor_fn()
+                    current_delay = min(current_delay * 2, max_rate_limit_delay)
+                    jittered = current_delay * random.uniform(0.8, 1.2)
+                    log.warning(
+                        "Worker %d rate limited batch %d (attempt %d/%d), "
+                        "rotating session, backing off %.0fs",
+                        worker_id, batch_num, attempt, max_retries, jittered)
+                    time.sleep(jittered)
+                else:
+                    log.warning("Worker %d batch %d attempt %d/%d failed: %s",
+                                worker_id, batch_num, attempt, max_retries, e)
+                    if attempt < max_retries:
+                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        time.sleep(jittered)
+
+        session_age += 1
+
+        if batch_df is None or batch_df.empty:
+            # Try sub-batch splitting before giving up (thread path only)
+            if enable_sub_batch_splitting and retry_splitting_fn:
+                from src import config as _cfg
+                min_sub = _cfg.PIPELINE_MIN_SUB_BATCH_SIZE
+                if len(batch) > min_sub:
+                    delay_state = [current_delay, max_rate_limit_delay,
+                                   rate_limit_delay]
+                    split_df, still_failed = retry_splitting_fn(
+                        list(batch), start, end, batch_timeout,
+                        min_sub, delay_state)
+                    current_delay = delay_state[0]
+                    if split_df is not None and not split_df.empty:
+                        batch_df = split_df
+                        if still_failed:
+                            result_queue.put(('failed', still_failed, batch_num))
+                    else:
+                        batch_df = None
+
+            if batch_df is None or batch_df.empty:
+                result_queue.put(('failed', list(batch), batch_num))
+                consecutive_failures += 1
+
+                if consecutive_failures >= circuit_breaker_threshold:
+                    circuit_breaker_trip_count += 1
+                    if circuit_breaker_trip_count >= circuit_breaker_max_trips:
+                        log.error("Worker %d: circuit breaker tripped %d "
+                                  "times, aborting.",
+                                  worker_id, circuit_breaker_trip_count)
+                        break
+                    else:
+                        log.warning("Worker %d: circuit breaker trip %d/%d, "
+                                    "cooling down %.0fs",
+                                    worker_id, circuit_breaker_trip_count,
+                                    circuit_breaker_max_trips,
+                                    circuit_breaker_cooldown)
+                        time.sleep(circuit_breaker_cooldown)
+                        consecutive_failures = 0
+                        current_delay = max_rate_limit_delay
+                continue
+
+        # Reset on success
+        consecutive_failures = 0
+        if not hit_rate_limit:
+            current_delay = max(rate_limit_delay, current_delay * 0.5)
+
+        # Filter out tickers with too many nulls
+        threshold = int(len(batch_df) * null_threshold)
+        batch_df = batch_df.dropna(axis=1, thresh=threshold)
+        if batch_df.empty:
+            continue
+
+        metadata = build_metadata_fn(
+            batch_df.columns, names=names, countries=countries,
+            sectors=sectors, industries=industries,
+            category_groups=category_groups, categories=categories)
+
+        saved_list = list(batch_df.columns)
+        result_queue.put(('data', batch_df, metadata, saved_list, batch_num))
+
+        if tor_enabled and rotate_tor_fn:
+            from src.config import TOR_ROTATE_EVERY_N_BATCHES
+            if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
+                rotate_tor_fn()
+
+        if current_delay > 0 and batch_num < len(batches):
+            jittered = current_delay * random.uniform(0.8, 1.2)
+            time.sleep(jittered)
+
+
 def _subprocess_worker(worker_id, tickers, proxy_url, proxy_counter_start,
                        result_queue, start, end, batch_size, null_threshold,
                        names, countries, sectors, industries,
@@ -82,15 +235,11 @@ def _subprocess_worker(worker_id, tickers, proxy_url, proxy_counter_start,
     Runs in a child process with its own yfinance singleton, so crumb/cookie
     state is fully isolated from other workers.
     """
-    # In subprocess, we need to import via absolute paths since relative
-    # imports won't resolve the same way after fork.
     import src.download.core as _dd_sub
     import src.download.session as _sess_sub
 
-    # Set up process-local proxy state via the setter
     _sess_sub.set_proxy_state(proxy_url, tor_enabled, proxy_counter_start)
 
-    # Configure logging in subprocess
     logging.basicConfig(
         level=logging.INFO,
         format=f'%(asctime)s [%(levelname)s] Worker {worker_id}: %(message)s',
@@ -98,150 +247,28 @@ def _subprocess_worker(worker_id, tickers, proxy_url, proxy_counter_start,
     sub_logger = logging.getLogger(__name__)
 
     try:
-        batches = [
-            tickers[i:i + batch_size]
-            for i in range(0, len(tickers), batch_size)
-        ]
-
-        # One persistent session — singleton binds to it, fetches crumb once
-        session = _sess_sub._make_session()
-        session_age = 0
-
-        consecutive_failures = 0
-        current_delay = rate_limit_delay
-        circuit_breaker_trip_count = 0
-
-        for batch_num, batch in enumerate(batches, 1):
-            batch_df = None
-            hit_rate_limit = False
-
-            # Rotate session periodically to get a fresh IP + crumb
-            if session_age >= session_rotate_interval:
-                session = _sess_sub._make_session()
-                _reset_yf_singleton()
-                session_age = 0
-                sub_logger.info("Rotated session at batch %d", batch_num)
-
-            for attempt in range(1, max_retries + 1):
-                try:
-                    batch_df = _dd_sub._download_batch(
-                        batch, start, end, session=session)
-                    if batch_df is not None and not batch_df.empty:
-                        break
-                    if attempt < max_retries:
-                        hit_rate_limit = True
-                        # Burned IP won't recover — rotate to fresh proxy
-                        session = _sess_sub._make_session()
-                        _reset_yf_singleton()
-                        session_age = 0
-                        if tor_enabled:
-                            _sess_sub._rotate_tor_circuit()
-                        # Short fixed delay — fresh IP doesn't need long backoff
-                        jittered = rate_limit_delay * random.uniform(0.8, 1.2)
-                        sub_logger.warning(
-                            "Batch %d attempt %d/%d: no data, "
-                            "rotating session, retrying in %.0fs",
-                            batch_num, attempt, max_retries, jittered)
-                        time.sleep(jittered)
-                except Exception as e:
-                    is_rate_limit = _sess_sub.is_rate_limit_error(e)
-                    if is_rate_limit:
-                        hit_rate_limit = True
-                        session = _sess_sub._make_session()
-                        _reset_yf_singleton()
-                        session_age = 0
-                        if tor_enabled:
-                            _sess_sub._rotate_tor_circuit()
-                        current_delay = min(current_delay * 2,
-                                            max_rate_limit_delay)
-                        jittered = current_delay * random.uniform(0.8, 1.2)
-                        sub_logger.warning(
-                            "Rate limited batch %d (attempt %d/%d), "
-                            "rotating session, backing off %.0fs",
-                            batch_num, attempt, max_retries, jittered)
-                        time.sleep(jittered)
-                    else:
-                        sub_logger.warning(
-                            "Batch %d attempt %d/%d failed: %s",
-                            batch_num, attempt, max_retries, e)
-                        if attempt < max_retries:
-                            jittered = current_delay * random.uniform(0.8, 1.2)
-                            time.sleep(jittered)
-
-            session_age += 1
-
-            if batch_df is None or batch_df.empty:
-                result_queue.put(('failed', list(batch), batch_num))
-                consecutive_failures += 1
-
-                if consecutive_failures >= circuit_breaker_threshold:
-                    circuit_breaker_trip_count += 1
-                    if circuit_breaker_trip_count >= circuit_breaker_max_trips:
-                        sub_logger.error(
-                            "Circuit breaker tripped %d times, aborting.",
-                            circuit_breaker_trip_count)
-                        break
-                    else:
-                        sub_logger.warning(
-                            "Circuit breaker trip %d/%d, cooling down %.0fs",
-                            circuit_breaker_trip_count,
-                            circuit_breaker_max_trips,
-                            circuit_breaker_cooldown)
-                        time.sleep(circuit_breaker_cooldown)
-                        consecutive_failures = 0
-                        current_delay = max_rate_limit_delay
-                continue
-
-            # Reset on success
-            consecutive_failures = 0
-            if not hit_rate_limit:
-                current_delay = max(rate_limit_delay, current_delay * 0.5)
-
-            # Filter out tickers with too many nulls
-            threshold = int(len(batch_df) * null_threshold)
-            batch_df = batch_df.dropna(axis=1, thresh=threshold)
-            if batch_df.empty:
-                continue
-
-            # Build per-batch metadata
-            metadata = {}
-            if names:
-                metadata['names'] = {t: names[t] for t in batch_df.columns
-                                     if t in names}
-            if countries:
-                metadata['countries'] = {t: countries[t]
-                                         for t in batch_df.columns
-                                         if t in countries}
-            if sectors:
-                metadata['sectors'] = {t: sectors[t] for t in batch_df.columns
-                                       if t in sectors}
-            if industries:
-                metadata['industries'] = {t: industries[t]
-                                          for t in batch_df.columns
-                                          if t in industries}
-            if category_groups:
-                metadata['category_groups'] = {t: category_groups[t]
-                                               for t in batch_df.columns
-                                               if t in category_groups}
-            if categories:
-                metadata['categories'] = {t: categories[t]
-                                          for t in batch_df.columns
-                                          if t in categories}
-
-            saved_list = list(batch_df.columns)
-            result_queue.put(('data', batch_df, metadata, saved_list,
-                              batch_num))
-
-            if tor_enabled:
-                from src.config import TOR_ROTATE_EVERY_N_BATCHES
-                if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
-                    _sess_sub._rotate_tor_circuit()
-
-            if current_delay > 0 and batch_num < len(batches):
-                jittered = current_delay * random.uniform(0.8, 1.2)
-                time.sleep(jittered)
+        _batch_download_loop(
+            worker_id=worker_id, tickers=tickers, start=start, end=end,
+            batch_size=batch_size, null_threshold=null_threshold,
+            result_queue=result_queue, names=names, countries=countries,
+            sectors=sectors, industries=industries,
+            category_groups=category_groups, categories=categories,
+            max_retries=max_retries, rate_limit_delay=rate_limit_delay,
+            batch_timeout=batch_timeout,
+            circuit_breaker_threshold=circuit_breaker_threshold,
+            max_rate_limit_delay=max_rate_limit_delay,
+            circuit_breaker_max_trips=circuit_breaker_max_trips,
+            circuit_breaker_cooldown=circuit_breaker_cooldown,
+            session_rotate_interval=session_rotate_interval,
+            tor_enabled=tor_enabled,
+            download_fn=_dd_sub._download_batch,
+            make_session_fn=_sess_sub._make_session,
+            rotate_tor_fn=_sess_sub._rotate_tor_circuit,
+            build_metadata_fn=_dd_sub._build_batch_metadata,
+            is_rate_limit_fn=_sess_sub.is_rate_limit_error,
+            log=sub_logger,
+        )
     finally:
-        # Always send sentinel so the DB writer never hangs
         result_queue.put(None)
 
 
@@ -253,174 +280,35 @@ def _worker_download(worker_id, tickers, start, end, batch_size,
                      circuit_breaker_max_trips, circuit_breaker_cooldown):
     """Per-worker download loop (thread-based). Puts results onto result_queue.
 
-    Each worker creates ONE persistent session at startup. yfinance
-    caches the crumb token on first use, avoiding repeated hits to
-    Yahoo's crumb endpoint (which is aggressively rate-limited).
-
     Always sends a sentinel (None) when done, even on exception, so the
     DB writer thread never hangs waiting for a worker that crashed.
     """
     from src import config
 
     try:
-        batches = [
-            tickers[i:i + batch_size]
-            for i in range(0, len(tickers), batch_size)
-        ]
-
-        # One persistent session per worker — crumb fetched once and reused
-        session = _sess._make_session()
-        session_age = 0  # batches since session was created
-
-        consecutive_failures = 0
-        current_delay = rate_limit_delay
-        circuit_breaker_trip_count = 0
-
-        for batch_num, batch in enumerate(batches, 1):
-            batch_df = None
-            hit_rate_limit = False
-
-            # Rotate session periodically to get a fresh IP + crumb
-            if session_age >= config.PIPELINE_SESSION_ROTATE_INTERVAL:
-                session = _sess._make_session()
-                _reset_yf_singleton()
-                session_age = 0
-                logger.info("Worker %d: rotated session at batch %d",
-                            worker_id, batch_num)
-
-            for attempt in range(1, max_retries + 1):
-                try:
-                    batch_df = _dd._download_batch(
-                        batch, start, end, session=session)
-                    if batch_df is not None and not batch_df.empty:
-                        break
-                    if attempt < max_retries:
-                        hit_rate_limit = True
-                        session = _sess._make_session()
-                        _reset_yf_singleton()
-                        session_age = 0
-                        if _sess._tor_enabled:
-                            _sess._rotate_tor_circuit()
-                        jittered = rate_limit_delay * random.uniform(0.8, 1.2)
-                        logger.warning("Worker %d batch %d attempt %d/%d: no data, "
-                                       "rotating session, retrying in %.0fs",
-                                       worker_id, batch_num, attempt, max_retries,
-                                       jittered)
-                        time.sleep(jittered)
-                except Exception as e:
-                    is_rate_limit = _sess.is_rate_limit_error(e)
-                    if is_rate_limit:
-                        hit_rate_limit = True
-                        # Session's IP is burned — rotate to fresh one
-                        session = _sess._make_session()
-                        _reset_yf_singleton()
-                        session_age = 0
-                        if _sess._tor_enabled:
-                            _sess._rotate_tor_circuit()
-                        current_delay = min(current_delay * 2, max_rate_limit_delay)
-                        jittered = current_delay * random.uniform(0.8, 1.2)
-                        logger.warning("Worker %d rate limited batch %d "
-                                       "(attempt %d/%d), rotating session, "
-                                       "backing off %.0fs",
-                                       worker_id, batch_num, attempt,
-                                       max_retries, jittered)
-                        time.sleep(jittered)
-                    else:
-                        logger.warning("Worker %d batch %d attempt %d/%d failed: %s",
-                                       worker_id, batch_num, attempt, max_retries, e)
-                        if attempt < max_retries:
-                            jittered = current_delay * random.uniform(0.8, 1.2)
-                            time.sleep(jittered)
-
-            session_age += 1
-
-            if batch_df is None or batch_df.empty:
-                # Try sub-batch splitting before giving up
-                min_sub = config.PIPELINE_MIN_SUB_BATCH_SIZE
-                if len(batch) > min_sub:
-                    delay_state = [current_delay, max_rate_limit_delay,
-                                   rate_limit_delay]
-                    split_df, still_failed = _val._retry_with_splitting(
-                        list(batch), start, end, batch_timeout,
-                        min_sub, delay_state)
-                    current_delay = delay_state[0]
-                    if split_df is not None and not split_df.empty:
-                        batch_df = split_df
-                        if still_failed:
-                            result_queue.put(('failed', still_failed, batch_num))
-                    else:
-                        batch_df = None
-
-                if batch_df is None or batch_df.empty:
-                    result_queue.put(('failed', list(batch), batch_num))
-                    consecutive_failures += 1
-
-                    if consecutive_failures >= circuit_breaker_threshold:
-                        circuit_breaker_trip_count += 1
-                        if circuit_breaker_trip_count >= circuit_breaker_max_trips:
-                            logger.error("Worker %d: circuit breaker tripped %d "
-                                         "times, aborting.",
-                                         worker_id, circuit_breaker_trip_count)
-                            break
-                        else:
-                            logger.warning("Worker %d: circuit breaker trip %d/%d, "
-                                           "cooling down %.0fs",
-                                           worker_id, circuit_breaker_trip_count,
-                                           circuit_breaker_max_trips,
-                                           circuit_breaker_cooldown)
-                            time.sleep(circuit_breaker_cooldown)
-                            consecutive_failures = 0
-                            current_delay = max_rate_limit_delay
-                    continue
-
-            # Reset on success
-            consecutive_failures = 0
-            if not hit_rate_limit:
-                current_delay = max(rate_limit_delay, current_delay * 0.5)
-
-            # Filter out tickers with too many nulls
-            threshold = int(len(batch_df) * null_threshold)
-            batch_df = batch_df.dropna(axis=1, thresh=threshold)
-            if batch_df.empty:
-                continue
-
-            # Build per-batch metadata
-            metadata = {}
-            if names:
-                metadata['names'] = {t: names[t] for t in batch_df.columns
-                                     if t in names}
-            if countries:
-                metadata['countries'] = {t: countries[t] for t in batch_df.columns
-                                         if t in countries}
-            if sectors:
-                metadata['sectors'] = {t: sectors[t] for t in batch_df.columns
-                                       if t in sectors}
-            if industries:
-                metadata['industries'] = {t: industries[t]
-                                          for t in batch_df.columns
-                                          if t in industries}
-            if category_groups:
-                metadata['category_groups'] = {t: category_groups[t]
-                                               for t in batch_df.columns
-                                               if t in category_groups}
-            if categories:
-                metadata['categories'] = {t: categories[t]
-                                          for t in batch_df.columns
-                                          if t in categories}
-
-            saved_list = list(batch_df.columns)
-            result_queue.put(('data', batch_df, metadata, saved_list, batch_num))
-
-            if _sess._tor_enabled:
-                from src.config import TOR_ROTATE_EVERY_N_BATCHES
-                if batch_num % TOR_ROTATE_EVERY_N_BATCHES == 0:
-                    _sess._rotate_tor_circuit()
-
-            if current_delay > 0 and batch_num < len(batches):
-                jittered = current_delay * random.uniform(0.8, 1.2)
-                time.sleep(jittered)
+        _batch_download_loop(
+            worker_id=worker_id, tickers=tickers, start=start, end=end,
+            batch_size=batch_size, null_threshold=null_threshold,
+            result_queue=result_queue, names=names, countries=countries,
+            sectors=sectors, industries=industries,
+            category_groups=category_groups, categories=categories,
+            max_retries=max_retries, rate_limit_delay=rate_limit_delay,
+            batch_timeout=batch_timeout,
+            circuit_breaker_threshold=circuit_breaker_threshold,
+            max_rate_limit_delay=max_rate_limit_delay,
+            circuit_breaker_max_trips=circuit_breaker_max_trips,
+            circuit_breaker_cooldown=circuit_breaker_cooldown,
+            session_rotate_interval=config.PIPELINE_SESSION_ROTATE_INTERVAL,
+            tor_enabled=_sess._get_state('_tor_enabled'),
+            download_fn=_dd._download_batch,
+            make_session_fn=_sess._make_session,
+            rotate_tor_fn=_sess._rotate_tor_circuit,
+            build_metadata_fn=_dd._build_batch_metadata,
+            is_rate_limit_fn=_sess.is_rate_limit_error,
+            enable_sub_batch_splitting=True,
+            retry_splitting_fn=_val._retry_with_splitting,
+        )
     finally:
-        # Always send sentinel so the DB writer thread never hangs
         result_queue.put(None)
 
 
@@ -520,16 +408,7 @@ def concurrent_download_and_save(
     if circuit_breaker_cooldown is None:
         circuit_breaker_cooldown = config.PIPELINE_CIRCUIT_BREAKER_COOLDOWN
 
-    # Deduplicate
-    seen = set()
-    deduped = []
-    for t in tickers:
-        if t not in seen:
-            seen.add(t)
-            deduped.append(t)
-    if len(deduped) < len(tickers):
-        logger.info("Removed %d duplicate tickers", len(tickers) - len(deduped))
-    tickers = deduped
+    tickers = _dd._deduplicate_tickers(tickers)
 
     use_subprocesses = _sess._proxy_url is not None and n_workers > 1
     if use_subprocesses:

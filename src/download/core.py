@@ -42,6 +42,40 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _deduplicate_tickers(tickers: list[str]) -> list[str]:
+    """Return a deduplicated ticker list preserving original order."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for t in tickers:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+    if len(deduped) < len(tickers):
+        logger.info("Removed %d duplicate tickers", len(tickers) - len(deduped))
+    return deduped
+
+
+def _build_batch_metadata(
+    columns,
+    *, names=None, countries=None, sectors=None,
+    industries=None, category_groups=None, categories=None,
+) -> dict:
+    """Filter metadata dicts to only include tickers present in *columns*."""
+    metadata: dict = {}
+    for key, source in [
+        ('names', names), ('countries', countries),
+        ('sectors', sectors), ('industries', industries),
+        ('category_groups', category_groups), ('categories', categories),
+    ]:
+        if source:
+            metadata[key] = {t: source[t] for t in columns if t in source}
+    return metadata
+
+
+# ---------------------------------------------------------------------------
 # Price downloading
 # ---------------------------------------------------------------------------
 
@@ -233,16 +267,7 @@ def download_and_save(
     if circuit_breaker_cooldown is None:
         circuit_breaker_cooldown = config.PIPELINE_CIRCUIT_BREAKER_COOLDOWN
 
-    # Deduplicate ticker list (P6)
-    seen = set()
-    deduped = []
-    for t in tickers:
-        if t not in seen:
-            seen.add(t)
-            deduped.append(t)
-    if len(deduped) < len(tickers):
-        logger.info("Removed %d duplicate tickers", len(tickers) - len(deduped))
-    tickers = deduped
+    tickers = _deduplicate_tickers(tickers)
 
     batches = [
         tickers[i : i + batch_size]
@@ -401,33 +426,13 @@ def download_and_save(
                 pbar.update(1)
             continue
 
-        # Build per-batch metadata dicts
-        batch_names = None
-        if names:
-            batch_names = {t: names[t] for t in batch_df.columns if t in names}
-        batch_countries = None
-        if countries:
-            batch_countries = {t: countries[t] for t in batch_df.columns if t in countries}
-        batch_sectors = None
-        if sectors:
-            batch_sectors = {t: sectors[t] for t in batch_df.columns if t in sectors}
-        batch_industries = None
-        if industries:
-            batch_industries = {t: industries[t] for t in batch_df.columns if t in industries}
-        batch_cat_groups = None
-        if category_groups:
-            batch_cat_groups = {t: category_groups[t] for t in batch_df.columns
-                                if t in category_groups}
-        batch_categories = None
-        if categories:
-            batch_categories = {t: categories[t] for t in batch_df.columns
-                                if t in categories}
+        metadata = _build_batch_metadata(
+            batch_df.columns, names=names, countries=countries,
+            sectors=sectors, industries=industries,
+            category_groups=category_groups, categories=categories)
 
         db.save_prices(conn, batch_df, exchange=exchange, asset_type=asset_type,
-                       names=batch_names, countries=batch_countries,
-                       sectors=batch_sectors, industries=batch_industries,
-                       category_groups=batch_cat_groups,
-                       categories=batch_categories)
+                       **metadata)
         saved_tickers_list = list(batch_df.columns)
         total_saved += len(saved_tickers_list)
 
