@@ -1,4 +1,4 @@
-"""Tests for src.download_validate — ticker validation and batch retry-with-splitting."""
+"""Tests for src.download.validate — ticker validation and batch retry-with-splitting."""
 
 import json
 import os

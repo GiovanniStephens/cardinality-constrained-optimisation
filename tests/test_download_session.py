@@ -1,4 +1,4 @@
-"""Tests for src.download_session — session management, proxy, and Tor circuit control."""
+"""Tests for src.download.session — session management, proxy, and Tor circuit control."""
 
 import logging
 import unittest
@@ -153,14 +153,10 @@ class TestGetState(unittest.TestCase):
 
     def tearDown(self):
         sess._proxy_url = self._orig_proxy
-        # Clean up any mock attributes on download.core
         import sys
         core = sys.modules.get('src.download.core')
         if core is not None and '_proxy_url' in core.__dict__:
             del core.__dict__['_proxy_url']
-        dd = sys.modules.get('src.download_data')
-        if dd is not None and '_proxy_url' in dd.__dict__:
-            del dd.__dict__['_proxy_url']
 
     def test_get_state_fallback(self):
         """_get_state reads from src.download.core.__dict__ first,

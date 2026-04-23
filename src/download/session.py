@@ -42,19 +42,12 @@ def _get_state(name):
     """Return the current value of a session state variable.
 
     Checks ``src.download.core``'s own ``__dict__`` first (tests may set
-    attributes there directly), then checks ``src.download_data``'s
-    ``__dict__`` for backward compatibility, then falls back to this
-    module's global.
+    attributes there directly), then falls back to this module's global.
     """
     import sys
-    # Check the new canonical module first
     core = sys.modules.get('src.download.core')
     if core is not None and name in core.__dict__:
         return core.__dict__[name]
-    # Backward compat: tests may mock on the old module path
-    dd = sys.modules.get('src.download_data')
-    if dd is not None and name in dd.__dict__:
-        return dd.__dict__[name]
     return globals()[name]
 
 
