@@ -106,18 +106,32 @@ def _download_batch(tickers: list[str], start: str, end: str,
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
     from . import session as _sess
     tickers_str = " ".join(tickers)
+    proxy_on = bool(_sess._get_state('_proxy_url'))
     if session is None:
         session = _sess._make_session()
     # Disable yfinance internal threading when using a proxy — curl_cffi
     # sessions are not safe for concurrent use across yfinance's threads.
     # Our external workers already provide download parallelism.
-    yf_threads = False if _sess._get_state('_proxy_url') else DOWNLOAD_THREADS
+    yf_threads = False if proxy_on else DOWNLOAD_THREADS
     # Clear yfinance's per-ticker error dict so _classify_empty_batch()
     # only sees errors from this call.
     try:
         yf.shared._ERRORS.clear()
     except Exception:
         pass
+    # When a rotating proxy is active, force yfinance to drop its cached
+    # crumb/cookie before each call. The crumb is Yahoo's per-client
+    # identifier — reusing it across rotated IPs lets Yahoo throttle us
+    # as one client no matter which exit IP is showing up. Without this
+    # reset, 50 ticker requests share one crumb and get rate-limited
+    # regardless of IP rotation.
+    if proxy_on:
+        try:
+            import yfinance.data as _yd
+            with _yd.SingletonMeta._lock:
+                _yd.SingletonMeta._instances.pop(_yd.YfData, None)
+        except Exception:
+            pass
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
         threads=yf_threads, timeout=DOWNLOAD_TIMEOUT, session=session,

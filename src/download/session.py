@@ -31,11 +31,28 @@ def set_proxy_state(proxy_url, tor_enabled, counter_start):
 
     Called by subprocess workers (in download_workers) after fork to
     initialise this module's state in the child process.
+
+    When a proxy is configured, also disables yfinance's on-disk cookie
+    cache. yfinance persists a Yahoo session cookie to
+    ~/Library/Caches/py-yfinance/cookies.db and reloads it on every
+    new YfData instance — which defeats IP rotation because Yahoo
+    ties our "client identity" to the cached cookie (and therefore the
+    crumb token derived from it). With the cache disabled, every yf
+    call fetches a fresh cookie through whatever proxy IP is active,
+    so each request looks like a distinct client to Yahoo.
     """
     global _proxy_url, _tor_enabled, _proxy_session_counter
     _proxy_url = proxy_url
     _tor_enabled = tor_enabled
     _proxy_session_counter = counter_start
+
+    if proxy_url:
+        try:
+            import yfinance.data as _yd
+            _yd.YfData._load_cookie_curlCffi = lambda self: False
+            _yd.YfData._save_cookie_curlCffi = lambda self: False
+        except Exception:
+            pass
 
 
 def _get_state(name):
