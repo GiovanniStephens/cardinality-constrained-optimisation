@@ -79,6 +79,7 @@ def _batch_download_loop(
     download_fn, make_session_fn, rotate_tor_fn, build_metadata_fn,
     is_rate_limit_fn, enable_sub_batch_splitting=False,
     retry_splitting_fn=None, log=None,
+    classify_empty_fn=None,
 ):
     """Core batch-download-with-retry loop shared by thread and subprocess workers.
 
@@ -102,6 +103,7 @@ def _batch_download_loop(
     for batch_num, batch in enumerate(batches, 1):
         batch_df = None
         hit_rate_limit = False
+        data_level_empty = False  # set when classifier says 'no_data'
 
         if session_age >= session_rotate_interval:
             session = make_session_fn()
@@ -114,6 +116,12 @@ def _batch_download_loop(
             try:
                 batch_df = download_fn(batch, start, end, session=session)
                 if batch_df is not None and not batch_df.empty:
+                    break
+                # Empty result: classify as rate-limit vs data-level.
+                if classify_empty_fn is not None and classify_empty_fn() == 'no_data':
+                    data_level_empty = True
+                    log.info("Worker %d batch %d: no data (data-level); "
+                             "skipping without retry.", worker_id, batch_num)
                     break
                 if attempt < max_retries:
                     hit_rate_limit = True
@@ -173,7 +181,11 @@ def _batch_download_loop(
 
             if batch_df is None or batch_df.empty:
                 result_queue.put(('failed', list(batch), batch_num))
-                consecutive_failures += 1
+                # Data-level empties (delisted tickers) must not feed the
+                # circuit breaker — otherwise a run of dead tickers looks
+                # like a rate-limit cascade.
+                if not data_level_empty:
+                    consecutive_failures += 1
 
                 if consecutive_failures >= circuit_breaker_threshold:
                     circuit_breaker_trip_count += 1
@@ -266,6 +278,7 @@ def _subprocess_worker(worker_id, tickers, proxy_url, proxy_counter_start,
             rotate_tor_fn=_sess_sub._rotate_tor_circuit,
             build_metadata_fn=_dd_sub._build_batch_metadata,
             is_rate_limit_fn=_sess_sub.is_rate_limit_error,
+            classify_empty_fn=_dd_sub._classify_empty_batch,
             log=sub_logger,
         )
     finally:
@@ -305,6 +318,7 @@ def _worker_download(worker_id, tickers, start, end, batch_size,
             rotate_tor_fn=_sess._rotate_tor_circuit,
             build_metadata_fn=_dd._build_batch_metadata,
             is_rate_limit_fn=_sess.is_rate_limit_error,
+            classify_empty_fn=_dd._classify_empty_batch,
             enable_sub_batch_splitting=True,
             retry_splitting_fn=_val._retry_with_splitting,
         )

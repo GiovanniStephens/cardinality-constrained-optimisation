@@ -171,7 +171,7 @@ DOWNLOAD_BACKOFF_BASE = 2  # seconds, for exponential backoff
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 20             # was 50 — full 11yr download needs smaller batches
-PIPELINE_PROXY_BATCH_SIZE = 5        # smaller batches via proxy (Yahoo rate-limits large requests)
+PIPELINE_PROXY_BATCH_SIZE = 1        # one ticker per session — proxy rotates IPs per session, not per request
 PIPELINE_RATE_LIMIT_DELAY = 2.0    # was 4.0 — smaller batches tolerate shorter delays
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space

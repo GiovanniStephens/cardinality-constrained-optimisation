@@ -79,6 +79,28 @@ def _build_batch_metadata(
 # Price downloading
 # ---------------------------------------------------------------------------
 
+_RATE_LIMIT_SIGNALS = ('too many requests', 'rate limit', 'yfratelimit', '429')
+
+
+def _classify_empty_batch() -> str:
+    """Inspect yfinance._ERRORS to distinguish rate-limits from genuine no-data.
+
+    Returns 'rate_limit' if any per-ticker error contains a throttling signal,
+    'no_data' otherwise (all errors are data-level, or no per-ticker info at
+    all — empty _ERRORS means yfinance didn't log a rate-limit, which for a
+    fresh-IP request is a reliable signal the data genuinely does not exist).
+    """
+    try:
+        errors = dict(getattr(yf.shared, '_ERRORS', {}))
+    except Exception:
+        return 'no_data'
+    for err in errors.values():
+        low = (err or '').lower()
+        if any(sig in low for sig in _RATE_LIMIT_SIGNALS):
+            return 'rate_limit'
+    return 'no_data'
+
+
 def _download_batch(tickers: list[str], start: str, end: str,
                     session: Any = None) -> Optional[pd.DataFrame]:
     """Download a single batch from yfinance. Returns wide DataFrame or None."""
@@ -90,6 +112,12 @@ def _download_batch(tickers: list[str], start: str, end: str,
     # sessions are not safe for concurrent use across yfinance's threads.
     # Our external workers already provide download parallelism.
     yf_threads = False if _sess._get_state('_proxy_url') else DOWNLOAD_THREADS
+    # Clear yfinance's per-ticker error dict so _classify_empty_batch()
+    # only sees errors from this call.
+    try:
+        yf.shared._ERRORS.clear()
+    except Exception:
+        pass
     prices = yf.download(
         tickers_str, interval="1d", group_by="ticker", start=start, end=end,
         threads=yf_threads, timeout=DOWNLOAD_TIMEOUT, session=session,
@@ -108,10 +136,11 @@ def _download_batch(tickers: list[str], start: str, end: str,
     skipped = []
     for ticker in tickers:
         try:
-            if len(tickers) == 1:
-                batch_prices[ticker] = prices["Close"].tolist()
-            else:
-                batch_prices[ticker] = prices[ticker]["Close"].tolist()
+            # With group_by="ticker", yfinance returns a MultiIndex DataFrame
+            # with the ticker as the top-level column — regardless of whether
+            # the batch has one ticker or many. Access via prices[ticker]["Close"]
+            # in both cases.
+            batch_prices[ticker] = prices[ticker]["Close"].tolist()
         except (KeyError, TypeError):
             skipped.append(ticker)
     # Log aggregated summary instead of per-ticker warnings (P7)
@@ -295,13 +324,23 @@ def download_and_save(
                         batch_num, len(batches), len(batch))
         batch_df = None
         hit_rate_limit = False
+        data_level_empty = False  # classifier said 'no_data' (don't feed circuit breaker)
         for attempt in range(1, max_retries + 1):
             try:
                 batch_df = _download_batch_with_timeout(
                     batch, start, end, batch_timeout)
                 if batch_df is not None and not batch_df.empty:
                     break
-                # Empty result likely means Yahoo silently rate-limited
+                # Empty result: rate-limited OR legitimately no data.
+                classification = _classify_empty_batch()
+                if classification == 'no_data':
+                    # All tickers errored data-level (delisted, no timezone).
+                    # No point retrying; a new IP wouldn't help.
+                    data_level_empty = True
+                    logger.info("Batch %d: no data (data-level, not rate-limit); "
+                                "skipping without backoff.", batch_num)
+                    break
+                # Rate-limited (or indeterminate — conservative backoff).
                 if attempt < max_retries:
                     hit_rate_limit = True
                     if _sess._get_state('_tor_enabled'):
@@ -371,7 +410,10 @@ def download_and_save(
                 failed_batches.append({
                     'batch_num': batch_num, 'tickers': list(batch),
                 })
-                consecutive_failures += 1
+                # Data-level empties (delisted tickers) must not feed the
+                # circuit breaker — a run of dead tickers is not a rate-limit.
+                if not data_level_empty:
+                    consecutive_failures += 1
                 if on_batch_failed:
                     on_batch_failed(list(batch), batch_num)
                 if pbar:
