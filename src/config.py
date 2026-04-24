@@ -211,6 +211,11 @@ ACCEPT_LANGUAGE_POOL = [
 # the session legitimate Akamai cookies + establishes "this IP browsed
 # the site" rather than "this IP only calls query1 endpoints".
 WARMUP_URL = 'https://finance.yahoo.com/'
+# Use Yahoo's v8 chart endpoint directly, bypassing yfinance's cookie+crumb
+# dance. Cuts HTTP requests per ticker from 3 (cookie + crumb + chart) to 1
+# (chart). Probe-validated 2026-04 — endpoint serves public daily data
+# without auth. When False, falls back to the yfinance code path.
+DOWNLOAD_USE_DIRECT_V8 = True
 
 # ─── Ticker validation pass ──────────────────────────────────────────────
 # Pre-download validation: download 1 week of data per ticker to check if

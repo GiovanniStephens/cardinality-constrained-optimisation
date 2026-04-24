@@ -101,14 +101,115 @@ def _classify_empty_batch() -> str:
     return 'no_data'
 
 
+_RATE_LIMIT_STATUSES = frozenset({429})
+
+
+def _download_batch_direct_v8(tickers: list[str], start: str, end: str,
+                              session: Any) -> Optional[pd.DataFrame]:
+    """Download a batch by calling Yahoo's v8 chart API directly.
+
+    Bypasses yfinance entirely — no cookie bootstrap, no crumb fetch.
+    Probe confirmed the endpoint serves daily adj-close data without auth
+    for public tickers as of 2026-04.
+
+    Returns the same wide DataFrame shape as the yfinance path
+    (index = DatetimeIndex, columns = tickers, values = adj close), so
+    downstream processing in download_and_save doesn't change.
+
+    Rate-limit signalling: populates yf.shared._ERRORS with a string
+    containing 'Too Many Requests' on HTTP 429, so the existing
+    _classify_empty_batch() logic sees it the same way.
+    """
+    import pandas as _pd
+    from datetime import datetime as _dt
+
+    # Accept either ISO date strings or datetime-like; convert to unix secs
+    def _to_unix(x):
+        if isinstance(x, (int, float)):
+            return int(x)
+        if isinstance(x, str):
+            return int(_pd.Timestamp(x).timestamp())
+        if isinstance(x, _dt):
+            return int(x.timestamp())
+        return int(_pd.Timestamp(x).timestamp())
+
+    period1 = _to_unix(start)
+    period2 = _to_unix(end)
+
+    # Clear previous-call errors so classifier only sees this call's state
+    try:
+        yf.shared._ERRORS.clear()
+    except Exception:
+        pass
+
+    per_ticker_series: dict[str, _pd.Series] = {}
+    for ticker in tickers:
+        url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}'
+               f'?period1={period1}&period2={period2}&interval=1d')
+        try:
+            r = session.get(url, timeout=DOWNLOAD_TIMEOUT)
+        except Exception as e:
+            yf.shared._ERRORS[ticker] = f'transport error: {type(e).__name__}: {e}'
+            continue
+        if r.status_code in _RATE_LIMIT_STATUSES:
+            yf.shared._ERRORS[ticker] = f'Too Many Requests. Rate limited (HTTP {r.status_code}).'
+            continue
+        if r.status_code != 200:
+            yf.shared._ERRORS[ticker] = f'HTTP {r.status_code}: possibly delisted; no price data found'
+            continue
+        try:
+            body = r.json()
+        except Exception:
+            yf.shared._ERRORS[ticker] = 'non-json response'
+            continue
+        chart = body.get('chart') or {}
+        err = chart.get('error')
+        if err:
+            msg = err.get('description') or err.get('code', 'unknown')
+            yf.shared._ERRORS[ticker] = f'possibly delisted; {msg}'
+            continue
+        result_list = chart.get('result') or []
+        if not result_list:
+            yf.shared._ERRORS[ticker] = 'possibly delisted; no price data found'
+            continue
+        result = result_list[0]
+        ts = result.get('timestamp') or []
+        indicators = result.get('indicators') or {}
+        # Prefer adjclose (split/dividend-adjusted) to match yfinance semantics
+        adj_list = indicators.get('adjclose') or []
+        adjclose = adj_list[0].get('adjclose') if adj_list else None
+        if not ts or not adjclose or len(ts) != len(adjclose):
+            yf.shared._ERRORS[ticker] = 'possibly delisted; no price data found'
+            continue
+        # Convert unix seconds to dates (daily granularity)
+        idx = _pd.to_datetime(ts, unit='s').normalize()
+        per_ticker_series[ticker] = _pd.Series(adjclose, index=idx, name=ticker)
+
+    if not per_ticker_series:
+        return None
+    # Combine into wide DataFrame — union of all dates, aligned
+    df = _pd.concat(per_ticker_series.values(), axis=1, join='outer')
+    df.columns = list(per_ticker_series.keys())
+    return df
+
+
 def _download_batch(tickers: list[str], start: str, end: str,
                     session: Any = None) -> Optional[pd.DataFrame]:
-    """Download a single batch from yfinance. Returns wide DataFrame or None."""
+    """Download a single batch. Returns wide DataFrame or None.
+
+    When config.DOWNLOAD_USE_DIRECT_V8 is true and a proxy is active,
+    routes to _download_batch_direct_v8 which bypasses yfinance entirely
+    (1 HTTP per ticker instead of 3). Otherwise falls back to the
+    yfinance code path.
+    """
     from . import session as _sess
-    tickers_str = " ".join(tickers)
+    from src import config as _cfg
     proxy_on = bool(_sess._get_state('_proxy_url'))
     if session is None:
         session = _sess._make_session()
+    if proxy_on and getattr(_cfg, 'DOWNLOAD_USE_DIRECT_V8', False):
+        return _download_batch_direct_v8(tickers, start, end, session)
+    tickers_str = " ".join(tickers)
     # Disable yfinance internal threading when using a proxy — curl_cffi
     # sessions are not safe for concurrent use across yfinance's threads.
     # Our external workers already provide download parallelism.
