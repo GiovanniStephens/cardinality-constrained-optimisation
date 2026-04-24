@@ -105,6 +105,14 @@ def main():
     parser.add_argument('--rate-limit', type=float, default=None,
                         help='Seconds to wait between batches '
                              '(default: from config).')
+    parser.add_argument('--proxy', default=None, metavar='URL',
+                        help='HTTP(S) proxy URL (e.g. http://user-123:pass@p.webshare.io:80). '
+                             'If omitted, falls back to the WEBSHARE_PROXY_URL env var. '
+                             'Residential rotating proxies with a numeric username suffix '
+                             '(user-NNNNN) get per-batch session rotation.')
+    parser.add_argument('--workers', type=int, default=None, metavar='N',
+                        help='Number of concurrent download workers. Only meaningful when '
+                             '--proxy is set (Yahoo rate-limits a single IP hard). Default: 1.')
     parser.add_argument('--no-backup', action='store_true',
                         help='Skip production DB backup before promotion.')
     parser.add_argument('--keep-staging', action='store_true',
@@ -268,15 +276,31 @@ def main():
         checkpoint_path = args.resume
         staging_db_path = checkpoint.get('staging_db')
 
+    # -- Proxy setup ---------------------------------------------------------
+
+    proxy_url = args.proxy or os.environ.get('WEBSHARE_PROXY_URL')
+    if proxy_url:
+        import random as _random
+        from src.download.session import set_proxy_state
+        set_proxy_state(proxy_url,
+                        tor_enabled=False,
+                        counter_start=_random.randint(0, 999_999))
+        # Avoid logging credentials: strip userinfo before logging.
+        import re as _re
+        safe = _re.sub(r'://[^@]+@', '://***@', proxy_url)
+        logger.info("Proxy enabled: %s", safe)
+
     # -- Run pipeline per asset type -----------------------------------------
 
+    import time as _time
     from src.pipeline import run_pipeline
 
     logger.info("Downloading prices for %d tickers...", len(tickers_df))
 
     if 'AssetType' in tickers_df.columns:
         all_manifests = []
-        for fd_type, group in tickers_df.groupby('AssetType'):
+        asset_groups = list(tickers_df.groupby('AssetType'))
+        for idx, (fd_type, group) in enumerate(asset_groups):
             db_type = ASSET_TYPE_MAP.get(fd_type, fd_type)
             ticker_list = group[args.ticker_column].tolist()
             names = None
@@ -285,6 +309,11 @@ def main():
             countries = None
             if 'Country' in group.columns:
                 countries = dict(zip(group[args.ticker_column], group['Country']))
+            if idx > 0 and config.PIPELINE_INTER_TYPE_COOLDOWN > 0:
+                logger.info("Cooldown between asset types: sleeping %.0fs "
+                            "to let Yahoo's throttle counter drain...",
+                            config.PIPELINE_INTER_TYPE_COOLDOWN)
+                _time.sleep(config.PIPELINE_INTER_TYPE_COOLDOWN)
             logger.info("Running pipeline for %d %s tickers...",
                         len(ticker_list), db_type)
             manifest = run_pipeline(
@@ -299,6 +328,7 @@ def main():
                 checkpoint_path=checkpoint_path,
                 staging_db_path=staging_db_path,
                 rate_limit_delay=args.rate_limit,
+                n_workers=args.workers,
             )
             all_manifests.append((db_type, manifest))
 
@@ -325,6 +355,7 @@ def main():
             checkpoint_path=checkpoint_path,
             staging_db_path=staging_db_path,
             rate_limit_delay=args.rate_limit,
+            n_workers=args.workers,
         )
         dl = manifest.get('download_result', {})
         logger.info("Pipeline: status=%s, saved=%s, failed_batches=%s",
