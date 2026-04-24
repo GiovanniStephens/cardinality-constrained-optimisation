@@ -16,6 +16,37 @@ from src.universe import (
 logger = logging.getLogger(__name__)
 
 
+def _load_dotenv_if_present(path: str = '.env') -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ if present.
+
+    Minimal parser — no python-dotenv dependency. Existing env vars win,
+    so CLI flags and pre-exported values keep precedence. Handles `export `
+    prefix, surrounding quotes, and `#` comments. Silently skips if file
+    missing or unreadable.
+    """
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding='utf-8') as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('export '):
+                    line = line[len('export '):].lstrip()
+                if '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                key = key.strip()
+                val = val.strip()
+                if (val.startswith('"') and val.endswith('"')) or \
+                   (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                os.environ.setdefault(key, val)
+    except OSError:
+        pass
+
+
 def _add_file_logging(log_dir='data'):
     """Add a file handler so logs survive terminal close during long runs."""
     from datetime import datetime as dt
@@ -277,8 +308,19 @@ def main():
         staging_db_path = checkpoint.get('staging_db')
 
     # -- Proxy setup ---------------------------------------------------------
+    # Precedence: --proxy CLI flag > WEBSHARE_PROXY_URL > WEBSHARE_PROXY_USERNAME+_PASSWORD
+    # Auto-load .env at repo root if present so users don't need a wrapper script.
 
+    _load_dotenv_if_present()
     proxy_url = args.proxy or os.environ.get('WEBSHARE_PROXY_URL')
+    if not proxy_url:
+        user = os.environ.get('WEBSHARE_PROXY_USERNAME')
+        pw = os.environ.get('WEBSHARE_PROXY_PASSWORD')
+        if user and pw:
+            import urllib.parse as _up
+            host = os.environ.get('WEBSHARE_PROXY_HOST', 'p.webshare.io:80')
+            proxy_url = (f"http://{_up.quote(user, safe='-')}:"
+                         f"{_up.quote(pw, safe='')}@{host}")
     if proxy_url:
         import random as _random
         from src.download.session import set_proxy_state
