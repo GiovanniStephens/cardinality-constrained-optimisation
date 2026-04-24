@@ -182,9 +182,13 @@ def _batch_download_loop(
             if batch_df is None or batch_df.empty:
                 result_queue.put(('failed', list(batch), batch_num))
                 # Data-level empties (delisted tickers) must not feed the
-                # circuit breaker — otherwise a run of dead tickers looks
-                # like a rate-limit cascade.
-                if not data_level_empty:
+                # circuit breaker. Treat them as clean forward progress —
+                # same as a successful save — and reset the counter, so
+                # 10 rate-limits scattered across 500 no_data skips don't
+                # trip what's meant to catch a rate-limit cascade.
+                if data_level_empty:
+                    consecutive_failures = 0
+                else:
                     consecutive_failures += 1
 
                 if consecutive_failures >= circuit_breaker_threshold:

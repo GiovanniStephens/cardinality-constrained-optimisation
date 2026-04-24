@@ -410,9 +410,13 @@ def download_and_save(
                 failed_batches.append({
                     'batch_num': batch_num, 'tickers': list(batch),
                 })
-                # Data-level empties (delisted tickers) must not feed the
-                # circuit breaker — a run of dead tickers is not a rate-limit.
-                if not data_level_empty:
+                # Data-level empties (delisted tickers) are clean forward
+                # progress, not failures. Reset the counter so 10 rate-limits
+                # scattered across 500 no_data skips don't trip what's meant
+                # to catch a rate-limit cascade.
+                if data_level_empty:
+                    consecutive_failures = 0
+                else:
                     consecutive_failures += 1
                 if on_batch_failed:
                     on_batch_failed(list(batch), batch_num)
