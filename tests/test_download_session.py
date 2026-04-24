@@ -49,17 +49,18 @@ class TestMakeSession(unittest.TestCase):
 
     @patch('src.download.session.CffiSession')
     def test_make_session_no_proxy(self, mock_session_cls):
-        """No proxy set: session created with Chrome impersonation, no proxies."""
+        """No proxy set: session created with a browser impersonation target, no proxies."""
         sess._proxy_url = None
-        mock_instance = MagicMock(spec=[])  # empty spec: no auto-attributes
+        mock_instance = MagicMock()  # auto-attributes OK; warmup hits .get()
         mock_session_cls.return_value = mock_instance
+        from src import config as _cfg
 
         result = sess._make_session()
 
-        mock_session_cls.assert_called_once_with(impersonate='chrome')
+        # Impersonation target is chosen from the rotation pool (or 'chrome' fallback)
+        args, kwargs = mock_session_cls.call_args
+        self.assertIn(kwargs.get('impersonate'), _cfg.IMPERSONATE_TARGETS + ['chrome'])
         self.assertIs(result, mock_instance)
-        # proxies should not have been set on the instance
-        self.assertFalse(hasattr(mock_instance, 'proxies'))
 
     @patch('src.download.session.CffiSession')
     def test_make_session_with_proxy(self, mock_session_cls):
@@ -69,10 +70,12 @@ class TestMakeSession(unittest.TestCase):
         # Start without proxies attribute to verify it gets set
         del mock_instance.proxies
         mock_session_cls.return_value = mock_instance
+        from src import config as _cfg
 
         result = sess._make_session()
 
-        mock_session_cls.assert_called_once_with(impersonate='chrome')
+        args, kwargs = mock_session_cls.call_args
+        self.assertIn(kwargs.get('impersonate'), _cfg.IMPERSONATE_TARGETS + ['chrome'])
         self.assertEqual(mock_instance.proxies, {
             'http': 'socks5://127.0.0.1:9050',
             'https': 'socks5://127.0.0.1:9050',

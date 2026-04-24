@@ -229,7 +229,7 @@ def _retry_with_splitting(tickers, start, end, timeout_seconds,
             # Failed -- escalate delay
             current_delay = min(current_delay * 2, max_delay)
             delay_state[0] = current_delay
-            jittered = current_delay * random.uniform(0.8, 1.2)
+            jittered = current_delay * random.uniform(0.5, 2.0)
             time.sleep(jittered)
 
     # Can't split further -- return as failed
@@ -240,12 +240,12 @@ def _retry_with_splitting(tickers, start, end, timeout_seconds,
     mid = len(tickers) // 2
     left, right = tickers[:mid], tickers[mid:]
 
-    jittered = delay_state[0] * random.uniform(0.8, 1.2)
+    jittered = delay_state[0] * random.uniform(0.5, 2.0)
     time.sleep(jittered)
     df_left, failed_left = _retry_with_splitting(
         left, start, end, timeout_seconds, min_batch_size, delay_state)
 
-    jittered = delay_state[0] * random.uniform(0.8, 1.2)
+    jittered = delay_state[0] * random.uniform(0.5, 2.0)
     time.sleep(jittered)
     df_right, failed_right = _retry_with_splitting(
         right, start, end, timeout_seconds, min_batch_size, delay_state)

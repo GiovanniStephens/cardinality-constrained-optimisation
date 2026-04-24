@@ -171,8 +171,9 @@ DOWNLOAD_BACKOFF_BASE = 2  # seconds, for exponential backoff
 # ─── Pipeline defaults ───────────────────────────────────────────────────────
 
 PIPELINE_BATCH_SIZE = 20             # was 50 — full 11yr download needs smaller batches
-PIPELINE_PROXY_BATCH_SIZE = 1        # one ticker per session — proxy rotates IPs per session, not per request
-PIPELINE_RATE_LIMIT_DELAY = 2.0    # was 4.0 — smaller batches tolerate shorter delays
+PIPELINE_PROXY_BATCH_SIZE = 10       # amortise cookie+crumb fetch over ~10 tickers per session; 2.5x fewer requests to Akamai than batch=1
+PIPELINE_RATE_LIMIT_DELAY = 4.0    # inter-batch delay, widened jitter in the caller
+PIPELINE_INTRA_BATCH_DELAY = (0.3, 1.5)   # random range sleep before each yf.download call inside a batch loop — breaks synchronised 16-worker bursts
 PIPELINE_BYTES_PER_ROW = 55        # empirical, for disk space estimation
 PIPELINE_DISK_HEADROOM = 1.5       # require 50% extra free space
 PIPELINE_MAX_RETRIES = 5           # retries per batch (includes empty-result retries)
@@ -182,11 +183,34 @@ PIPELINE_CIRCUIT_BREAKER_COOLDOWN = 300.0  # seconds to pause on trip before ret
 PIPELINE_MAX_RATE_LIMIT_DELAY = 600.0    # max adaptive inter-batch delay (10 min)
 PIPELINE_BATCH_TIMEOUT = 300             # seconds per batch download timeout
 PIPELINE_MIN_SUB_BATCH_SIZE = 10         # minimum tickers per sub-batch split
-PIPELINE_INTER_TYPE_COOLDOWN = 60.0      # seconds between asset type pipelines
+PIPELINE_INTER_TYPE_COOLDOWN = 600.0     # 10 min — let Akamai's per-IP throttle counters drain between ETF/fund pipelines
 PIPELINE_DEFAULT_WORKERS = 1              # sequential by default (1 = use download_and_save)
 PIPELINE_MAX_WORKERS = 24                 # cap for --workers
-PIPELINE_SUBPROCESS_STAGGER = 5           # seconds between subprocess launches
+PIPELINE_SUBPROCESS_STAGGER = (15, 30)    # random range seconds between subprocess launches — 16 workers now spread over ~5 min instead of ~80s
 PIPELINE_SESSION_ROTATE_INTERVAL = 50     # rotate proxy session every N batches
+
+# ─── Fingerprint rotation (anti-Akamai) ──────────────────────────────────────
+# curl_cffi impersonation targets. Rotating these breaks the "N workers with
+# identical JA3/JA4" signal that Akamai uses to correlate our residential
+# proxy traffic. Each new session in _make_session() picks one pseudorandomly.
+IMPERSONATE_TARGETS = [
+    'chrome124', 'chrome120', 'chrome119', 'chrome116', 'chrome110',
+    'safari17_0', 'safari17_2_ios', 'safari16_5', 'edge101', 'edge99',
+]
+# Accept-Language header variation per session. Yahoo's Akamai treats
+# uniform Accept-Language across thousands of requests as a bot signal.
+ACCEPT_LANGUAGE_POOL = [
+    'en-US,en;q=0.9',
+    'en-GB,en;q=0.9',
+    'en-US,en;q=0.9,es;q=0.8',
+    'en-AU,en;q=0.9',
+    'en-CA,en-US;q=0.9,en;q=0.8',
+    'en;q=0.9',
+]
+# Warm-up URL fetched on each new session before hitting the API. Gives
+# the session legitimate Akamai cookies + establishes "this IP browsed
+# the site" rather than "this IP only calls query1 endpoints".
+WARMUP_URL = 'https://finance.yahoo.com/'
 
 # ─── Ticker validation pass ──────────────────────────────────────────────
 # Pre-download validation: download 1 week of data per ticker to check if

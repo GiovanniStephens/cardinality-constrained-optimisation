@@ -360,7 +360,7 @@ def download_and_save(
                     if _sess._get_state('_tor_enabled'):
                         _sess._rotate_tor_circuit()
                     current_delay = min(current_delay * DOWNLOAD_BACKOFF_BASE, max_rate_limit_delay)
-                    jittered = current_delay * random.uniform(0.8, 1.2)
+                    jittered = current_delay * random.uniform(0.5, 2.0)
                     logger.warning("Batch %d attempt %d/%d: no data returned, "
                                    "likely rate-limited. Backing off %.0fs "
                                    "(adaptive delay now %.0fs)",
@@ -374,7 +374,7 @@ def download_and_save(
                     if _sess._get_state('_tor_enabled'):
                         _sess._rotate_tor_circuit()
                     current_delay = min(current_delay * DOWNLOAD_BACKOFF_BASE, max_rate_limit_delay)
-                    jittered = current_delay * random.uniform(0.8, 1.2)
+                    jittered = current_delay * random.uniform(0.5, 2.0)
                     logger.warning("Rate limited on batch %d (attempt %d/%d), "
                                    "backing off %.0fs (adaptive delay now %.0fs)",
                                    batch_num, attempt, max_retries,
@@ -385,7 +385,7 @@ def download_and_save(
                                    batch_num, attempt, max_retries, e)
                     logger.debug("Batch %d traceback:", batch_num, exc_info=True)
                     if attempt < max_retries:
-                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        jittered = current_delay * random.uniform(0.5, 2.0)
                         time.sleep(jittered)
 
         if batch_df is None or batch_df.empty:
@@ -518,7 +518,7 @@ def download_and_save(
                 _sess._rotate_tor_circuit()
 
         if current_delay > 0 and batch_num < len(batches):
-            jittered = current_delay * random.uniform(0.8, 1.2)
+            jittered = current_delay * random.uniform(0.5, 2.0)
             time.sleep(jittered)
 
     if pbar:

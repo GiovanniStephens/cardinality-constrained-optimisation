@@ -100,10 +100,19 @@ def _batch_download_loop(
     current_delay = rate_limit_delay
     circuit_breaker_trip_count = 0
 
+    # Intra-batch jitter: random sleep before each batch's yf.download to
+    # desynchronise the 16-worker periodic burst that Akamai detects as
+    # coordinated-bot behaviour.
+    from src import config as _cfg
+    _jitter_lo, _jitter_hi = getattr(_cfg, 'PIPELINE_INTRA_BATCH_DELAY', (0.0, 0.0))
+
     for batch_num, batch in enumerate(batches, 1):
         batch_df = None
         hit_rate_limit = False
         data_level_empty = False  # set when classifier says 'no_data'
+
+        if _jitter_hi > 0:
+            time.sleep(random.uniform(_jitter_lo, _jitter_hi))
 
         if session_age >= session_rotate_interval:
             session = make_session_fn()
@@ -130,7 +139,7 @@ def _batch_download_loop(
                     session_age = 0
                     if tor_enabled and rotate_tor_fn:
                         rotate_tor_fn()
-                    jittered = rate_limit_delay * random.uniform(0.8, 1.2)
+                    jittered = rate_limit_delay * random.uniform(0.5, 2.0)
                     log.warning(
                         "Worker %d batch %d attempt %d/%d: no data, "
                         "rotating session, retrying in %.0fs",
@@ -145,7 +154,7 @@ def _batch_download_loop(
                     if tor_enabled and rotate_tor_fn:
                         rotate_tor_fn()
                     current_delay = min(current_delay * 2, max_rate_limit_delay)
-                    jittered = current_delay * random.uniform(0.8, 1.2)
+                    jittered = current_delay * random.uniform(0.5, 2.0)
                     log.warning(
                         "Worker %d rate limited batch %d (attempt %d/%d), "
                         "rotating session, backing off %.0fs",
@@ -155,7 +164,7 @@ def _batch_download_loop(
                     log.warning("Worker %d batch %d attempt %d/%d failed: %s",
                                 worker_id, batch_num, attempt, max_retries, e)
                     if attempt < max_retries:
-                        jittered = current_delay * random.uniform(0.8, 1.2)
+                        jittered = current_delay * random.uniform(0.5, 2.0)
                         time.sleep(jittered)
 
         session_age += 1
@@ -234,7 +243,7 @@ def _batch_download_loop(
                 rotate_tor_fn()
 
         if current_delay > 0 and batch_num < len(batches):
-            jittered = current_delay * random.uniform(0.8, 1.2)
+            jittered = current_delay * random.uniform(0.5, 2.0)
             time.sleep(jittered)
 
 
@@ -513,13 +522,21 @@ def _concurrent_thread_download(
         circuit_breaker_cooldown=circuit_breaker_cooldown,
     )
 
-    stagger_delay = 5
+    # Thread-path stagger: mirror the subprocess-path behaviour — accept a
+    # scalar or (lo, hi) range tuple, sample per worker.
+    from src import config as _cfg
+    stagger_cfg = getattr(_cfg, 'PIPELINE_SUBPROCESS_STAGGER', 5)
+
+    def _sample_stagger():
+        if isinstance(stagger_cfg, tuple) and len(stagger_cfg) == 2:
+            return random.uniform(stagger_cfg[0], stagger_cfg[1])
+        return float(stagger_cfg)
 
     with ThreadPoolExecutor(max_workers=actual_workers) as pool:
         futures = []
         for wid, partition in enumerate(partitions):
             if wid > 0 and _sess._proxy_url:
-                time.sleep(stagger_delay)
+                time.sleep(_sample_stagger())
             f = pool.submit(_worker_download, wid, partition, **common_kwargs)
             futures.append(f)
 
@@ -618,14 +635,19 @@ def _concurrent_subprocess_download(
     writer = threading.Thread(target=_writer_thread, daemon=True)
     writer.start()
 
-    stagger_delay = config.PIPELINE_SUBPROCESS_STAGGER
+    stagger_cfg = config.PIPELINE_SUBPROCESS_STAGGER
     session_rotate_interval = config.PIPELINE_SESSION_ROTATE_INTERVAL
+
+    def _sample_stagger():
+        if isinstance(stagger_cfg, tuple) and len(stagger_cfg) == 2:
+            return random.uniform(stagger_cfg[0], stagger_cfg[1])
+        return float(stagger_cfg)
 
     processes = []
     try:
         for wid, partition in enumerate(partitions):
             if wid > 0:
-                time.sleep(stagger_delay)
+                time.sleep(_sample_stagger())
 
             # Each worker gets a non-overlapping counter range.
             # Use random base to avoid reusing burned session IDs from

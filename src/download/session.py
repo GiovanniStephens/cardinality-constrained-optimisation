@@ -69,17 +69,39 @@ def _get_state(name):
 
 
 def _make_session():
-    """Create a curl_cffi Session with Chrome TLS impersonation.
+    """Create a curl_cffi Session with a rotated browser TLS impersonation.
 
-    Chrome impersonation is critical — Yahoo's bot detection blocks requests
-    with non-browser TLS fingerprints, even from residential proxy IPs.
+    Browser impersonation is critical — Yahoo's Akamai blocks requests with
+    non-browser TLS fingerprints. But a SINGLE fixed target (``impersonate='chrome'``)
+    is itself a fingerprint: Akamai cross-correlates JA3/JA4 across our
+    residential IPs and sees "many IPs, one client". Rotating through a pool
+    of Chrome / Safari / Edge versions breaks that signal.
 
-    For rotating residential proxies: if the proxy URL contains a username
-    ending in digits (e.g. ``mdgihswf-11``), the trailing number is replaced
-    with a per-session counter so each batch gets a distinct exit IP.
+    Each call also:
+      - rotates the Webshare residential-proxy username suffix (if present)
+        so the exit IP differs from the previous session's
+      - sets a varied Accept-Language + Referer so headers aren't byte-identical
+      - warms up the session with a GET to finance.yahoo.com so Akamai sees
+        browser-like site-first traffic rather than pure API-hammering
     """
     global _proxy_session_counter
-    session = CffiSession(impersonate='chrome')
+    from src import config as _cfg
+
+    # Pick TLS impersonation target pseudorandomly per session
+    target = random.choice(_cfg.IMPERSONATE_TARGETS) if _cfg.IMPERSONATE_TARGETS else 'chrome'
+    try:
+        session = CffiSession(impersonate=target)
+    except Exception as e:
+        logger.debug("Impersonate target %r rejected (%s); falling back to 'chrome'", target, e)
+        session = CffiSession(impersonate='chrome')
+
+    # Vary a couple of browser-signal headers per session
+    try:
+        session.headers['Accept-Language'] = random.choice(_cfg.ACCEPT_LANGUAGE_POOL)
+        session.headers['Referer'] = 'https://finance.yahoo.com/'
+    except Exception:
+        pass
+
     proxy = _get_state('_proxy_url')
     if proxy:
         url = proxy
@@ -91,6 +113,17 @@ def _make_session():
                 counter = _proxy_session_counter
             url = re.sub(r'(-)\d+:', rf'\g<1>{counter}:', url, count=1)
         session.proxies = {'http': url, 'https': url}
+
+    # Warm up: issue one GET to finance.yahoo.com so the session picks up
+    # legitimate Akamai cookies and looks like a browser that loaded the
+    # site before hitting the API. Failures are swallowed — the warmup is
+    # belt-and-braces, not a hard requirement.
+    if _cfg.WARMUP_URL:
+        try:
+            session.get(_cfg.WARMUP_URL, timeout=10)
+        except Exception as e:
+            logger.debug("Warmup request failed (%s); continuing anyway", e)
+
     return session
 
 
