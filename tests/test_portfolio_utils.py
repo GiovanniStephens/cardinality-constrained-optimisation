@@ -328,6 +328,71 @@ class TestDeflatedSharpeRatio(unittest.TestCase):
         self.assertLess(dsr, 0.5)
 
 
+class TestEffectiveTrialsForMethod(unittest.TestCase):
+    def test_cc_method(self):
+        from src.metrics import effective_trials_for_method
+        m = effective_trials_for_method(
+            'cc', num_portfolios=30, ga_pop=8000, ga_generations=150)
+        self.assertEqual(m, 30 * 8000 * 150)
+
+    def test_mc_method(self):
+        from src.metrics import effective_trials_for_method
+        m = effective_trials_for_method(
+            'mc', num_portfolios=30, mc_trials_per_portfolio=100_000)
+        self.assertEqual(m, 30 * 100_000)
+
+    def test_random_method(self):
+        from src.metrics import effective_trials_for_method
+        m = effective_trials_for_method('random', num_portfolios=30)
+        self.assertEqual(m, 30)
+
+    def test_unknown_method_raises(self):
+        from src.metrics import effective_trials_for_method
+        with self.assertRaises(ValueError):
+            effective_trials_for_method('xyz', 30)
+
+    def test_cc_missing_args_raises(self):
+        from src.metrics import effective_trials_for_method
+        with self.assertRaises(ValueError):
+            effective_trials_for_method('cc', 30)
+
+
+class TestComputeMethodDsr(unittest.TestCase):
+
+    def test_returns_complete_dict(self):
+        from src.metrics import compute_method_dsr
+        rng = np.random.default_rng(0)
+        rets = rng.normal(0.001, 0.01, size=251)
+        out = compute_method_dsr(observed_sr=2.0,
+                                  portfolio_returns=rets,
+                                  num_trials=1_000_000)
+        for k in ('observed_sr', 'num_obs', 'num_trials',
+                  'skewness', 'excess_kurtosis', 'dsr'):
+            self.assertIn(k, out)
+        self.assertEqual(out['num_obs'], 251)
+        self.assertEqual(out['num_trials'], 1_000_000)
+        self.assertGreaterEqual(out['dsr'], 0.0)
+        self.assertLessEqual(out['dsr'], 1.0)
+
+    def test_modest_sr_huge_M_low_obs_flags_overfit(self):
+        """Realistic gating case: GA reports SR=0.3 over 50 obs after a
+        billion trials. Should flag as overfit (DSR < 0.5)."""
+        from src.metrics import compute_method_dsr
+        rng = np.random.default_rng(1)
+        rets = rng.normal(0.0, 0.01, size=50)
+        out = compute_method_dsr(0.3, rets, num_trials=10**9)
+        self.assertLess(out['dsr'], 0.5)
+
+    def test_strong_sr_low_M_passes(self):
+        """SR=2.0 over 252 obs with M=30 (random selection) should clear
+        the multiple-testing bar (DSR > 0.95)."""
+        from src.metrics import compute_method_dsr
+        rng = np.random.default_rng(2)
+        rets = rng.normal(0.001, 0.01, size=252)
+        out = compute_method_dsr(2.0, rets, num_trials=30)
+        self.assertGreater(out['dsr'], 0.95)
+
+
 class TestEqualWeightSharpe(unittest.TestCase):
     """Tests for the shared equal_weight_fitness() fitness function."""
 
@@ -683,6 +748,40 @@ class TestOptimiseWeightsEdgeCases(unittest.TestCase):
         result = optimise_weights(expected_returns=er, cov_matrix=cov)
         self.assertAlmostEqual(sum(result.x), 1.0, places=4)
         self.assertTrue(np.all(np.isfinite(result.x)))
+
+    def test_minimize_variance_two_uncorrelated(self):
+        """min-var weights for uncorrelated assets: w_i ∝ 1/σ_i²."""
+        # σ₁² = 0.04, σ₂² = 0.16, ρ = 0 → w₁ = 0.16/0.20 = 0.8, w₂ = 0.2
+        cov = np.array([[0.04, 0.0], [0.0, 0.16]])
+        er = np.array([0.10, 0.20])  # ignored
+        result = optimise_weights(
+            expected_returns=er, cov_matrix=cov, minimize_variance=True,
+        )
+        self.assertTrue(result.success)
+        self.assertAlmostEqual(result.x[0], 0.8, places=3)
+        self.assertAlmostEqual(result.x[1], 0.2, places=3)
+        self.assertAlmostEqual(sum(result.x), 1.0, places=4)
+
+    def test_minimize_variance_ignores_expected_returns(self):
+        """Min-var solution should be invariant to expected returns."""
+        cov = np.array([[0.04, 0.01], [0.01, 0.09]])
+        er_a = np.array([0.10, 0.20])
+        er_b = np.array([-1.0, 5.0])
+        result_a = optimise_weights(
+            expected_returns=er_a, cov_matrix=cov, minimize_variance=True)
+        result_b = optimise_weights(
+            expected_returns=er_b, cov_matrix=cov, minimize_variance=True)
+        self.assertTrue(np.allclose(result_a.x, result_b.x, atol=1e-4))
+
+    def test_minimize_variance_mutually_exclusive_with_risk_parity(self):
+        """Setting both minimize_variance and risk_parity should raise."""
+        er = np.array([0.10, 0.12])
+        cov = np.array([[0.04, 0.0], [0.0, 0.04]])
+        with self.assertRaises(ValueError):
+            optimise_weights(
+                expected_returns=er, cov_matrix=cov,
+                minimize_variance=True, risk_parity=True,
+            )
 
 
 # ---------------------------------------------------------------------------

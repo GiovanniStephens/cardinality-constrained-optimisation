@@ -79,6 +79,7 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
                      expected_returns=None, cov_matrix=None,
                      target_return=None, target_risk=None,
                      initial_weights=None, risk_parity=False,
+                     minimize_variance=False,
                      group_constraints=None, group_membership=None,
                      selected_tickers=None):
     """SLSQP weight optimisation for a portfolio.
@@ -113,6 +114,9 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         equal weights.
     :param risk_parity: if True, minimise risk-budget deviation instead of
         negative Sharpe ratio.
+    :param minimize_variance: if True, minimise portfolio variance (wᵀΣw)
+        instead of negative Sharpe ratio. Expected returns are not used.
+        Mutually exclusive with risk_parity.
     :param group_constraints: optional GROUP_CONSTRAINTS dict from config.
     :param group_membership: optional membership dict from load_membership().
     :param selected_tickers: optional list of ticker symbols (required when
@@ -175,6 +179,9 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         )
 
     # ── Objective ─────────────────────────────────────────────────────────
+    if risk_parity and minimize_variance:
+        raise ValueError("risk_parity and minimize_variance are mutually exclusive.")
+
     if risk_parity:
         risk_proportion = [1 / n] * n
         return minimize(risk_budget_objective, x0,
@@ -182,8 +189,12 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
                         method='SLSQP', bounds=bounds,
                         constraints=constraints)
 
-    def objective(x):
-        return sharpe_loss(x, er, cov)
+    if minimize_variance:
+        def objective(x, _cov=cov):
+            return float(x @ _cov @ x)
+    else:
+        def objective(x):
+            return sharpe_loss(x, er, cov)
 
     result = minimize(objective, x0=x0, method='SLSQP',
                       bounds=bounds, constraints=constraints)
@@ -191,5 +202,5 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         logger.warning("SLSQP did not converge: %s. Falling back to equal weights.",
                         result.message)
         result.x = np.ones(n) / n
-        result.fun = sharpe_loss(result.x, er, cov)
+        result.fun = objective(result.x)
     return result

@@ -52,6 +52,12 @@ COV_MIN_OBS_RATIO = 10              # Warn if T/N < this
 COV_MIN_OBS_RATIO_ERROR = 1.0       # Error if T/N < this (singular matrix)
 COPULA_GARCH_SCALE = 10             # MUArch scale factor for numerical stability
 COPULA_DIAGNOSTIC_LAGS = 10         # Ljung-Box lag count for residual diagnostics
+# Copula family for estimate_corr_using_copulas. 'gaussian' has a closed-form
+# correlation MLE so it scales O(N²); 't' fits the tail-dependence parameter
+# iteratively and scales super-cubically (199s for N=20 vs <50ms for gaussian).
+# GARCH on the marginals already captures heavy tails, so 'gaussian' is the
+# pragmatic default. Set to 't' to recover the original copula-CCC behaviour.
+COPULA_TYPE = 'gaussian'
 
 # ─── General / tolerances ─────────────────────────────────────────────────────
 
@@ -144,8 +150,8 @@ GROUP_CONSTRAINTS = {
 
 # ─── Backtest parameters ────────────────────────────────────────────────────
 
-BACKTEST_NUM_PORTFOLIOS = 20
-BACKTEST_NUM_CHILDREN = 100
+BACKTEST_NUM_PORTFOLIOS = 30
+BACKTEST_NUM_CHILDREN = 8000   # GA population per portfolio (matches ISLAND_GA_POPULATION_SIZE)
 BACKTEST_NUM_DAYS_OOS = 252
 BACKTEST_MC_TRIALS = 100_000
 BACKTEST_MAX_WEIGHT_FLOOR = 0.3
@@ -156,9 +162,24 @@ SHARPE_CRITICAL_THRESHOLD = 3.0      # in-sample Sharpe above this is almost cer
 # ─── Rolling backtest parameters ───────────────────────────────────────────
 
 BACKTEST_TRAIN_YEARS = 5
-BACKTEST_TEST_DAYS = 252       # 1 year OOS per window
-BACKTEST_STEP_DAYS = 252       # non-overlapping yearly windows
-BACKTEST_FORECAST_WINDOWS = [] # window labels that run forecast-based GA, e.g. ['2015-2019/2020']
+BACKTEST_TEST_DAYS = 126       # 6 months OOS per window
+BACKTEST_STEP_DAYS = 126       # non-overlapping 6-month windows
+
+# Toggle the ARIMA / GARCH / Copula-CCC forecast strategy family. When
+# enabled, each window's training period is used to fit fresh forecasts
+# for the union of GA-selected tickers (no leakage). Disable to skip the
+# extra ~5–15 wall-min/window for forecast fits during development.
+BACKTEST_RUN_FORECAST_STRATEGIES = True
+
+# ─── Combinatorially Purged CV (López de Prado 2018) ────────────────────────
+# Used by `python -m src.backtest --mode cpcv`. With 12 years of data and
+# n_groups=12, k=2 → C(12,2)=66 splits. Smaller n_groups = fewer splits but
+# more train/test data per split. purge_days handles short-run autocorrelation
+# at test boundaries; embargo_days handles forward-looking leakage.
+CPCV_N_GROUPS = 12
+CPCV_K_TEST_GROUPS = 2
+CPCV_PURGE_DAYS = 5
+CPCV_EMBARGO_DAYS = 5
 
 # ─── Download defaults ───────────────────────────────────────────────────────
 

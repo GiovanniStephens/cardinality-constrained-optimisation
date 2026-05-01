@@ -42,7 +42,6 @@ class TestBacktest(unittest.TestCase):
         test_days = min(BACKTEST_TEST_DAYS, len(cls.data) // 3)
         training = cls.data.iloc[:-test_days, :]
         _sim._backtest_data = training
-        _sim._use_forecast = False
         log_rets = calculate_log_returns(training)
         _sim._backtest_log_returns = log_rets.transpose()
         _sim._backtest_expected_returns = calculate_expected_returns(log_rets)
@@ -154,7 +153,6 @@ class TestBacktestWithRealData(unittest.TestCase):
         cls.data = _load_test_data()
         training = cls.data.iloc[:-BACKTEST_TEST_DAYS, :]
         _sim._backtest_data = training
-        _sim._use_forecast = False
         log_rets = calculate_log_returns(training)
         _sim._backtest_log_returns = log_rets.transpose()
         _sim._backtest_expected_returns = calculate_expected_returns(log_rets)
@@ -847,7 +845,6 @@ class TestBacktestEndToEnd(unittest.TestCase):
         wr = backtest.evaluate_window(
             window=w, full_prices=prices, conn=None,
             num_portfolios=1, num_children=10, mc_trials=50,
-            use_forecast=False,
         )
         self.assertIsInstance(wr, backtest.WindowResult)
         self.assertGreater(len(wr.method_results), 0,

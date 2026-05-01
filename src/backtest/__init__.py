@@ -12,6 +12,7 @@ from src.backtest.simulation import (
     METRIC_NAMES,
     get_random_weights,
     optimal_weights,
+    benchmark_portfolio,
     run_portfolio,
     get_statistics,
     fitness,
@@ -19,7 +20,6 @@ from src.backtest.simulation import (
     evaluate_portfolios,
     create_portfolio,
     _backtest_data,
-    _use_forecast,
     _backtest_log_returns,
     _backtest_expected_returns,
     _init_worker,
@@ -42,7 +42,7 @@ __all__ = [
     'generate_windows', 'slice_window_data',
     # simulation
     'METRIC_NAMES', 'get_random_weights', 'optimal_weights',
-    'run_portfolio', 'get_statistics', 'fitness',
+    'benchmark_portfolio', 'run_portfolio', 'get_statistics', 'fitness',
     'create_random_portfolios', 'evaluate_portfolios', 'create_portfolio',
     # statistics
     'difference_of_means_hypothesis_test', 'paired_t_test',

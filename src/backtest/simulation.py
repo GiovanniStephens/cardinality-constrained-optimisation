@@ -31,7 +31,6 @@ METRIC_NAMES = [
 
 # Module-level state set before spawning worker pools.
 _backtest_data = None
-_use_forecast = False
 # Log returns (transposed: tickers x dates) and expected returns for weight optimisation.
 _backtest_log_returns = None
 _backtest_expected_returns = None
@@ -51,32 +50,83 @@ def get_random_weights(portfolio):
     return random_weights
 
 
-def optimal_weights(portfolio, use_copulae=False):
-    """
-    Finds the optimal weights (allocations) for the
-    input portfolio.
+def _resolve_subset_and_er(portfolio, expected_returns_override=None):
+    """Slice global state for a portfolio and resolve expected returns.
 
-    :portfolio: The input portfolio. List of ticker strings.
-    :use_copulae: Whether to use copulae or not.
-    :return: A list of weights for the input portfolio.
+    Shared prelude for the weight helpers.
+
+    :param portfolio: list of ticker strings.
+    :param expected_returns_override: optional 1-D array aligned with
+        ``portfolio`` order. When provided, replaces the global ER lookup.
+    :return: tuple (subset, er, max_weight) where subset is the
+        per-portfolio log-returns DataFrame (dates × tickers), er is the
+        annualised expected-returns array, and max_weight is the per-asset
+        upper bound used for SLSQP.
     """
     if len(portfolio) < 2:
         raise ValueError("Portfolio must contain at least 2 assets.")
     missing = set(portfolio) - set(_backtest_log_returns.index)
     if missing:
         raise KeyError(f"Tickers not found in data: {missing}")
-    random_weights = get_random_weights(portfolio)
     subset = _backtest_log_returns.loc[portfolio, :].transpose()
-    er = _backtest_expected_returns.loc[subset.columns].values
+    if expected_returns_override is not None:
+        er = np.asarray(expected_returns_override, dtype=float)
+        if er.shape != (len(portfolio),):
+            raise ValueError(
+                f"expected_returns_override shape {er.shape} does not match "
+                f"portfolio length {len(portfolio)}")
+    else:
+        er = _backtest_expected_returns.loc[subset.columns].values
     max_weight = max(1 / (len(portfolio) - 1), BACKTEST_MAX_WEIGHT_FLOOR)
+    return subset, er, max_weight
 
-    if use_copulae:
+
+def _resolve_cov_matrix(subset, *, use_copulae=False, forecast_variances=None):
+    """Build the covariance matrix used by SLSQP weight optimisation.
+
+    Three modes, mutually exclusive in caller intent:
+
+    * ``forecast_variances=None``, ``use_copulae=False`` → Ledoit-Wolf
+      shrunk sample covariance (current default).
+    * ``forecast_variances=Series``, ``use_copulae=False`` → CCC
+      ``D × R × D`` where R is shrunk sample correlation and D uses the
+      provided (already-annualised) variances.
+    * ``use_copulae=True``, ``forecast_variances`` optional → Copula-CCC.
+      D uses ``forecast_variances`` if provided, else historical std.
+
+    :param subset: log-returns DataFrame (dates × tickers).
+    :param use_copulae: route via the copula correlation estimator.
+    :param forecast_variances: optional Series of annualised variances
+        indexed by ticker. Must contain every column in ``subset``.
+    :return: numpy array covariance matrix.
+    """
+    if use_copulae and forecast_variances is None:
+        # Backward-compatible copulae mode used by cc_copulae: copula
+        # correlation but historical std for the diagonal. Kept distinct
+        # from the CCC path so existing OOS Sharpe values are unchanged.
         from src.covariance import estimate_corr_using_copulas
         corr = estimate_corr_using_copulas(subset)
         D = np.diag(subset.std().values * np.sqrt(TRADING_DAYS_PER_YEAR))
-        cov = np.matmul(np.matmul(D, corr), D)
-    else:
-        cov = calculate_covariance_matrix(subset).values
+        return np.matmul(np.matmul(D, corr), D)
+    cov = calculate_covariance_matrix(
+        subset, forecast_variances=forecast_variances, use_copulae=use_copulae,
+    )
+    return cov.values if hasattr(cov, 'values') else cov
+
+
+def _max_sharpe_weights(portfolio, *, use_copulae=False,
+                        forecast_variances=None,
+                        expected_returns_override=None):
+    """SLSQP max-Sharpe weights with pluggable ER and covariance sources.
+
+    Reads the worker globals ``_backtest_log_returns`` and (unless
+    overridden) ``_backtest_expected_returns``.
+    """
+    subset, er, max_weight = _resolve_subset_and_er(
+        portfolio, expected_returns_override=expected_returns_override)
+    cov = _resolve_cov_matrix(
+        subset, use_copulae=use_copulae,
+        forecast_variances=forecast_variances)
 
     from src.weights import optimise_weights
     result = optimise_weights(
@@ -87,6 +137,77 @@ def optimal_weights(portfolio, use_copulae=False):
     if not result.success:
         logger.warning("Weight optimization did not converge: %s", result.message)
     return result['x']
+
+
+def _min_variance_weights(portfolio, *, use_copulae=False,
+                          forecast_variances=None):
+    """SLSQP min-variance weights (objective = wᵀΣw, ER ignored)."""
+    subset, _, max_weight = _resolve_subset_and_er(portfolio)
+    cov = _resolve_cov_matrix(
+        subset, use_copulae=use_copulae,
+        forecast_variances=forecast_variances)
+
+    from src.weights import optimise_weights
+    result = optimise_weights(
+        expected_returns=np.zeros(len(portfolio)), cov_matrix=cov,
+        max_weight=max_weight,
+        initial_weights=get_random_weights(portfolio),
+        minimize_variance=True,
+    )
+    if not result.success:
+        logger.warning("Min-variance optimization did not converge: %s",
+                       result.message)
+    return result['x']
+
+
+def _equal_weights(portfolio):
+    """1/N weighting for the portfolio."""
+    if len(portfolio) < 1:
+        raise ValueError("Cannot generate equal weights for an empty portfolio.")
+    n = len(portfolio)
+    return np.ones(n) / n
+
+
+def optimal_weights(portfolio, use_copulae=False):
+    """Backwards-compatible max-Sharpe wrapper.
+
+    Kept for the public ``src.backtest`` API and existing tests. Delegates
+    to :func:`_max_sharpe_weights`.
+    """
+    return _max_sharpe_weights(portfolio, use_copulae=use_copulae)
+
+
+_BENCHMARK_DEFINITIONS = {
+    'bench_spy': (['SPY'], np.array([1.0])),
+    'bench_6040': (['SPY', 'AGG'], np.array([0.6, 0.4])),
+}
+
+
+def benchmark_portfolio(category, train_log_returns, oos_log_returns):
+    """Return ``(tickers, weights)`` for a fixed benchmark.
+
+    Returns ``(None, None)`` if any required ticker is missing from either
+    the training or OOS DataFrame so the caller can skip the benchmark for
+    that window. Bypasses :func:`_max_sharpe_weights` entirely — the
+    ``max_weight`` floor ``1/(n-1)`` would divide by zero for ``n=1``.
+
+    :param category: one of ``'bench_spy'``, ``'bench_6040'``.
+    :param train_log_returns: DataFrame of training-window log returns
+        (dates × tickers). Used to assert ticker availability.
+    :param oos_log_returns: DataFrame of OOS log returns
+        (dates × tickers). Used to assert ticker availability.
+    :return: tuple of (list of tickers, np.ndarray of weights), or
+        ``(None, None)`` if the benchmark is unavailable for the window.
+    """
+    spec = _BENCHMARK_DEFINITIONS.get(category)
+    if spec is None:
+        raise ValueError(f"Unknown benchmark category: {category!r}")
+    tickers, weights = spec
+    train_cols = set(train_log_returns.columns)
+    oos_cols = set(oos_log_returns.columns)
+    if not all(t in train_cols and t in oos_cols for t in tickers):
+        return None, None
+    return list(tickers), weights.copy()
 
 
 def run_portfolio(portfolio, weights, oos_log_returns):
@@ -205,11 +326,10 @@ def _random_selection(num_tickers, min_k, max_k, ticker_names):
     return [ticker_names[i] for i in chosen]
 
 
-def _init_worker(training_data, use_forecast):
+def _init_worker(training_data):
     """Pool initializer -- sets module globals in each worker process."""
-    global _backtest_data, _use_forecast
+    global _backtest_data
     _backtest_data = training_data
-    _use_forecast = use_forecast
 
 
 def _init_weight_worker(log_returns_T, expected_returns):
@@ -223,39 +343,124 @@ def _compute_weights_for_portfolio(args):
     """Top-level function for Pool.map -- computes weights for a single portfolio.
 
     Must be top-level (not a lambda/closure) for macOS spawn-based multiprocessing.
+
+    Accepts either the legacy 2-tuple ``(portfolio, mode)`` or the new
+    3-tuple ``(portfolio, mode, kwargs)`` where ``kwargs`` carries small
+    per-task overrides — typically the portfolio-sliced forecast variance
+    Series or expected-return array. Two-tuple form remains supported so
+    older test fixtures don't break.
     """
-    portfolio, mode = args
+    if len(args) == 2:
+        portfolio, mode = args
+        kwargs = {}
+    else:
+        portfolio, mode, kwargs = args
+
     if mode == 'random':
         return get_random_weights(portfolio)
-    elif mode == 'copulae':
-        return optimal_weights(portfolio, use_copulae=True)
-    else:  # 'optimal'
-        return optimal_weights(portfolio, use_copulae=False)
+    if mode == 'optimal':
+        return _max_sharpe_weights(portfolio)
+    if mode == 'copulae':
+        return _max_sharpe_weights(portfolio, use_copulae=True)
+    if mode == 'optimal_ccc':
+        return _max_sharpe_weights(
+            portfolio, forecast_variances=kwargs['var'])
+    if mode == 'min_variance':
+        return _min_variance_weights(portfolio)
+    if mode == 'equal':
+        return _equal_weights(portfolio)
+    if mode == 'optimal_arima_er':
+        return _max_sharpe_weights(
+            portfolio, expected_returns_override=kwargs['er'])
+    if mode == 'optimal_garch':
+        return _max_sharpe_weights(
+            portfolio, forecast_variances=kwargs['var'])
+    if mode == 'optimal_garch_copula':
+        return _max_sharpe_weights(
+            portfolio, use_copulae=True, forecast_variances=kwargs['var'])
+    if mode == 'optimal_arima_garch':
+        return _max_sharpe_weights(
+            portfolio,
+            expected_returns_override=kwargs['er'],
+            forecast_variances=kwargs['var'])
+    if mode == 'optimal_arima_garch_copula':
+        return _max_sharpe_weights(
+            portfolio, use_copulae=True,
+            expected_returns_override=kwargs['er'],
+            forecast_variances=kwargs['var'])
+    raise ValueError(f"Unknown weight-computation mode: {mode!r}")
 
 
 def create_portfolio(num_children):
     """
-    Creates a cardinality-constrained portfolio with the
-    training data.
+    Creates a cardinality-constrained portfolio using the C++ island GA.
 
-    :num_children: The number of children in the GA to create.
+    Subprocesses ``cpp/optimisation`` with ISLAND_GA params for a much
+    stronger search than the previous pygad-based implementation.
+
+    Each backtest worker runs one C++ call with ``num-islands=1`` because
+    the outer ``mp.Pool`` is already parallelising 20 portfolios across
+    cores; setting num-islands>1 would oversubscribe the machine.
+
+    :num_children: GA population size — passed through as ``--pop-size``.
+        BACKTEST_NUM_CHILDREN should be set in config to match the strength
+        of the standalone island_ga (ISLAND_GA_POPULATION_SIZE).
     :return: A list of tickers.
     """
+    import json
+    import os
+    import subprocess
+    import tempfile
+
+    from src.binary_io import write_binary_data
     from src.config import (
-        GA_NUM_GENERATIONS,
-        GA_MIN_WEIGHT,
-        GA_MAX_WEIGHT,
+        CPP_BINARY_PATH,
+        ISLAND_GA_NUM_GENERATIONS,
+        ISLAND_GA_NUM_ELITES,
+        ISLAND_GA_MIGRATION_INTERVAL,
+        ISLAND_GA_MIGRATION_RATE,
+        ISLAND_GA_MUTATION_RATE_INITIAL,
+        ISLAND_GA_MUTATION_RATE_FINAL,
+        ISLAND_GA_MIN_SECURITIES,
+        ISLAND_GA_MAX_SECURITIES,
+        RISK_FREE_RATE,
     )
-    from src.optimisers.pygad_ga import PygadOptimiser
-    opt = PygadOptimiser(
-        num_children=num_children,
-        num_generations=GA_NUM_GENERATIONS,
-        min_securities=GA_MIN_SECURITIES,
-        max_securities=GA_MAX_SECURITIES,
-        min_weight=GA_MIN_WEIGHT,
-        max_weight=GA_MAX_WEIGHT,
-        target_return=None,
-        use_forecasts=_use_forecast,
-    )
-    result = opt.optimise(_backtest_data)
-    return result.selected_tickers
+
+    log_returns = calculate_log_returns(_backtest_data)
+    fd, bin_path = tempfile.mkstemp(suffix='.bin', prefix='backtest_ga_')
+    os.close(fd)
+    try:
+        write_binary_data(log_returns, bin_path)
+        cmd = [
+            CPP_BINARY_PATH, '--binary', '--data', bin_path,
+            '--mode', 'ga',
+            '--pop-size', str(num_children),
+            '--generations', str(ISLAND_GA_NUM_GENERATIONS),
+            '--num-islands', '1',
+            '--num-elites', str(ISLAND_GA_NUM_ELITES),
+            '--migration-interval', str(ISLAND_GA_MIGRATION_INTERVAL),
+            '--migration-rate', str(ISLAND_GA_MIGRATION_RATE),
+            '--mutation-initial', str(ISLAND_GA_MUTATION_RATE_INITIAL),
+            '--mutation-final', str(ISLAND_GA_MUTATION_RATE_FINAL),
+            '--min-etfs', str(ISLAND_GA_MIN_SECURITIES),
+            '--max-etfs', str(ISLAND_GA_MAX_SECURITIES),
+            '--risk-free-rate', str(RISK_FREE_RATE),
+            '--top-k', '1',
+            '--seed', '-1',
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=600, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f'cpp/optimisation failed (rc={result.returncode}): '
+                f'{result.stderr[-500:]}')
+        out = json.loads(result.stdout)
+        if not out.get('selected_tickers'):
+            raise RuntimeError(
+                f'cpp/optimisation returned no selection: {result.stdout[:500]}')
+        return out['selected_tickers']
+    finally:
+        try:
+            os.unlink(bin_path)
+        except OSError:
+            pass

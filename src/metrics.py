@@ -218,6 +218,91 @@ def deflated_sharpe_ratio(observed_sr, n, num_trials, skewness=0.0,
     return float(norm.cdf((observed_sr - expected_max_sr) / sr_std))
 
 
+def effective_trials_for_method(method: str, num_portfolios: int,
+                                ga_pop: int = 0, ga_generations: int = 0,
+                                mc_trials_per_portfolio: int = 0) -> int:
+    """Estimate ``M`` (effective number of trials) for a backtest method.
+
+    Conservative count: each independent ``portfolio`` contributes a full
+    search. For GA-based methods, ``ga_pop * ga_generations`` per portfolio.
+    For MC, ``mc_trials_per_portfolio``. For random selection, 1 per portfolio.
+
+    :param method: 'cc' (GA), 'mc' (Monte Carlo), 'random', or 'bench'
+        (fixed deterministic benchmark — single trial).
+    :param num_portfolios: number of independent portfolio runs.
+    :param ga_pop: GA population size (only used when method='cc').
+    :param ga_generations: GA generations (only used when method='cc').
+    :param mc_trials_per_portfolio: MC trial count (only used when
+        method='mc').
+    :return: total trials count.
+    """
+    if method == 'cc':
+        if ga_pop <= 0 or ga_generations <= 0:
+            raise ValueError(
+                "method='cc' requires ga_pop and ga_generations > 0")
+        return num_portfolios * ga_pop * ga_generations
+    if method == 'mc':
+        if mc_trials_per_portfolio <= 0:
+            raise ValueError(
+                "method='mc' requires mc_trials_per_portfolio > 0")
+        return num_portfolios * mc_trials_per_portfolio
+    if method == 'random':
+        return num_portfolios
+    if method == 'bench':
+        return 1
+    raise ValueError(f"Unknown method: {method!r}")
+
+
+def compute_method_dsr(observed_sr: float,
+                       portfolio_returns: np.ndarray,
+                       num_trials: int) -> dict:
+    """Compute DSR for a single (method, window) result.
+
+    Estimates skewness and excess kurtosis from the chosen portfolio's
+    training-period returns, then calls ``deflated_sharpe_ratio``.
+
+    :param observed_sr: the observed Sharpe ratio (typically the best
+        in-sample Sharpe across the M trials).
+    :param portfolio_returns: 1-D array of training-period returns
+        for the chosen (best in-sample) portfolio.
+    :param num_trials: ``M`` for this method (use
+        :func:`effective_trials_for_method`).
+    :return: dict with keys ``observed_sr``, ``num_obs``, ``num_trials``,
+        ``skewness``, ``excess_kurtosis``, ``dsr``.
+    """
+    rets = np.asarray(portfolio_returns, dtype=np.float64)
+    rets = rets[~np.isnan(rets)]
+    num_obs = int(rets.size)
+    if num_obs < 3:
+        raise ValueError(
+            f"portfolio_returns has too few observations ({num_obs})")
+    mean = rets.mean()
+    std = rets.std(ddof=1)
+    if std == 0:
+        skew_val = 0.0
+        excess_kurt_val = 0.0
+    else:
+        z = (rets - mean) / std
+        skew_val = float((z**3).mean())
+        excess_kurt_val = float((z**4).mean()) - 3.0
+
+    dsr = deflated_sharpe_ratio(
+        observed_sr=observed_sr,
+        n=num_obs,
+        num_trials=num_trials,
+        skewness=skew_val,
+        excess_kurtosis=excess_kurt_val,
+    )
+    return {
+        'observed_sr': float(observed_sr),
+        'num_obs': num_obs,
+        'num_trials': int(num_trials),
+        'skewness': skew_val,
+        'excess_kurtosis': excess_kurt_val,
+        'dsr': float(dsr),
+    }
+
+
 def warn_if_sharpe_suspicious(sr, context, logger=None):
     """Log warnings if a Sharpe ratio is suspiciously high (likely overfit).
 
