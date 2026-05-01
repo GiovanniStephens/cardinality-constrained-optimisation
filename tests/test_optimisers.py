@@ -397,6 +397,68 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
         off_diag = corr[0, 1] if isinstance(corr, np.ndarray) else corr.iloc[0, 1]
         self.assertGreater(off_diag, 0.0)
 
+    def test_garch_cache_avoids_refit_on_repeat(self):
+        """Per-ticker GARCH residuals are cached; repeat calls with the same
+        data must not refit. Two-stage check: first call populates the cache,
+        second call returns identical residuals (object equality, not just
+        value) AND completes faster.
+        """
+        import time as _time
+        from src.covariance import (
+            _fit_garch_residuals_cached, clear_garch_cache,
+            _garch_residuals_cache,
+        )
+        clear_garch_cache()
+        np.random.seed(123)
+        values = np.random.randn(500) * 0.01
+
+        t0 = _time.perf_counter()
+        r1 = _fit_garch_residuals_cached(values, 'ABC')
+        cold = _time.perf_counter() - t0
+
+        t0 = _time.perf_counter()
+        r2 = _fit_garch_residuals_cached(values, 'ABC')
+        warm = _time.perf_counter() - t0
+
+        self.assertIs(r1, r2,
+            'Cache hit must return the same array object, not a refit.')
+        self.assertEqual(len(_garch_residuals_cache), 1)
+        self.assertLess(warm * 100, cold,
+            f'Warm call ({warm*1e6:.0f}us) should be >100x faster than '
+            f'cold ({cold*1e3:.0f}ms).')
+
+        # Different ticker name → cache miss → new fit
+        r3 = _fit_garch_residuals_cached(values, 'XYZ')
+        self.assertIsNot(r1, r3)
+        self.assertEqual(len(_garch_residuals_cache), 2)
+
+        # Different values → cache miss → new fit
+        r4 = _fit_garch_residuals_cached(values + 0.001, 'ABC')
+        self.assertIsNot(r1, r4)
+        self.assertEqual(len(_garch_residuals_cache), 3)
+
+    def test_copula_path_runs_no_fallback_warning(self):
+        """Healthy data must exercise the copula path, not silently fall back.
+
+        Regression: muarch 0.2.2 + arch >= 8.0 incompatibility caused every
+        skewt fit to TypeError, with the warning swallowed by a logged
+        fallback. The current implementation goes through arch directly
+        (not muarch), but the test still guards against any future change
+        that might reintroduce a silent fallback.
+
+        Runs both copula types so a regression in either is caught.
+        """
+        import logging
+        from src.covariance import estimate_corr_using_copulas
+        data = self._make_correlated_returns(n=500, rho=0.6, seed=1)
+        for ctype in ('gaussian', 't'):
+            with self.assertLogs('src.covariance', level='WARNING') as cm:
+                estimate_corr_using_copulas(data, copula_type=ctype)
+                logging.getLogger('src.covariance').warning('sentinel')
+            self.assertFalse(
+                any('Copula estimation failed' in m for m in cm.output),
+                msg=f"copula_type={ctype} fell back: {cm.output}")
+
 
 class TestCrossOptimiserConvergence(unittest.TestCase):
     """On a tiny 5-ticker problem, all optimisers should achieve near-optimal Sharpe."""

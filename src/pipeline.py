@@ -310,8 +310,10 @@ def _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest,
         db.save_known_bad_tickers(prod_conn, all_failed, exchange=exchange)
         prod_conn.close()
         manifest['failed_ticker_count'] = len(all_failed)
-        logger.info("Cached %d failed tickers in DB (use --retry-dropped "
-                    "or --clear-cache to manage)", len(all_failed))
+        logger.info("Cached %d failed tickers in DB (subsequent runs skip "
+                    "them; use --ignore-bad-cache to retry, "
+                    "--bad-cache-min-failures N to tune the threshold)",
+                    len(all_failed))
 
 
 def _run_validation(conn_staging, exchange, manifest):
@@ -399,6 +401,8 @@ def run_pipeline(
     rate_limit_delay: Optional[float] = None,
     prod_db_path: Optional[str] = None,
     n_workers: Optional[int] = None,
+    ignore_bad_cache: bool = False,
+    bad_cache_min_failures: int = 1,
 ) -> dict[str, Any]:
     """
     Full staged pipeline: preflight -> stage -> validate -> promote.
@@ -464,10 +468,16 @@ def run_pipeline(
         logger.info("Resuming from checkpoint: %d tickers already completed",
                      len(checkpoint.get('completed_tickers', [])))
         tickers = filter_completed(tickers, checkpoint)
-        if not tickers:
-            logger.info("All tickers already completed per checkpoint")
-            manifest['status'] = 'already_complete'
-            return manifest
+        # Hydrate the bad-ticker cache from this checkpoint's failed list so
+        # the filter below picks them up. The DB is the long-term source of
+        # truth; the checkpoint only knows about this run.
+        ckpt_failed = checkpoint.get('failed_tickers', [])
+        if ckpt_failed:
+            prod_conn = db.get_connection(prod_db_path)
+            db.save_known_bad_tickers(prod_conn, ckpt_failed, exchange=exchange)
+            prod_conn.close()
+            logger.info("Hydrated %d failed tickers from checkpoint into "
+                        "bad-ticker cache", len(ckpt_failed))
     else:
         checkpoint = {
             'run_id': run_id,
@@ -476,6 +486,28 @@ def run_pipeline(
             'completed_tickers': [],
             'failed_tickers': [],
         }
+
+    # ── Skip known-bad tickers ────────────────────────────────────────────
+    if ignore_bad_cache:
+        logger.info("Bad-ticker cache: skipped (--ignore-bad-cache)")
+    else:
+        prod_conn = db.get_connection(prod_db_path)
+        bad = db.load_known_bad_tickers(prod_conn, exchange=exchange,
+                                        min_failures=bad_cache_min_failures)
+        prod_conn.close()
+        if bad:
+            before = len(tickers)
+            tickers = [t for t in tickers if t not in bad]
+            logger.info("Bad-ticker cache: %d known bad (min_failures=%d), "
+                        "%d filtered, %d remaining",
+                        len(bad), bad_cache_min_failures,
+                        before - len(tickers), len(tickers))
+
+    if not tickers:
+        logger.info("No tickers left to download after checkpoint + bad-cache "
+                    "filtering")
+        manifest['status'] = 'already_complete'
+        return _write_and_return()
 
     # ── Download into staging DB ──────────────────────────────────────────
     logger.info("Creating staging DB: %s", staging_db_path)

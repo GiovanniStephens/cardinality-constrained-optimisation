@@ -133,6 +133,14 @@ def main():
     parser.add_argument('--resume', default=None, metavar='CHECKPOINT',
                         help='Resume a previously interrupted download from '
                              'a checkpoint JSON file.')
+    parser.add_argument('--ignore-bad-cache', action='store_true',
+                        help='Bypass the known-bad-ticker cache filter '
+                             '(retry tickers Yahoo previously refused). '
+                             'Useful after a Yahoo outage or proxy-pool change.')
+    parser.add_argument('--bad-cache-min-failures', type=int, default=1,
+                        metavar='N',
+                        help='Skip tickers with at least N cached failures '
+                             '(default: 1).')
     parser.add_argument('--rate-limit', type=float, default=None,
                         help='Seconds to wait between batches '
                              '(default: from config).')
@@ -371,6 +379,8 @@ def main():
                 staging_db_path=staging_db_path,
                 rate_limit_delay=args.rate_limit,
                 n_workers=args.workers,
+                ignore_bad_cache=args.ignore_bad_cache,
+                bad_cache_min_failures=args.bad_cache_min_failures,
             )
             all_manifests.append((db_type, manifest))
 
@@ -398,6 +408,8 @@ def main():
             staging_db_path=staging_db_path,
             rate_limit_delay=args.rate_limit,
             n_workers=args.workers,
+            ignore_bad_cache=args.ignore_bad_cache,
+            bad_cache_min_failures=args.bad_cache_min_failures,
         )
         dl = manifest.get('download_result', {})
         logger.info("Pipeline: status=%s, saved=%s, failed_batches=%s",

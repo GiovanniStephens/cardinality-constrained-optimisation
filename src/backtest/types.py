@@ -47,3 +47,6 @@ class WindowResult:
     window: WindowSpec
     method_results: Dict[str, MethodResults] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
+    # Per-method DSR diagnostics: {category_name: dsr_info_dict}.
+    # Populated post-evaluation; empty until then.
+    dsr_per_method: Dict[str, Dict] = field(default_factory=dict)

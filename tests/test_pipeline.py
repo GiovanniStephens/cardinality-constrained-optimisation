@@ -741,6 +741,107 @@ class TestKnownBadTickerCache(BaseTmpDirTest):
         conn.close()
         self.assertEqual(cached, set())
 
+    @patch('src.pipeline.validate_universe')
+    @patch('src.pipeline.download_and_save')
+    def test_known_bad_filtered_before_download(self, mock_dl, mock_val):
+        """Tickers in the bad cache must not reach _run_download."""
+        from src.pipeline import run_pipeline
+        # Pre-seed cache with T0, T1
+        conn = db.get_connection(self.prod_db_path)
+        db.save_known_bad_tickers(conn, ['T0', 'T1'], exchange='US')
+        conn.close()
+
+        mock_dl.return_value = {
+            'total_tickers': 2, 'saved_tickers': 2, 'failed_batches': [],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+        mock_val.return_value = {
+            'total_tickers': 2, 'total_excluded': 0, 'total_active': 2,
+        }
+        run_pipeline(
+            ['T0', 'T1', 'T2', 'T3'], exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            stage_only=True,
+        )
+        # download_and_save was called with only the unfiltered tickers
+        self.assertEqual(mock_dl.call_count, 1)
+        call_tickers = mock_dl.call_args.kwargs.get('tickers')
+        if call_tickers is None:
+            call_tickers = mock_dl.call_args.args[0]
+        self.assertEqual(set(call_tickers), {'T2', 'T3'})
+
+    @patch('src.pipeline.validate_universe')
+    @patch('src.pipeline.download_and_save')
+    def test_ignore_bad_cache_bypasses_filter(self, mock_dl, mock_val):
+        """--ignore-bad-cache must let cached-bad tickers through."""
+        from src.pipeline import run_pipeline
+        conn = db.get_connection(self.prod_db_path)
+        db.save_known_bad_tickers(conn, ['T0', 'T1'], exchange='US')
+        conn.close()
+
+        mock_dl.return_value = {
+            'total_tickers': 4, 'saved_tickers': 4, 'failed_batches': [],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+        mock_val.return_value = {
+            'total_tickers': 4, 'total_excluded': 0, 'total_active': 4,
+        }
+        run_pipeline(
+            ['T0', 'T1', 'T2', 'T3'], exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            stage_only=True,
+            ignore_bad_cache=True,
+        )
+        call_tickers = mock_dl.call_args.kwargs.get('tickers')
+        if call_tickers is None:
+            call_tickers = mock_dl.call_args.args[0]
+        self.assertEqual(set(call_tickers), {'T0', 'T1', 'T2', 'T3'})
+
+    @patch('src.pipeline.validate_universe')
+    @patch('src.pipeline.download_and_save')
+    def test_resume_hydrates_failed_tickers_into_cache(self, mock_dl, mock_val):
+        """Resuming a checkpoint pushes its failed_tickers into the bad cache
+        and filters them on the way to download."""
+        from src.pipeline import run_pipeline, save_checkpoint
+        # Pre-existing checkpoint with two failed tickers from a prior run.
+        ckpt_path = os.path.join(self.tmpdir, 'checkpoint.json')
+        save_checkpoint(ckpt_path, {
+            'run_id': 'prior', 'exchange': 'US',
+            'staging_db': self.staging_db_path,
+            'completed_tickers': [],
+            'failed_tickers': ['T0', 'T1'],
+        })
+
+        mock_dl.return_value = {
+            'total_tickers': 2, 'saved_tickers': 2, 'failed_batches': [],
+            'circuit_breaker_tripped': False,
+            'circuit_breaker_trip_count': 0,
+        }
+        mock_val.return_value = {
+            'total_tickers': 2, 'total_excluded': 0, 'total_active': 2,
+        }
+        run_pipeline(
+            ['T0', 'T1', 'T2', 'T3'], exchange='US', asset_type='etf',
+            prod_db_path=self.prod_db_path,
+            staging_db_path=self.staging_db_path,
+            checkpoint_path=ckpt_path,
+            stage_only=True,
+        )
+        # T0, T1 hydrated into the cache from the checkpoint
+        conn = db.get_connection(self.prod_db_path)
+        cached = db.load_known_bad_tickers(conn, exchange='US', min_failures=1)
+        conn.close()
+        self.assertEqual(cached, {'T0', 'T1'})
+        # ...and filtered from the download
+        call_tickers = mock_dl.call_args.kwargs.get('tickers')
+        if call_tickers is None:
+            call_tickers = mock_dl.call_args.args[0]
+        self.assertEqual(set(call_tickers), {'T2', 'T3'})
+
 
 if __name__ == '__main__':
     unittest.main()

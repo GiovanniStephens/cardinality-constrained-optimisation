@@ -1,5 +1,6 @@
 """Covariance estimation: sample, Ledoit-Wolf shrinkage, CCC, and copula-CCC."""
 
+import hashlib
 import logging
 
 import numpy as np
@@ -12,6 +13,7 @@ from src.config import (
     COV_MIN_OBS_RATIO_ERROR,
     COPULA_GARCH_SCALE,
     COPULA_DIAGNOSTIC_LAGS,
+    COPULA_TYPE,
     STATISTICAL_SIGNIFICANCE_LEVEL,
 )
 
@@ -68,32 +70,133 @@ def shrink_correlation_matrix(corr_matrix, log_returns):
     return (1 - alpha) * corr_matrix + alpha * np.eye(N)
 
 
+_muarch_patched = False
+
+
+def _patch_muarch_for_arch_v8() -> None:
+    """Bridge muarch 0.2.2 to arch >= 8.0.
+
+    muarch's distribution wrappers call ``arch.SkewStudent.__init__(self,
+    random_state)`` with a positional argument, but arch 8 made ``seed``
+    keyword-only. Without this patch every fit on ``dist='skewt'`` (and
+    the other muarch dists) fails with TypeError, so the copula path
+    silently falls back to sample correlation.
+
+    Idempotent. Patches the four wrappers muarch ships.
+    """
+    global _muarch_patched
+    if _muarch_patched:
+        return
+    from muarch.distributions import (
+        GeneralizedError, Normal, SkewStudent, StudentsT,
+    )
+    from muarch.distributions._base import DistributionMixin
+    from arch.univariate.distribution import (
+        GeneralizedError as _GE,
+        Normal as _N,
+        SkewStudent as _SS,
+        StudentsT as _T,
+    )
+
+    def _make_init(parent_cls):
+        def __init__(self, random_state=None):
+            DistributionMixin.__init__(self)
+            parent_cls.__init__(self, seed=random_state)
+        return __init__
+
+    SkewStudent.__init__ = _make_init(_SS)
+    StudentsT.__init__ = _make_init(_T)
+    Normal.__init__ = _make_init(_N)
+    GeneralizedError.__init__ = _make_init(_GE)
+    _muarch_patched = True
+
+
+# Per-process cache of standardised AR(1)-GARCH(1,1) residuals, keyed by
+# (ticker_name, hash of the series values). Survives across calls within
+# a single Python process; multiprocessing workers each hold their own.
+_garch_residuals_cache: dict[str, np.ndarray] = {}
+
+
+def _garch_cache_key(name: str, values: np.ndarray) -> str:
+    h = hashlib.md5()
+    h.update(str(name).encode('utf-8'))
+    h.update(b':')
+    h.update(np.ascontiguousarray(values, dtype=np.float64).tobytes())
+    return h.hexdigest()
+
+
+def clear_garch_cache() -> None:
+    """Clear the per-process GARCH residuals cache."""
+    _garch_residuals_cache.clear()
+
+
+def _fit_garch_residuals_cached(values: np.ndarray, name: str,
+                                 scale: float = COPULA_GARCH_SCALE) -> np.ndarray:
+    """Fit AR(1)-GARCH(1,1) skew-t to a single series and return standardised
+    residuals. Caches by (name, series bytes) so repeated tickers within a
+    process pay no fit cost.
+
+    Mirrors muarch's per-series behaviour (mean='AR', lags=1, dist='skewt',
+    scale=COPULA_GARCH_SCALE) but goes through arch directly to enable the
+    cache.
+    """
+    key = _garch_cache_key(name, values)
+    cached = _garch_residuals_cache.get(key)
+    if cached is not None:
+        return cached
+    from arch import arch_model
+    res = arch_model(
+        values * scale, mean='AR', lags=1, vol='GARCH', p=1, q=1, dist='skewt',
+        rescale=False,
+    ).fit(disp='off', show_warning=False)
+    std_resid = np.asarray(res.std_resid, dtype=np.float64)
+    # Drop any leading NaN from the AR(1) initial-condition slot.
+    std_resid = std_resid[~np.isnan(std_resid)]
+    _garch_residuals_cache[key] = std_resid
+    return std_resid
+
+
 def estimate_corr_using_copulas(data: pd.DataFrame,
-                                diagnostics: bool = False) -> np.ndarray:
+                                diagnostics: bool = False,
+                                copula_type: str | None = None) -> np.ndarray:
     """Estimate the correlation matrix using the copula method.
 
     Fits AR(1)-GARCH(1,1) with skew-t innovations to each series, then
-    fits a Student-t copula to the standardised residuals and extracts
-    the correlation matrix (``cop.sigma``).
+    fits a copula (Gaussian or Student-t, see ``copula_type``) to the
+    standardised residuals and extracts the correlation matrix
+    (``cop.sigma``).
+
+    Per-ticker GARCH fits are cached in :data:`_garch_residuals_cache`,
+    keyed by (ticker name, series bytes). Repeat fits for the same
+    ticker+series within a process are O(dict-lookup).
 
     Falls back to the (optionally shrunk) sample correlation matrix if
-    copula fitting fails.
+    fitting fails.
 
     :param data: DataFrame of log returns.
     :param diagnostics: if True, log GARCH residual adequacy tests and
         copula model comparison (t-copula vs Gaussian).
+    :param copula_type: ``'gaussian'`` (closed-form, O(N²)) or ``'t'``
+        (iterative, super-cubic). Defaults to :data:`config.COPULA_TYPE`.
     :return: numpy array correlation matrix.
     """
     from copulae import GaussianCopula, TCopula
-    from muarch import MUArch
     from statsmodels.stats.diagnostic import acorr_ljungbox
 
+    if copula_type is None:
+        copula_type = COPULA_TYPE
+    if copula_type not in ('gaussian', 't'):
+        raise ValueError(
+            f"copula_type must be 'gaussian' or 't', got {copula_type!r}")
+
     try:
-        # scale=10 multiplies returns before fitting for numerical stability
-        # (daily returns are ~0.001), then divides back internally.
-        models = MUArch(data.shape[1], mean='AR', lags=1, dist='skewt', scale=COPULA_GARCH_SCALE)
-        models.fit(data)
-        residuals = models.residuals()
+        residuals_cols = []
+        for col in data.columns:
+            values = np.asarray(data[col].values, dtype=np.float64)
+            residuals_cols.append(_fit_garch_residuals_cached(values, str(col)))
+        # Align lengths in case different fits trimmed differently.
+        min_len = min(len(r) for r in residuals_cols)
+        residuals = np.column_stack([r[-min_len:] for r in residuals_cols])
 
         if diagnostics:
             for i, col in enumerate(data.columns):
@@ -110,16 +213,18 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
                         "GARCH residuals for %s pass Ljung-Box test (p=%.4f).",
                         col, p_value)
 
-        cop = TCopula(dim=data.shape[1])
+        cop_cls = GaussianCopula if copula_type == 'gaussian' else TCopula
+        cop = cop_cls(dim=data.shape[1])
         cop.fit(residuals)
 
         if diagnostics:
-            gauss_cop = GaussianCopula(dim=data.shape[1])
-            gauss_cop.fit(residuals)
+            other_cls = TCopula if copula_type == 'gaussian' else GaussianCopula
+            other = other_cls(dim=data.shape[1])
+            other.fit(residuals)
             _cov_logger.info(
-                "Copula comparison — t-copula log-lik: %.2f, "
-                "Gaussian copula log-lik: %.2f",
-                cop.log_lik(residuals), gauss_cop.log_lik(residuals))
+                "Copula comparison — %s log-lik: %.2f, %s log-lik: %.2f",
+                cop_cls.__name__, cop.log_lik(residuals),
+                other_cls.__name__, other.log_lik(residuals))
 
         return cop.sigma
     except (ValueError, RuntimeError, TypeError, np.linalg.LinAlgError) as e:
