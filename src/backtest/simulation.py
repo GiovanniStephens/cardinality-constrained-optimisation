@@ -168,6 +168,93 @@ def _equal_weights(portfolio):
     return np.ones(n) / n
 
 
+def _inverse_vol_weights(portfolio):
+    """Naive risk parity: w_i ∝ 1/σ_i (per-ticker historical std).
+
+    No covariance estimation — just per-ticker volatility from training-window
+    log returns. Often surprisingly competitive vs full SLSQP per
+    DeMiguel et al. (2009).
+    """
+    if len(portfolio) < 1:
+        raise ValueError("Cannot generate inverse-vol weights for an empty portfolio.")
+    subset, _, _ = _resolve_subset_and_er(portfolio)
+    stds = subset.std().values
+    # Guard against zero-variance series (would otherwise divide by zero)
+    stds = np.where(stds > 0, stds, np.nan)
+    inv = 1.0 / stds
+    if not np.isfinite(inv).any():
+        return _equal_weights(portfolio)
+    inv = np.where(np.isfinite(inv), inv, 0.0)
+    total = inv.sum()
+    return inv / total if total > 0 else _equal_weights(portfolio)
+
+
+def _risk_parity_weights(portfolio, *, use_copulae=False,
+                         forecast_variances=None):
+    """Equal Risk Contribution (ERC) weights.
+
+    Each asset contributes equally to portfolio variance. Uses the existing
+    SLSQP risk-budget objective in :mod:`src.weights`. Bridgewater-style
+    All-Weather paradigm.
+    """
+    subset, _, max_weight = _resolve_subset_and_er(portfolio)
+    cov = _resolve_cov_matrix(
+        subset, use_copulae=use_copulae,
+        forecast_variances=forecast_variances)
+    from src.weights import optimise_weights
+    result = optimise_weights(
+        expected_returns=np.zeros(len(portfolio)), cov_matrix=cov,
+        max_weight=max_weight,
+        initial_weights=get_random_weights(portfolio),
+        risk_parity=True,
+    )
+    if not result.success:
+        logger.warning("Risk-parity optimization did not converge: %s",
+                       result.message)
+    return result['x']
+
+
+def _max_diversification_weights(portfolio, *, use_copulae=False,
+                                  forecast_variances=None):
+    """Choueifaty & Coignard (2008) most-diversified portfolio.
+
+    Maximises the diversification ratio DR = (w'σ) / sqrt(w'Σw), where σ is
+    the per-asset volatility vector. Equivalent to maximising the ratio of
+    weighted volatilities to portfolio volatility.
+
+    Implemented as SLSQP minimising −DR² (squared to avoid negative-sqrt
+    issues during line search). Constraints: long-only, weights sum to 1,
+    per-asset cap = ``max_weight``.
+    """
+    from scipy.optimize import minimize
+
+    subset, _, max_weight = _resolve_subset_and_er(portfolio)
+    cov = _resolve_cov_matrix(
+        subset, use_copulae=use_copulae,
+        forecast_variances=forecast_variances)
+    sigma = np.sqrt(np.diag(cov))
+
+    def neg_dr_squared(w):
+        port_var = float(w @ cov @ w)
+        if port_var <= 0:
+            return 0.0
+        weighted_vol = float(w @ sigma)
+        return -(weighted_vol * weighted_vol) / port_var
+
+    n = len(portfolio)
+    x0 = np.asarray(get_random_weights(portfolio), dtype=float)
+    bounds = [(0.0, max_weight)] * n
+    constraints = ({'type': 'eq', 'fun': lambda w: float(np.sum(w) - 1.0)},)
+    result = minimize(neg_dr_squared, x0, method='SLSQP',
+                      bounds=bounds, constraints=constraints,
+                      options={'maxiter': 200, 'ftol': 1e-9})
+    if not result.success:
+        logger.warning("Max-diversification optimization did not converge: %s",
+                       result.message)
+        return _inverse_vol_weights(portfolio)
+    return result.x
+
+
 def optimal_weights(portfolio, use_copulae=False):
     """Backwards-compatible max-Sharpe wrapper.
 
@@ -369,6 +456,12 @@ def _compute_weights_for_portfolio(args):
         return _min_variance_weights(portfolio)
     if mode == 'equal':
         return _equal_weights(portfolio)
+    if mode == 'inverse_vol':
+        return _inverse_vol_weights(portfolio)
+    if mode == 'risk_parity':
+        return _risk_parity_weights(portfolio)
+    if mode == 'max_diversification':
+        return _max_diversification_weights(portfolio)
     if mode == 'optimal_arima_er':
         return _max_sharpe_weights(
             portfolio, expected_returns_override=kwargs['er'])

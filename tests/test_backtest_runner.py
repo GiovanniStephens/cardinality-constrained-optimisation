@@ -171,6 +171,16 @@ class TestEvaluateWindow(unittest.TestCase):
             set(),
         )
 
+    def test_new_weight_strategies_present(self):
+        """Tier 1/2 weighting strategies (inverse_vol, risk_parity,
+        max_diversification) should populate alongside the existing
+        cc_* variants."""
+        result = self._run_evaluate()
+        for cat in ('cc_inverse_vol', 'cc_risk_parity',
+                    'cc_max_diversification'):
+            self.assertIn(cat, result.method_results,
+                f"{cat} not populated; check evaluate_window wiring")
+
     def test_benchmarks_skipped_when_tickers_missing(self):
         """Synthetic fixture has no SPY/AGG → benchmark categories absent."""
         result = self._run_evaluate()

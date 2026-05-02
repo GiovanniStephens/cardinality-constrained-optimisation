@@ -896,5 +896,83 @@ class TestBacktestEndToEnd(unittest.TestCase):
         )
 
 
+class TestNewWeightHelpers(unittest.TestCase):
+    """Tier 1/2 weight strategies: inverse_vol, risk_parity, max_diversification."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.helpers import make_synthetic_prices
+        from src.backtest import simulation
+        from src.returns import calculate_log_returns, calculate_expected_returns
+        cls.prices = make_synthetic_prices(n_days=300, n_tickers=8, seed=11)
+        cls.tickers = list(cls.prices.columns)
+        log_ret = calculate_log_returns(cls.prices)
+        simulation._backtest_log_returns = log_ret.transpose()
+        simulation._backtest_expected_returns = calculate_expected_returns(log_ret)
+
+    def _portfolio(self, k=5):
+        return self.tickers[:k]
+
+    def test_inverse_vol_sums_to_one_and_inverse_to_std(self):
+        from src.backtest.simulation import _inverse_vol_weights, _backtest_log_returns
+        portfolio = self._portfolio()
+        w = _inverse_vol_weights(portfolio)
+        self.assertEqual(len(w), len(portfolio))
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=6)
+        self.assertTrue((w > 0).all())
+        stds = _backtest_log_returns.loc[portfolio].std(axis=1).values
+        self.assertEqual(int(np.argmax(stds)), int(np.argmin(w)))
+        self.assertEqual(int(np.argmin(stds)), int(np.argmax(w)))
+
+    def test_risk_parity_equalises_risk_contributions(self):
+        from src.backtest.simulation import (
+            _risk_parity_weights, _resolve_subset_and_er, _resolve_cov_matrix,
+        )
+        from src.weights import calculate_risk_contribution
+        portfolio = self._portfolio()
+        w = _risk_parity_weights(portfolio)
+        self.assertEqual(len(w), len(portfolio))
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=4)
+        subset, _, _ = _resolve_subset_and_er(portfolio)
+        cov = _resolve_cov_matrix(subset)
+        rc = calculate_risk_contribution(w, np.asmatrix(cov))
+        rc = np.asarray(rc).flatten()
+        rel_spread = (rc.max() - rc.min()) / rc.mean()
+        self.assertLess(rel_spread, 0.5,
+            f"Risk-parity contributions too uneven: {rc} (spread {rel_spread:.2f})")
+
+    def test_max_diversification_beats_equal_weight_on_DR(self):
+        from src.backtest.simulation import (
+            _max_diversification_weights, _equal_weights,
+            _resolve_subset_and_er, _resolve_cov_matrix,
+        )
+        portfolio = self._portfolio()
+        w_md = _max_diversification_weights(portfolio)
+        w_eq = _equal_weights(portfolio)
+        subset, _, _ = _resolve_subset_and_er(portfolio)
+        cov = _resolve_cov_matrix(subset)
+        sigma = np.sqrt(np.diag(cov))
+
+        def DR(w):
+            return (w @ sigma) / np.sqrt(w @ cov @ w)
+
+        self.assertGreaterEqual(DR(w_md), DR(w_eq) - 1e-6,
+            "Max-diversification should not be worse than 1/N on its own objective.")
+
+    def test_inverse_vol_handles_zero_variance_ticker(self):
+        from src.backtest import simulation
+        from src.backtest.simulation import _inverse_vol_weights
+        zero_ret = simulation._backtest_log_returns.copy()
+        zero_ret.loc[self.tickers[0]] = 0.0
+        original = simulation._backtest_log_returns
+        try:
+            simulation._backtest_log_returns = zero_ret
+            portfolio = self._portfolio()
+            w = _inverse_vol_weights(portfolio)
+            self.assertAlmostEqual(float(w.sum()), 1.0, places=6)
+        finally:
+            simulation._backtest_log_returns = original
+
+
 if __name__ == '__main__':
     unittest.main()

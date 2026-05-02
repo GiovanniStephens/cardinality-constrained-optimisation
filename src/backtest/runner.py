@@ -310,16 +310,19 @@ def evaluate_split(
     task_metadata = []  # (category_name, portfolio_index)
 
     categories = [
-        ('cc_optimised',      ga_portfolios,     'optimal'),
-        ('cc_copulae',        ga_portfolios,     'copulae'),
-        ('cc_random_weights', ga_portfolios,     'random'),
-        ('cc_ccc_baseline',   ga_portfolios,     'optimal_ccc'),
-        ('cc_equal_weight',   ga_portfolios,     'equal'),
-        ('cc_min_variance',   ga_portfolios,     'min_variance'),
-        ('mc_optimised',      mc_portfolios,     'optimal'),
-        ('mc_random_weights', mc_portfolios,     'random'),
-        ('random_optimised',  random_portfolios, 'optimal'),
-        ('random_random',     random_portfolios, 'random'),
+        ('cc_optimised',           ga_portfolios,     'optimal'),
+        ('cc_copulae',             ga_portfolios,     'copulae'),
+        ('cc_random_weights',      ga_portfolios,     'random'),
+        ('cc_ccc_baseline',        ga_portfolios,     'optimal_ccc'),
+        ('cc_equal_weight',        ga_portfolios,     'equal'),
+        ('cc_min_variance',        ga_portfolios,     'min_variance'),
+        ('cc_inverse_vol',         ga_portfolios,     'inverse_vol'),
+        ('cc_risk_parity',         ga_portfolios,     'risk_parity'),
+        ('cc_max_diversification', ga_portfolios,     'max_diversification'),
+        ('mc_optimised',           mc_portfolios,     'optimal'),
+        ('mc_random_weights',      mc_portfolios,     'random'),
+        ('random_optimised',       random_portfolios, 'optimal'),
+        ('random_random',          random_portfolios, 'random'),
     ]
 
     if arima_er_series is not None and garch_var_series is not None:
