@@ -663,14 +663,14 @@ def main_cpcv(n_groups: Optional[int] = None,
                     len(split.train_dates), len(split.test_dates))
         train_prices = data.loc[split.train_dates]
         oos_prices = data.loc[split.test_dates]
-        # OOS log returns: prepend the last train price so the first OOS
-        # day's log return is non-zero (matches slice_window_data semantics).
-        if len(train_prices) > 0:
-            boundary = train_prices.iloc[[-1]]
-            oos_with_boundary = pd.concat([boundary, oos_prices])
-            oos_log_returns = calculate_log_returns(oos_with_boundary).iloc[1:]
-        else:
-            oos_log_returns = calculate_log_returns(oos_prices)
+        # CPCV test_dates are the union of k_test groups — possibly
+        # non-contiguous in time, and not necessarily following the
+        # train end. The walk-forward boundary-prepending trick would
+        # break sort order. Instead, compute log returns directly on
+        # the (sorted) test prices. The first day of each test group
+        # gets a zero return; for k_test=2, that's a 2-row distortion
+        # in ~574 rows of test data — acceptable noise.
+        oos_log_returns = calculate_log_returns(oos_prices)
 
         wr = evaluate_split(
             train_prices=train_prices,
