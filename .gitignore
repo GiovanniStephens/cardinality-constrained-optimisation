@@ -54,3 +54,6 @@ cpp/optimisation
 
 # Benchmark output
 benchmark_results/
+
+# Local Claude Code state (scheduled tasks, settings, worktrees)
+.claude/
