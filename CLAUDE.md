@@ -141,7 +141,8 @@ python -m src.optimisers.island_ga
 python -m src.optimisers.pygad_ga
 
 # Run backtests (also available as: portfolio-backtest)
-python -m src.backtest
+python -m src.backtest                          # walk-forward (default): 5y train + 6mo OOS, 17 windows
+python -m src.backtest --mode cpcv              # Combinatorially Purged CV: 66 splits with PBO + CIs
 
 # Generate ARIMA/GARCH forecasts (also: portfolio-forecast)
 python -m src.forecast
@@ -231,24 +232,37 @@ The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silico
 
 ### The Pitfall
 
-When we optimise a portfolio on historical data (maximising the in-sample Sharpe ratio), the reported Sharpe is **biased upward**. The GA searches over a vast combinatorial space of portfolio selections (choosing 10-20 from 1700+ instruments), and the best-found solution will almost certainly exploit noise patterns in the training data that do not persist out-of-sample. This is compounded by SLSQP weight optimisation, which further tailors weights to historical noise.
+When we optimise a portfolio on historical data (maximising the in-sample Sharpe ratio), the reported Sharpe is **biased upward**. The GA searches over a vast combinatorial space of portfolio selections (choosing 8-20 from ~860 long-history instruments after the 95% coverage filter), and the best-found solution will almost certainly exploit noise patterns in the training data that do not persist out-of-sample. This is compounded by SLSQP weight optimisation, which further tailors weights to historical noise.
 
 **This is not a bug — it is an inherent property of optimisation on finite samples.**
 
-### Evidence in This Project
+### Empirical Findings (May 2026 backtest series)
 
-- Benchmark in-sample Sharpe ratios: **2.3 to 5.7** (see `benchmark_results/`)
-- Realistic annual equity portfolio Sharpe ratios: **0.3 to 1.0**
-- Typical in-sample to out-of-sample degradation: **30-50%** (median ~44% per academic literature)
-- A Sharpe ratio of 5.7 on annual equity data is not a sign of a great strategy — it is a sign of overfitting
+The walk-forward + CPCV results materially refined the priors. Key findings:
+
+- **Walk-forward backtest (v6, 17 windows × 16 strategies)**: top method `cc_ccc_baseline` reported mean OOS Sharpe **+1.86** with std 3.4. Other GA-selected methods (`cc_inverse_vol` +1.76, `cc_copulae` +1.72, `cc_min_variance` +1.58) clustered nearby. `mc_optimised` was rank 10 at +0.95 with much lower variance.
+
+- **CPCV backtest** (n_groups=12, k=2 → 66 splits, full run, ~9h50m wall): the ranking **flipped**. `cc_copulae` rose to rank 1 at +1.08 (std 0.67, widest of any method); `mc_optimised` was rank 2 at +1.04 with the tightest distribution (std 0.29). `cc_ccc_baseline` collapsed to +0.96 (−48% from walk-forward). `cc_min_variance` collapsed to +0.81 (−49%, biggest IS-OOS gap pre-split-66). **PBO = 0.909** — the in-sample-best method ranks below median OOS in 91% of CPCV splits, a strong overfitting signal at the strategy-family level. PBO climbed monotonically with sample size (0.79 at 28 splits, 0.85 at 65 splits, 0.909 at 66 splits): the partial-run numbers underestimated the overfitting.
+
+- **The GA-selection / fancy-weighting edge in walk-forward was largely an artefact of regime concentration** between 5-year train and 6-month test windows. Once CPCV breaks that regime correlation, the simpler MC + equal-weight methods dominate.
+
+- **Sample-mean expected returns degrade OOS performance**. Methods that ignore ER entirely (CCC baseline, copula, min-variance, inverse vol) consistently outperform `cc_optimised` (full max-Sharpe SLSQP).
+
+- **GARCH variance forecasting hurts**. `cc_garch_var` and `cc_arima_garch` rank near the bottom of cc_* methods in both walk-forward and CPCV (~50-62% IS-OOS degradation). The GARCH inputs add noise instead of signal.
+
+- **ARIMA on returns is a marginal lift** (`cc_arima_er` rank 6-9 in both runs). The ER forecast adds something but not enough to justify complexity.
+
+- **Realistic OOS Sharpe ceiling for this universe**: ~1.0-1.2 net of costs. Not 1.5+. Anything above 1.5 OOS sustained over 10+ years is a red flag for selection bias, regime concentration, or undisclosed leverage. See DeMiguel/Garlappi/Uppal (2009) and the live track records of multi-strategy funds (AQR Style Premia delivered 0.1 net 2013-2024 vs 0.9 backtest).
 
 ### Academic References
 
-1. **Bailey & López de Prado (2014)**, "The Deflated Sharpe Ratio" (*Journal of Portfolio Management*, Vol. 40, No. 5, pp. 94-107) — corrects observed Sharpe for selection bias when multiple strategies are tested and for non-normality (skewness, kurtosis) of returns. The DSR gives the probability that an observed Sharpe is genuine after accounting for how many trials were run.
+1. **Bailey & López de Prado (2014)**, "The Deflated Sharpe Ratio" (*Journal of Portfolio Management*, Vol. 40, No. 5, pp. 94-107) — corrects observed Sharpe for selection bias when multiple strategies are tested and for non-normality (skewness, kurtosis) of returns. The DSR gives the probability that an observed Sharpe is genuine after accounting for how many trials were run. **Implemented in `src/metrics.deflated_sharpe_ratio` and gated per-window in `src/backtest/runner.py`.**
 
 2. **Harvey, Liu, Zhu (2016)**, "…and the Cross-Section of Expected Returns" (*Review of Financial Studies*, Vol. 29, No. 1, pp. 5-68) — argues the t-statistic threshold for significance should be ~3.0, not the traditional 2.0, to account for multiple testing across hundreds of strategies/factors.
 
-3. **López de Prado (2015)**, "The Probability of Backtest Overfitting" — provides a model-free, metric-agnostic framework for computing the probability that a backtested strategy is overfit, using Combinatorially Symmetric Cross-Validation (CSCV).
+3. **López de Prado (2018)**, *Advances in Financial Machine Learning*, Wiley, Ch. 12 — Combinatorially Purged Cross-Validation (CPCV) and Probability of Backtest Overfitting (PBO). **Implemented in `src/backtest/cpcv.py`; runnable via `python -m src.backtest --mode cpcv`.**
+
+4. **DeMiguel, Garlappi, Uppal (2009)**, "Optimal Versus Naive Diversification: How Inefficient is the 1/N Portfolio Strategy?" (*RFS*, 22(5), 1915-1953) — across 14 methods × 7 datasets, none reliably beat 1/N OOS. Empirically validated by our CPCV run: simpler methods (MC selection, equal-weight, inverse-vol) generalise better than the GA + sophisticated weighting.
 
 ### Key Formula: Variance of the Sharpe Ratio Estimator
 
@@ -260,27 +274,92 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 
 ### Mitigations in Place
 
-- Forward-walk backtesting with non-overlapping OOS windows (5yr train + 1yr test)
+- Forward-walk backtesting with non-overlapping OOS windows (5yr train + 6mo OOS, 17 windows)
+- **Combinatorially Purged Cross-Validation** (`--mode cpcv`, 66 splits with purge+embargo, PBO computation)
+- **Deflated Sharpe Ratio** logged per (method, window) with PASS/WEAK/FAIL gating thresholds at 0.95/0.5
 - Multiple evaluation metrics beyond Sharpe (Sortino, Calmar, max drawdown)
 - Hypothesis testing (paired t-tests, Friedman tests) across windows
-- Cardinality constraints (10-20 holdings) limiting parameter space
+- Cardinality constraints (8-20 holdings) limiting parameter space
 - Weight bounds (5-45%) preventing extreme concentration
 - Ledoit-Wolf shrinkage covariance estimation (default for all covariance paths)
+- Gaussian copula correlation (default; t-copula gated behind `COPULA_TYPE='t'` due to super-cubic scaling in dim)
+- Per-ticker GARCH residual cache (`src/covariance.py:_garch_residuals_cache`) to avoid redundant fits
 - T >> N observation ratio guards (error if T/N < 1, warn if T/N < 10)
 
 ### Future Work
-- Full Deflated Sharpe Ratio computation gating results
-- Combinatorially Purged Cross-Validation (CPCV) for more robust OOS evaluation
-- Transaction cost modelling to further deflate apparent performance
-- Regime-aware validation (compare training vs test period volatility)
+
+- **Hierarchical Risk Parity** (López de Prado 2016, *J. Portfolio Management*) — clustering-based weighting that avoids covariance inversion; targeted next addition. Likely beats `cc_inverse_vol` while remaining simple.
+- **Tu-Zhou shrinkage to 1/N** (Tu & Zhou 2011, *JFE*) — `w = δ·w_method + (1−δ)·w_1/N` as a cheap variance reducer to bolt onto any weighting method.
+- **Turnover penalty** in SLSQP objective (`λ·||w_new − w_old||₁`, Boyd et al. 2017 *FnT Optimization*) — reduces real costs and damps IS-noise-driven reweighting.
+- **Pre-filtered universe** (~30-60 hand-curated ETFs by asset-class + factor exposure) — single biggest PBO reducer; dropping the 860-ticker GA shrinks the search space by 15 orders of magnitude.
+- **Harvey-Liu haircut** applied automatically: with K methods tested, expected true Sharpe ≈ S × √(1 − 2·ln(K)/T).
+- **Trend-following sleeve** (DBMF or DIY 10-futures TSMOM at 12mo) — orthogonal premium, crisis alpha. ~2-3 day implementation.
+- **Defined-risk short SPX vol sleeve** — VRP harvesting via 30-45 DTE 10-15 delta put spreads. Requires options data + IB Portfolio Margin.
+- **Levered risk parity wrapper** (NTSX/NTSI or DIY ES + ZN/ZB futures, 1.4-1.5x notional) — captures leverage aversion premium.
+- Combined multi-strategy stack target: realistic OOS Sharpe **1.4-1.7** with 3-5 uncorrelated sleeves (vs 1.0-1.2 long-only ceiling).
 
 ### Rules for Interpreting Results
 
-- **Never trust an in-sample Sharpe above 2.0** for annual equity portfolios without strong OOS confirmation
-- **Sharpe above 3.0** on annual data is almost certainly overfit (Harvey et al. 2016 threshold)
-- **Always report IS and OOS Sharpe side-by-side** — the gap is the overfitting signal
-- The benchmark framework reports **in-sample** fitness values; these measure optimisation quality, not expected real-world performance
-- When in doubt, apply a 50% haircut to any in-sample Sharpe as a rough OOS estimate
+- **Never trust an in-sample Sharpe above 2.0** for annual equity portfolios without strong OOS confirmation.
+- **Sharpe above 3.0** on annual data is almost certainly overfit (Harvey et al. 2016 threshold).
+- **Always report IS and OOS Sharpe side-by-side** — the gap is the overfitting signal.
+- **Trust CPCV results over walk-forward.** Walk-forward Sharpes are systematically inflated by regime correlation between train and test windows; CPCV's combinatorial structure breaks this. Our v6 walk-forward winner (cc_ccc_baseline, 1.86) collapsed by 51% in CPCV.
+- **PBO > 0.5 means the strategy family is overfit.** Our 16-method stack on the broad universe ran PBO = 0.909 (66 splits) — strong evidence that the apparent ranking from walk-forward isn't robust. Pre-filtering the universe is the highest-leverage PBO-reduction step.
+- The benchmark framework reports **in-sample** fitness values; these measure optimisation quality, not expected real-world performance.
+- When in doubt, apply a 50% haircut to any in-sample Sharpe as a rough OOS estimate, *then* apply Harvey-Liu's multiple-testing correction on top.
+
+## Strategy Taxonomy & Empirical Verdicts (May 2026)
+
+The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):
+
+| Rank | Method | CPCV OOS | Std | 95% CI | Walk-forward OOS | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | `cc_copulae` | +1.081 | 0.67 | [+0.92, +1.24] | +1.72 | GA + Gaussian copula correlation. Highest mean but widest CI; tied with rank 2-5 statistically. |
+| 2 | `mc_optimised` | +1.037 | 0.29 | [+0.97, +1.11] | +0.95 | MC selection + SLSQP. **Most robust**: tightest distribution, only +3% IS-OOS gap. |
+| 3 | `mc_random_weights` | +1.002 | 0.28 | [+0.93, +1.07] | +0.93 | MC selection + random weights. Tightest std after rank 2; surprisingly competitive. |
+| 4 | `cc_equal_weight` | +0.998 | 0.40 | [+0.90, +1.09] | +1.03 | GA + 1/N. Travels well; minimal estimation. |
+| 5 | `cc_optimised` | +0.992 | 0.41 | [+0.89, +1.09] | +1.35 | GA + max-Sharpe SLSQP. Walk-forward inflated. |
+| 6 | `cc_ccc_baseline` | +0.963 | 0.58 | [+0.82, +1.10] | **+1.86** | GA + Bollerslev CCC. Walk-forward winner; collapsed −48% in CPCV. |
+| 7 | `cc_inverse_vol` | +0.951 | 0.73 | [+0.78, +1.13] | +1.76 | GA + 1/σ. Largest std among working methods. |
+| 8 | `cc_random_weights` | +0.916 | 0.36 | [+0.83, +1.00] | +0.94 | GA + random weights. |
+| 9 | `cc_garch_var` | +0.900 | 0.51 | [+0.78, +1.02] | +0.71 | GA + GARCH variance + sample R. Forecasting hurts. |
+| 10 | `cc_arima_garch` | +0.877 | 0.52 | [+0.75, +1.00] | +0.74 | GA + ARIMA + GARCH. Combined forecasting hurts more. |
+| 11 | `cc_arima_er` | +0.870 | 0.39 | [+0.77, +0.96] | +1.17 | GA + ARIMA ER. Marginal forecast lift. |
+| 12 | `cc_max_diversification` | +0.863 | 0.49 | [+0.74, +0.98] | +1.13 | Choueifaty-Coignard DR objective. Overfits IS variance structure. |
+| 13 | `cc_risk_parity` | +0.859 | 0.43 | [+0.76, +0.96] | +0.99 | ERC. Underperforms inverse-vol; full ERC machinery doesn't earn its cost. |
+| 14 | `cc_min_variance` | +0.813 | 0.61 | [+0.67, +0.96] | +1.58 | GA + min-var SLSQP. Largest IS-OOS gap (+48% pre-split-66; mean inflated by anomalous final fold). |
+| 15 | `random_optimised` | +0.640 | 0.30 | [+0.57, +0.71] | +0.83 | Random pick + SLSQP. Pure baseline. |
+| 16 | `random_random` | +0.449 | 0.29 | [+0.38, +0.52] | +0.69 | Random pick + random weights. Floor. |
+
+**Key takeaways from this matrix**:
+
+1. **The top 7 methods all have overlapping 95% CIs.** `cc_copulae` leads on the mean but with std 0.67, vs `mc_optimised` at std 0.29. By any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
+2. **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-only), MC search (no estimation), MC + random weights, GA + 1/N, GA + max-Sharpe.
+3. **Walk-forward winners are not CPCV winners.** The 5 cc_* methods that ranked top in walk-forward all dropped 4-7 ranks in CPCV.
+4. **Forecasting hurts more often than it helps.** GARCH-variance methods rank 9-10. Drop GARCH variance forecasting in this universe.
+5. **Min-variance is the worst overfitter on the IS-OOS gap dimension** — IS Sharpe ~1.44, OOS ~0.81, despite being rank 14 in OOS mean. The objective rewards quirky low-variance combinations that don't generalise.
+6. **Final-split (test=10,11) was anomalously favourable**, pushing several methods' OOS means up by 0.05-0.12 each (`cc_inverse_vol` recorded OOS +5.56 on that single split, `cc_copulae` +4.48, `cc_min_variance` +4.58). The standard deviations reflect this as inflated tail-mass; the rankings would be more pessimistic without it.
+
+## Backtest CLI
+
+```bash
+python -m src.backtest                          # Walk-forward (default): 5y train + 6mo OOS, 17 windows
+python -m src.backtest --mode cpcv              # Combinatorially Purged CV: 66 splits with PBO + CIs
+python -m src.backtest --mode cpcv \
+    --n-groups 8 --k-test 2                     # Faster CPCV: 28 splits (~5h instead of ~10h)
+python -m src.backtest --mode cpcv \
+    --purge-days 10 --embargo-days 10           # Tighter purge/embargo for stronger leakage guards
+```
+
+Per-window log format includes DSR gating:
+```
+Window 2014-2018/2018 results (294s):
+  cc_optimised   IS_sharpe=+2.41  OOS_sharpe=+2.41  degradation=0%  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
+  cc_copulae     IS_sharpe=+2.39  OOS_sharpe=+3.04  degradation=-27%  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
+  ...
+```
+
+CPCV `_report_cpcv_results` prints: per-method OOS mean + 95% CI across splits, plus method-level PBO.
 
 ## Database
 

@@ -127,10 +127,10 @@ Console scripts (installed by `pip install -e .`, defined in `pyproject.toml`):
 
 ### The Two-Stage Optimisation
 
-**Stage 1 -- ETF Selection (Genetic Algorithm):**
+**Stage 1: ETF Selection (Genetic Algorithm).**
 Each chromosome is a binary vector over the ETF universe (1 = include, 0 = exclude). The GA evaluates fitness by optimising weights for each candidate subset and computing its Sharpe Ratio. Penalties are applied if the number of selected ETFs falls outside `[MIN_NUM_STOCKS, MAX_NUM_STOCKS]`.
 
-**Stage 2 -- Weight Optimisation (SLSQP):**
+**Stage 2: Weight Optimisation (SLSQP).**
 Given the selected ETFs, `scipy.optimize.minimize` finds weights that maximise the Sharpe Ratio (or minimise risk budget error for risk parity), subject to:
 - Weights sum to 1 (fully invested, no leverage)
 - Each weight in `[MIN_WEIGHT, MAX_WEIGHT]` (no shorting)
@@ -145,16 +145,16 @@ Yahoo Finance  ──>  portfolio.db    ──>  expected_returns   ──>  Por
                                          (optional)             + weights
 ```
 
-1. **`src.download`** -- Downloads adjusted close prices from Yahoo Finance (2014-2025) into `data/portfolio.db` (and optionally `data/Prices.csv`). Supports equities, ETFs, and funds. Filters instruments with <90% data availability.
+1. **`src.download`**. Downloads adjusted close prices from Yahoo Finance (2014-2025) into `data/portfolio.db` (and optionally `data/Prices.csv`). Supports equities, ETFs, and funds. Filters instruments with <90% data availability.
 
-2. **`src.forecast`** -- Generates forward-looking inputs:
+2. **`src.forecast`**. Generates forward-looking inputs:
    - **Returns**: Auto-ARIMA per ETF, projects price 252 days out, computes log return.
    - **Variances**: GARCH(1,1) with skew-t innovations, annualised.
    - Outputs saved to `data/expected_returns.csv` and `data/variances.csv`.
 
-3. **`src.optimisers.pygad_ga`** -- Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
+3. **`src.optimisers.pygad_ga`**. Runs the two-stage optimisation. Can use either historical averages or forecasted values depending on `use_forecasts` flag.
 
-4. **`src.backtest`** -- Validates the approach out-of-sample (see Backtest section below).
+4. **`src.backtest`**. Validates the approach out-of-sample (see Backtest section below).
 
 ## Key Configuration
 
@@ -174,8 +174,15 @@ Backtest configuration (also in `src/config.py`):
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `BACKTEST_NUM_PORTFOLIOS` | 20 | Number of portfolios to generate per group |
-| `BACKTEST_NUM_CHILDREN` | 100 | GA population size |
-| `BACKTEST_NUM_DAYS_OOS` | 252 | Out-of-sample period (~1 trading year) |
+| `BACKTEST_NUM_CHILDREN` | 8000 | GA population size (passed as `--pop-size` to the C++ island GA) |
+| `BACKTEST_NUM_DAYS_OOS` | 126 | Out-of-sample period (~6 trading months) |
+| `BACKTEST_RUN_FORECAST_STRATEGIES` | True | Enable the three "fast" forecast methods (`cc_arima_er`, `cc_garch_var`, `cc_arima_garch`) |
+| `BACKTEST_RUN_FORECAST_COPULA_STRATEGIES` | False | Gate the two expensive copula+forecast methods (off by default) |
+| `COPULA_TYPE` | `'gaussian'` | Copula family for `cc_copulae` (`'gaussian'` or `'t'`; t-copula scales super-cubically in dim) |
+| `CPCV_N_GROUPS` | 12 | Number of disjoint time groups for CPCV |
+| `CPCV_K_TEST` | 2 | Test groups per CPCV split (12 choose 2 = 66 splits) |
+| `CPCV_PURGE_DAYS` | 5 | Days dropped between train and test to break leakage |
+| `CPCV_EMBARGO_DAYS` | 5 | Days dropped after test for embargoed train rows |
 
 ## Group Allocation Constraints
 
@@ -223,11 +230,11 @@ Set `GROUP_CONSTRAINTS = {}` to disable all group constraints.
 
 Three reasons this constraint matters:
 
-1. **Covariance matrix invertibility** -- The variance-covariance matrix requires at least N observations for N assets. With 1700+ ETFs, you'd need 1700+ days of data (~7 years) for a reliable estimate. Constraining to 10-15 holdings sidesteps this.
+1. **Covariance matrix invertibility.** The variance-covariance matrix requires at least N observations for N assets. With 1700+ ETFs, you'd need 1700+ days of data (~7 years) for a reliable estimate. Constraining to 10-15 holdings sidesteps this.
 
-2. **Transaction costs** -- Entering and rebalancing 50+ positions is impractical without significant capital. A concentrated portfolio is cheaper to manage.
+2. **Transaction costs.** Entering and rebalancing 50+ positions is impractical without significant capital. A concentrated portfolio is cheaper to manage.
 
-3. **Estimation error** -- Fewer assets means fewer parameters to estimate, reducing the impact of estimation noise on portfolio construction.
+3. **Estimation error.** Fewer assets means fewer parameters to estimate, reducing the impact of estimation noise on portfolio construction.
 
 ## Covariance Estimation Methods
 
@@ -245,7 +252,7 @@ Cov = D * R * D
 where D is a diagonal matrix of forecast standard deviations and R is the historical correlation matrix. Enabled when `forecast.py` outputs are available.
 
 ### 3. Copula-GARCH (most sophisticated)
-After the GA selects ETFs, weights can be re-optimised using correlations estimated from skew-t copulas fitted to AR(1)-GARCH(1,1) residuals. More accurate but slower -- only used for the final weight optimisation, not during the GA search. Set `use_copulae=True` in `optimize()`.
+After the GA selects ETFs, weights can be re-optimised using correlations estimated from skew-t copulas fitted to AR(1)-GARCH(1,1) residuals. More accurate but slower; it is only used for the final weight optimisation, not during the GA search. Set `use_copulae=True` in `optimize()`.
 
 ## Alternative Optimisation Approaches
 
@@ -262,42 +269,87 @@ All optimisers implement `BaseOptimiser.optimise(prices) -> OptimisationResult`.
 
 ## Backtest
 
-The backtest validates whether the cardinality-constrained approach adds value beyond random portfolio selection. It compares six groups:
+The backtest validates whether the cardinality-constrained approach adds value beyond random portfolio selection, and, more importantly, quantifies how much in-sample Sharpe survives out-of-sample. Two modes are supported:
 
-1. **CC + optimised weights** -- GA-selected ETFs with SLSQP-optimised weights
-2. **CC + copula weights** -- GA-selected ETFs with copula-estimated covariance for weight optimisation
-3. **CC + forecast weights** -- GA-selected ETFs using ARIMA/GARCH forecasts
-4. **CC + random weights** -- GA-selected ETFs with random allocations
-5. **Random + optimised weights** -- Randomly selected ETFs with SLSQP weights
-6. **Random + random weights** -- Fully random baseline
+```bash
+python -m src.backtest                    # Walk-forward (default): 5y train + 6mo OOS, 17 windows
+python -m src.backtest --mode cpcv        # Combinatorially Purged CV: 66 splits with PBO + CIs
+python -m src.backtest --mode cpcv \
+    --n-groups 8 --k-test 2               # Faster CPCV: 28 splits
+```
 
-Each portfolio is run forward for 252 days out-of-sample without rebalancing. Performance metrics collected:
-- Annualised return and volatility
-- Sharpe Ratio
-- Maximum drawdown
-- Calmar Ratio (return / max drawdown)
-- Sortino Ratio (return / downside deviation)
+### Strategies compared (16)
 
-### Backtest Results
+The runner sweeps a matrix of selection × weighting strategies:
 
-> **Note:** These results are from an earlier configuration (100 portfolios, 1000 GA children, max 10 holdings, max 20% weight). Current defaults differ — see `src/config.py` for active parameters.
+- **Selection**: GA (cardinality-constrained, 8-15 holdings), Monte Carlo (best of 100k random), random baseline
+- **Weighting**: SLSQP max-Sharpe (`optimised`), Bollerslev CCC, Gaussian copula correlation, equal-weight, inverse-vol, risk-parity (ERC), max-diversification, min-variance, ARIMA expected returns, GARCH variance, ARIMA+GARCH combined, random weights
+- **Benchmarks**: SPY 100% and a 60/40 SPY/AGG split (when those tickers are in the universe)
 
-| Portfolio Type | Sharpe Mean | Sharpe Std |
-|---|---|---|
-| CC + optimised | 2.95 | 0.47 |
-| CC + copulae | 3.06 | 0.48 |
-| CC + forecasts | 2.98 | 0.40 |
-| CC + random weights | 2.57 | 0.88 |
-| Random + optimised | 0.63 | 0.41 |
-| Random + random | 0.10 | 0.48 |
+Each portfolio is held without rebalancing across the OOS window. Per-window log lines include in-sample Sharpe, out-of-sample Sharpe, IS/OOS degradation %, and a [Deflated Sharpe Ratio](#robustness-gating-deflated-sharpe-and-cpcv) gate (`PASS` / `WEAK` / `FAIL`).
 
-The t-statistics confirm the GA-selected portfolios significantly outperform random selection (t ~ -37 to -42, p effectively 0). The copula-based weight optimisation gives a slight edge (~3.06 vs 2.95) but is much slower.
+Metrics collected per portfolio: annualised return + volatility, Sharpe, Sortino (downside deviation), Calmar (return / max drawdown), max drawdown.
+
+### Robustness gating: Deflated Sharpe and CPCV
+
+Single in-sample Sharpe values are biased upward by selection (16 strategies × N portfolios per window all compete on the same data). Two corrections are applied:
+
+1. **Deflated Sharpe Ratio** (Bailey & López de Prado 2014). Corrects for selection bias and non-normality given the number of trials. Logged per (method, window) with `PASS / WEAK / FAIL` thresholds at DSR 0.95 / 0.5. Implemented in `src/metrics.deflated_sharpe_ratio` and gated in `src/backtest/runner.py`.
+
+2. **Combinatorially Purged Cross-Validation** (López de Prado 2018, Ch. 12). Splits the time index into 12 disjoint groups, holds out 2 at a time (66 combinations), and inserts a 5-day purge plus 5-day embargo around each test region to prevent label leakage. The full CPCV run yields a confidence interval per method *and* a method-level **Probability of Backtest Overfitting (PBO)**. Implemented in `src/backtest/cpcv.py`; runnable via `python -m src.backtest --mode cpcv`.
+
+### Empirical findings (May 2026)
+
+The walk-forward and CPCV runs disagree, and the disagreement is itself the story. Final CPCV: 66 splits, ~9h50m wall-clock, PBO = 0.909.
+
+| Rank | Method | CPCV OOS | Std | 95% CI | Walk-forward OOS |
+|---|---|---|---|---|---|
+| 1 | `cc_copulae` | +1.081 | 0.67 | [+0.92, +1.24] | +1.72 |
+| 2 | `mc_optimised` | +1.037 | 0.29 | [+0.97, +1.11] | +0.95 |
+| 3 | `mc_random_weights` | +1.002 | 0.28 | [+0.93, +1.07] | +0.93 |
+| 4 | `cc_equal_weight` | +0.998 | 0.40 | [+0.90, +1.09] | +1.03 |
+| 5 | `cc_optimised` | +0.992 | 0.41 | [+0.89, +1.09] | +1.35 |
+| 6 | `cc_ccc_baseline` | +0.963 | 0.58 | [+0.82, +1.10] | **+1.86** |
+| 14 | `cc_min_variance` | +0.813 | 0.61 | [+0.67, +0.96] | +1.58 |
+| 15 | `random_optimised` | +0.640 | 0.30 | [+0.57, +0.71] | +0.83 |
+| 16 | `random_random` | +0.449 | 0.29 | [+0.38, +0.52] | +0.69 |
+
+**Method-level PBO = 0.909** in CPCV: the in-sample-best method ranks below median OOS in 91% of splits, a strong overfitting signal at the strategy-family level. PBO climbed monotonically with sample size (0.79 at 28 splits, 0.85 at 65 splits, 0.909 at 66 splits); the partial-run numbers underestimated the overfitting. The remaining methods omitted from the table above (`cc_inverse_vol`, `cc_random_weights`, `cc_garch_var`, `cc_arima_garch`, `cc_arima_er`, `cc_max_diversification`, `cc_risk_parity`) cluster between +0.86 and +0.95 OOS, with the GARCH/ARIMA forecast variants showing the largest IS-OOS drops.
+
+Key takeaways:
+
+- **The top 7 methods have overlapping 95% CIs.** `cc_copulae` leads on the mean but with the widest std (0.67); `mc_optimised` is half a step behind (+1.04) with the tightest distribution (std 0.29). On any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
+- **Walk-forward Sharpes are systematically inflated.** The walk-forward winner (`cc_ccc_baseline`, +1.86) collapsed to +0.96 in CPCV (−48%). Trust CPCV over walk-forward.
+- **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-only), MC search, MC + random weights, GA + 1/N, GA + max-Sharpe.
+- **Forecasting hurts more often than it helps.** GARCH-variance methods (`cc_garch_var`, `cc_arima_garch`) rank 9-10 in CPCV.
+- **Realistic OOS Sharpe ceiling for this universe is ~1.0-1.1** net of costs, not 1.5+. Anything above 1.5 OOS sustained over 10+ years is a red flag.
+
+### Academic references
+
+- Bailey & López de Prado (2014), "The Deflated Sharpe Ratio", *Journal of Portfolio Management* 40(5).
+- Harvey, Liu, Zhu (2016), "...and the Cross-Section of Expected Returns", *Review of Financial Studies* 29(1). Argues the t-statistic threshold for significance should be roughly 3.0, not 2.0, after multiple-testing correction.
+- López de Prado (2018), *Advances in Financial Machine Learning*, Wiley, Ch. 12. CPCV and PBO.
+- DeMiguel, Garlappi, Uppal (2009), "Optimal Versus Naive Diversification", *RFS* 22(5). Across 14 methods on 7 datasets, none reliably beat 1/N OOS. Empirically validated by our CPCV run.
+
+### Proposed paths to higher Sharpe
+
+- **Hierarchical Risk Parity** (López de Prado 2016): clustering-based weighting that avoids covariance inversion.
+- **Tu-Zhou shrinkage to 1/N** (Tu & Zhou 2011, *JFE*): `w = δ·w_method + (1−δ)·w_1/N` as a cheap variance reducer.
+- **Turnover penalty** in SLSQP (`λ·||w_new − w_old||₁`): reduces real costs and damps IS-noise reweighting.
+- **Pre-filtered universe** (~30 to 60 hand-curated ETFs): single biggest PBO-reduction lever.
+- **Trend-following sleeve** (DBMF or DIY 10-futures TSMOM): orthogonal premium, crisis alpha.
+- **Defined-risk short SPX vol sleeve**: VRP harvesting via 30-45 DTE 10-15 delta put spreads.
+- **Levered risk parity wrapper** (NTSX/NTSI or DIY ES + ZN/ZB futures): captures leverage aversion premium.
+
+Combined multi-strategy stack target: realistic OOS Sharpe **1.4-1.7** with 3-5 uncorrelated sleeves vs. the 1.0-1.2 long-only ceiling.
 
 ![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
 
+> **Note:** The plot above is from an earlier 6-group configuration and predates the DSR/CPCV machinery; it is retained for reference but does not reflect the current strategy matrix. Refresh after the running CPCV completes.
+
 ## Building the C++ Optimiser
 
-The `cpp/` directory contains a parallel island-model GA written in C++ that is the fastest path for large universes. On Apple Silicon, fitness evaluation can optionally run on the GPU via Metal compute shaders — CMake auto-detects Metal and compiles it in when available. On other platforms the binary compiles CPU-only and `--gpu` falls back with a warning.
+The `cpp/` directory contains a parallel island-model GA written in C++ that is the fastest path for large universes. On Apple Silicon, fitness evaluation can optionally run on the GPU via Metal compute shaders; CMake auto-detects Metal and compiles it in when available. On other platforms the binary compiles CPU-only and `--gpu` falls back with a warning.
 
 ```bash
 # Requires CMake 3.14+. Eigen and csv-parser are header-only git submodules.
@@ -309,7 +361,7 @@ make build-cpp
 ./cpp/optimisation --binary --data data.bin --gpu --time-budget 10   # Apple Silicon
 ```
 
-See `CLAUDE.md` for the Metal GPU architecture, correctness guarantees (FP32 search, FP64 final re-evaluation), and performance numbers.
+**Metal GPU notes.** Each threadgroup evaluates one portfolio with 64 threads parallelising over the time dimension. The GA search runs in FP32, which is sufficient for ranking (max 0.00002% Sharpe error vs FP64), and each island's best solution is re-evaluated in FP64 on the CPU for precise final reporting. On an M4 with M=1800, T=1260, n=15, pop=1000: roughly 1.2M evals/sec single-island GPU (4.5× CPU) and 5.8M evals/sec across 10 islands (3.6× CPU). Limitations: `maxETFs ≤ 64` (shader array size) and `THREADS_PER_GROUP` must be a power of 2.
 
 ## Methodology Notes
 
@@ -321,7 +373,7 @@ The primary objective is the Sharpe Ratio:
 Sharpe = E(R_p) / Std(R_p)
 ```
 
-The `sharpe_ratio()` function returns the *negative* Sharpe Ratio because `scipy.optimize.minimize` minimises -- so minimising the negative Sharpe maximises it.
+The `sharpe_ratio()` function returns the *negative* Sharpe Ratio because `scipy.optimize.minimize` minimises, so minimising the negative Sharpe maximises it.
 
 **Risk parity** is also supported as an alternative objective (`risk_parity=True` in `optimize()`). This minimises the squared difference between each asset's risk contribution and an equal target, producing a portfolio where all holdings contribute equally to total risk.
 
@@ -331,7 +383,7 @@ Mean-variance optimisation implicitly assumes:
 - The variance-covariance structure remains constant going forward
 - Historical averages are good estimators of future returns and (co)variances
 
-Both assumptions are known to be flawed -- returns, variances, and correlations all change over time. The forecasting module (`forecast.py`) partially mitigates this by using ARIMA and GARCH models instead of raw historical averages.
+Both assumptions are known to be flawed: returns, variances, and correlations all change over time. The forecasting module (`forecast.py`) partially mitigates this by using ARIMA and GARCH models instead of raw historical averages.
 
 ### Return Forecasting
 
@@ -339,7 +391,9 @@ Auto-ARIMA models (minimising AIC) project prices 252 trading days forward. The 
 
 ### Variance Forecasting
 
-GARCH(1,1) with GJR leverage term and skew-t innovations. The forecast variance horizon is 252 days, annualised. Some assets produce extreme variance forecasts -- this is a known issue noted in the README history.
+GARCH(1,1) with GJR leverage term and skew-t innovations. The forecast variance horizon is 252 days, annualised. Some assets produce extreme variance forecasts.
+
+> **Empirical caveat (May 2026):** GARCH-variance methods rank near the bottom in both walk-forward and CPCV. The forecast inputs add noise rather than signal in this universe; see the [Backtest § Empirical findings](#empirical-findings-may-2026) table.
 
 ## Running Tests
 
@@ -380,6 +434,13 @@ See `pyproject.toml` for exact version constraints.
 - [x] Test optimisation against portfoliovisualizer.com
 - [x] Download full stock + ETF universe (~25k tickers from FinanceDatabase)
 - [x] Data quality validation (`src/data_quality.py`)
+- [x] Deflated Sharpe Ratio gating (Bailey & López de Prado 2014)
+- [x] Combinatorially Purged Cross-Validation with PBO (López de Prado 2018, Ch. 12)
+- [ ] Hierarchical Risk Parity (López de Prado 2016): clustering-based weighting that avoids covariance inversion
+- [ ] Tu-Zhou shrinkage to 1/N (`w = δ·w_method + (1−δ)·w_1/N`) as a cheap variance reducer
+- [ ] Turnover penalty in SLSQP objective (`λ·||w_new − w_old||₁`) to damp IS-noise reweighting
+- [ ] Pre-filtered universe (~30 to 60 hand-curated ETFs): biggest single PBO-reduction lever
+- [ ] Trend-following / managed futures sleeve (DBMF or DIY 10-futures TSMOM)
+- [ ] Defined-risk short SPX vol sleeve (30-45 DTE 10-15 delta put spreads)
 - [ ] Portfolio beta and alpha (requires benchmark specification)
 - [ ] Verify weights match an independent optimisation engine
-- [ ] Run optimisation on the combined stocks + ETFs universe
