@@ -32,6 +32,7 @@ from src.config import (
     BACKTEST_TEST_DAYS,
     BACKTEST_STEP_DAYS,
     BACKTEST_RUN_FORECAST_STRATEGIES,
+    BACKTEST_RUN_FORECAST_COPULA_STRATEGIES,
     ISLAND_GA_NUM_GENERATIONS,
     TRADING_DAYS_PER_YEAR,
     DATA_MIN_COVERAGE,
@@ -326,14 +327,22 @@ def evaluate_split(
     ]
 
     if arima_er_series is not None and garch_var_series is not None:
+        # Fast forecast strategies (no copula). Always run when forecasts
+        # are enabled.
         categories.extend([
             ('cc_arima_er',            ga_portfolios, 'optimal_arima_er'),
             ('cc_garch_var',           ga_portfolios, 'optimal_garch'),
-            ('cc_garch_copula',        ga_portfolios, 'optimal_garch_copula'),
             ('cc_arima_garch',         ga_portfolios, 'optimal_arima_garch'),
-            ('cc_arima_garch_copula',  ga_portfolios,
-             'optimal_arima_garch_copula'),
         ])
+        # Slow forecast+copula strategies. Gated behind their own flag —
+        # individual portfolio fits can take 200s+ when n=20 due to
+        # super-cubic TCopula scaling combined with the GARCH covariance.
+        if BACKTEST_RUN_FORECAST_COPULA_STRATEGIES:
+            categories.extend([
+                ('cc_garch_copula',        ga_portfolios, 'optimal_garch_copula'),
+                ('cc_arima_garch_copula',  ga_portfolios,
+                 'optimal_arima_garch_copula'),
+            ])
 
     def _kwargs_for(mode, portfolio):
         """Build the per-task kwargs dict for the given mode + portfolio."""

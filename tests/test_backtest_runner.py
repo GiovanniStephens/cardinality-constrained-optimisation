@@ -137,9 +137,11 @@ class TestEvaluateWindow(unittest.TestCase):
         self.assertTrue(expected.issubset(set(result.method_results.keys())))
 
     def test_forecast_categories_when_enabled(self):
-        """When BACKTEST_RUN_FORECAST_STRATEGIES=True, all 5 forecast
-        strategies should populate. Patch warm_cache_for_window to avoid
-        expensive ARIMA/GARCH fits in unit tests."""
+        """When BACKTEST_RUN_FORECAST_STRATEGIES=True, the three fast
+        forecast strategies populate. The two copula+forecast variants
+        are gated behind a separate flag (default off) and not expected
+        here. Patch warm_cache_for_window to avoid expensive ARIMA/GARCH
+        fits in unit tests."""
         from src.backtest import forecast_cache
 
         def fake_warm(tickers, train_prices, train_log_returns,
@@ -153,14 +155,20 @@ class TestEvaluateWindow(unittest.TestCase):
                           side_effect=fake_warm):
             forecast_cache.clear_caches()
             result = self._run_evaluate(run_forecast_strategies=True)
-        forecast_cats = {
-            'cc_arima_er', 'cc_garch_var', 'cc_garch_copula',
-            'cc_arima_garch', 'cc_arima_garch_copula',
+        fast_forecast_cats = {
+            'cc_arima_er', 'cc_garch_var', 'cc_arima_garch',
         }
-        self.assertTrue(forecast_cats.issubset(set(result.method_results.keys())))
+        self.assertTrue(
+            fast_forecast_cats.issubset(set(result.method_results.keys())))
+        # Copula+forecast variants are gated and must NOT appear by default.
+        copula_forecast_cats = {'cc_garch_copula', 'cc_arima_garch_copula'}
+        self.assertEqual(
+            copula_forecast_cats & set(result.method_results.keys()),
+            set(),
+            "Copula+forecast variants should be gated off by default")
 
     def test_forecast_categories_skipped_when_disabled(self):
-        """With the flag off, the 5 forecast strategies must be absent."""
+        """With the flag off, none of the 5 forecast strategies appear."""
         result = self._run_evaluate(run_forecast_strategies=False)
         forecast_cats = {
             'cc_arima_er', 'cc_garch_var', 'cc_garch_copula',

@@ -170,6 +170,12 @@ BACKTEST_STEP_DAYS = 126       # non-overlapping 6-month windows
 # for the union of GA-selected tickers (no leakage). Disable to skip the
 # extra ~5–15 wall-min/window for forecast fits during development.
 BACKTEST_RUN_FORECAST_STRATEGIES = True
+# The two copula+forecast SLSQP variants (cc_garch_copula,
+# cc_arima_garch_copula) are super-cubic in selection size — single
+# windows blew past 50 min on these. They're gated behind their own flag
+# so the cheap forecast strategies (cc_arima_er, cc_garch_var,
+# cc_arima_garch) can run by default.
+BACKTEST_RUN_FORECAST_COPULA_STRATEGIES = False
 
 # ─── Combinatorially Purged CV (López de Prado 2018) ────────────────────────
 # Used by `python -m src.backtest --mode cpcv`. With 12 years of data and
