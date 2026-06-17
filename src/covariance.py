@@ -139,9 +139,6 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
         (iterative, super-cubic). Defaults to :data:`config.COPULA_TYPE`.
     :return: numpy array correlation matrix.
     """
-    from copulae import GaussianCopula, TCopula
-    from statsmodels.stats.diagnostic import acorr_ljungbox
-
     if copula_type is None:
         copula_type = COPULA_TYPE
     if copula_type not in ('gaussian', 't'):
@@ -149,6 +146,11 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
             f"copula_type must be 'gaussian' or 't', got {copula_type!r}")
 
     try:
+        # Imported inside the try so a broken copulae/scipy ABI (e.g. scipy
+        # dropping a C symbol copulae's extension links against) degrades to the
+        # sample-correlation fallback below instead of crashing the caller.
+        from copulae import GaussianCopula, TCopula
+        from statsmodels.stats.diagnostic import acorr_ljungbox
         residuals_cols = []
         for col in data.columns:
             values = np.asarray(data[col].values, dtype=np.float64)
@@ -186,7 +188,7 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
                 other_cls.__name__, other.log_lik(residuals))
 
         return cop.sigma
-    except (ValueError, RuntimeError, TypeError, np.linalg.LinAlgError) as e:
+    except (ValueError, RuntimeError, TypeError, ImportError, np.linalg.LinAlgError) as e:
         _cov_logger.warning(
             "Copula estimation failed (%s: %s); falling back to sample "
             "correlation.", type(e).__name__, e)

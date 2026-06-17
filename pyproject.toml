@@ -19,7 +19,10 @@ dependencies = [
     "pygad>=3.0,<4",
     "scikit-learn>=1.0,<2",
     "scikit-posthocs>=0.7",
-    "scipy>=1.7,<2",
+    # Cap below 1.16: scipy 1.16+ removed the `btdtr` C symbol that copulae's
+    # compiled extension links against, breaking `import copulae` on fresh installs
+    # (Python 3.11/3.12 CI). Lift once copulae ships a build against scipy >= 1.16.
+    "scipy>=1.7,<1.16",
     "seaborn>=0.11",
     "tqdm>=4.40",
     "yfinance>=0.2",
@@ -46,6 +49,19 @@ portfolio-benchmark = "run_benchmark:main"
 
 [tool.setuptools.packages.find]
 include = ["src*", "benchmark*"]
+
+[tool.coverage.run]
+# Root-level CLI entry scripts are thin orchestration wrappers exercised via
+# their `__main__` paths, not unit-tested; exclude them from the coverage gate
+# so it reflects the importable `src/` library.
+omit = [
+    "curate_universe.py",
+    "build_dedup_map.py",
+    "run_rebalance.py",
+    "backtest_rebalance.py",
+    "run_benchmark.py",
+    "run_throughput_benchmark.py",
+]
 
 [tool.ruff]
 target-version = "py310"
