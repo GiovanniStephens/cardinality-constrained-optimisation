@@ -147,11 +147,14 @@ python -m src.backtest --mode cpcv              # Combinatorially Purged CV: 66 
 # Generate ARIMA/GARCH forecasts (also: portfolio-forecast)
 python -m src.forecast
 
-# Download price data (also: portfolio-download)
-python -m src.download --asset-types equities etfs
-python -m src.download --incremental   # only new dates
+# Download price data (also: portfolio-download) — see docs/DATA_REFRESH.md
+make refresh                                # full refresh + auto-validate + health check
+make health-check                           # verify the liquid core is current (no download)
+make retry-core                             # recovery: force-refresh core watchlist, bypass cache
+python -m src.download --asset-types equities etfs   # (what `make refresh` runs)
+python -m src.download --incremental        # only new dates (now promotes correctly)
 
-# Validate data quality (flag bad tickers)
+# Validate data quality (flag bad tickers) — now AUTO-runs after every promotion
 python -m src.data_quality                  # validate and flag
 python -m src.data_quality --dry-run        # preview without writing
 
@@ -216,7 +219,14 @@ The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silico
 - **expected_returns.csv** / **variances.csv**: ARIMA/GARCH forecast outputs
 - **known_bad_tickers.csv**: cached tickers that failed download validation
 - **portfolio.db**: SQLite database (gitignored, created by `src/db`)
+- **core_etfs.csv**: ~87 liquid IB-tradeable ETFs — the *protected watchlist* (never bad-cached) and the health-check verification list
 - Data files are gitignored where large; do not commit raw price CSVs without checking size
+
+### Data-refresh gotchas (full runbook: `docs/DATA_REFRESH.md`)
+
+1. **Trust the health check, not the summary.** A refresh isn't done until `make health-check` shows `✅ all core tickers current`. The "Totals: X saved" line can be green while `SPY` silently never refreshed.
+2. **The bad-ticker cache can blacklist good tickers.** `known_bad_tickers` skips failed tickers on every run. Now mitigated: `core_etfs.csv` is protected (never skipped), entries expire after 30 days (`PIPELINE_BAD_TICKER_TTL_DAYS`), and it takes 3 failures (`PIPELINE_BAD_CACHE_MIN_FAILURES`) to skip. Inspect with `sqlite3 data/portfolio.db "SELECT * FROM known_bad_tickers WHERE symbol='SPY'"`; bypass with `--ignore-bad-cache`.
+3. **A full refresh takes hours** (Yahoo throttles the proxy; the ~36k universe is mostly dead/foreign tickers). More workers won't help — capped at 24 and throttle-bound. Incremental refresh now promotes correctly (min_history skipped on staging; prod re-validated post-promotion).
 
 ## Conventions
 
@@ -279,8 +289,8 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 - **Deflated Sharpe Ratio** logged per (method, window) with PASS/WEAK/FAIL gating thresholds at 0.95/0.5
 - Multiple evaluation metrics beyond Sharpe (Sortino, Calmar, max drawdown)
 - Hypothesis testing (paired t-tests, Friedman tests) across windows
-- Cardinality constraints (8-20 holdings) limiting parameter space
-- Weight bounds (5-45%) preventing extreme concentration
+- Cardinality constraints (research/backtest: 8-20 holdings; production rebalance: capped at 10) limiting parameter space
+- Weight bounds preventing extreme concentration (research config 5-45%; production rebalance 5-25% per holding via `run_rebalance.py --max-weight 0.25`)
 - Ledoit-Wolf shrinkage covariance estimation (default for all covariance paths)
 - Gaussian copula correlation (default; t-copula gated behind `COPULA_TYPE='t'` due to super-cubic scaling in dim)
 - Per-ticker GARCH residual cache (`src/covariance.py:_garch_residuals_cache`) to avoid redundant fits
@@ -291,7 +301,7 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 - **Hierarchical Risk Parity** (López de Prado 2016, *J. Portfolio Management*) — clustering-based weighting that avoids covariance inversion; targeted next addition. Likely beats `cc_inverse_vol` while remaining simple.
 - **Tu-Zhou shrinkage to 1/N** (Tu & Zhou 2011, *JFE*) — `w = δ·w_method + (1−δ)·w_1/N` as a cheap variance reducer to bolt onto any weighting method.
 - **Turnover penalty** in SLSQP objective (`λ·||w_new − w_old||₁`, Boyd et al. 2017 *FnT Optimization*) — reduces real costs and damps IS-noise-driven reweighting.
-- **Pre-filtered universe** (~30-60 hand-curated ETFs by asset-class + factor exposure) — single biggest PBO reducer; dropping the 860-ticker GA shrinks the search space by 15 orders of magnitude.
+- ~~**Pre-filtered universe** (~30-60 hand-curated ETFs by asset-class + factor exposure) — single biggest PBO reducer~~ **— TESTED June 2026, it BACKFIRED.** A data-driven 142-ETF curated universe (correlation clustering, most-liquid representative) *underperformed* the broad universe on a clean common-window A/B (mean per-window OOS Sharpe **+0.17 vs +1.30**, broad won 16/22). Shrinking the universe forced concentration (~10 holdings vs ~23) and flipped return skew negative. See *Lessons Learned (June 2026)* below. Curation is only worth revisiting jointly with constraint re-tuning (relax the return floor, raise min-holdings) — not as a standalone PBO lever.
 - **Harvey-Liu haircut** applied automatically: with K methods tested, expected true Sharpe ≈ S × √(1 − 2·ln(K)/T).
 - **Trend-following sleeve** (DBMF or DIY 10-futures TSMOM at 12mo) — orthogonal premium, crisis alpha. ~2-3 day implementation.
 - **Defined-risk short SPX vol sleeve** — VRP harvesting via 30-45 DTE 10-15 delta put spreads. Requires options data + IB Portfolio Margin.
@@ -304,9 +314,68 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 - **Sharpe above 3.0** on annual data is almost certainly overfit (Harvey et al. 2016 threshold).
 - **Always report IS and OOS Sharpe side-by-side** — the gap is the overfitting signal.
 - **Trust CPCV results over walk-forward.** Walk-forward Sharpes are systematically inflated by regime correlation between train and test windows; CPCV's combinatorial structure breaks this. Our v6 walk-forward winner (cc_ccc_baseline, 1.86) collapsed by 51% in CPCV.
-- **PBO > 0.5 means the strategy family is overfit.** Our 16-method stack on the broad universe ran PBO = 0.909 (66 splits) — strong evidence that the apparent ranking from walk-forward isn't robust. Pre-filtering the universe is the highest-leverage PBO-reduction step.
+- **PBO > 0.5 means the strategy family is overfit.** Our 16-method stack on the broad universe ran PBO = 0.909 (66 splits) — strong evidence that the apparent ranking from walk-forward isn't robust. (We *expected* pre-filtering the universe to be the highest-leverage PBO fix; the June 2026 curation test contradicted that — see *Lessons Learned* below.)
 - The benchmark framework reports **in-sample** fitness values; these measure optimisation quality, not expected real-world performance.
 - When in doubt, apply a 50% haircut to any in-sample Sharpe as a rough OOS estimate, *then* apply Harvey-Liu's multiple-testing correction on top.
+
+## Lessons Learned (consolidated, June 2026)
+
+Distilled across the May–June 2026 work (walk-forward v5/v6, CPCV, category caps,
+must-have/return-floor, pooled lev/inv, and the curated-universe experiment). The
+through-line: **breadth and diversification are the dominant drivers of OOS robustness
+here; almost every attempt to "improve" the book by narrowing it or chasing return has
+hurt.**
+
+**1. Diversification beats cleverness — repeatedly.**
+Every result points the same way: more holdings + a broader candidate set generalise
+better than concentrated, "optimised" books. Empirical-mean expected returns hurt
+(CCC/copula/min-var/inverse-vol all beat full max-Sharpe SLSQP OOS); GARCH variance
+forecasting hurt (ranks 9–10); min-variance had the worst IS-OOS gap; and the curated
+universe hurt by forcing concentration. The 1/N / broad-diversification result
+(DeMiguel-Garlappi-Uppal 2009) keeps winning. **Default to broad + simple + many holdings.**
+
+**2. A smaller universe forced concentration and worsened the tail (the curation test).**
+A 142-ETF data-driven curated universe (US-listed + 5y history + correlation clustering,
+most-liquid representative) was beaten by the broad universe on a clean **common-window**
+A/B: mean per-window OOS Sharpe **+0.17 (curated) vs +1.30 (broad)**, broad won 16/22.
+Cause: with only ~142 candidates the **12% return floor binds hard**, so the GA could
+only assemble ~10 high-beta holdings (vs ~23 for broad), which blew up in crisis quarters
+(2020 COVID quarter: −110% annualised). Curation *lowered* excess kurtosis (67→39.6) but
+**flipped return skew from +2.40 to −2.23** — i.e. it traded an upside fat tail for a
+downside one. Net: strictly worse risk profile. Machinery lives in `curate_universe.py`
++ `--curated`; the volume/ADV plumbing (schema v4, `backfill-volume`) is reusable.
+
+**3. Constraints do not transfer across universe sizes.**
+The 12% return floor was tuned for the broad universe; on a small one it became a
+concentration trap. **Any universe change must be re-paired with constraint re-tuning**
+(return floor, min/max holdings). The untested-but-likely fix for curation: relax the
+floor to ~0–8% and/or raise min-holdings so a small liquid set is forced to diversify.
+
+**4. The return floor is a recurring footgun.** 15% got gamed by FX-collapse trades →
+lowered to 12%; 12% then forced concentration on the curated universe. A hard return
+floor repeatedly pushes the optimiser toward fragile, high-beta corners. Prefer letting
+the Sharpe objective + diversification constraints do the work over flooring return.
+
+**5. Walk-forward Sharpes are inflated; trust CPCV.** Train/test regime correlation lifts
+walk-forward numbers (v6 winner cc_ccc_baseline 1.86 → collapsed ~48% in CPCV; PBO=0.909).
+Realistic long-only OOS ceiling remains **~1.0–1.2** net of costs.
+
+**6. Pooling lev/inv at 20% helped only marginally** (0.97→1.08 Sharpe, within noise) and
+left the fat tails unchanged — kept *split* in production per design.
+
+### Methodology lessons (how to test, not just what)
+
+- **Always compare on COMMON windows.** The curated run looked catastrophic (−0.25 vs
+  +0.97) on raw aggregates purely because a *today*-curated static list has no pre-2019
+  history, so it silently skipped calm early windows and was judged on a crisis-heavy
+  2020–2026 sample. The real story only appeared after aligning to the 22 shared windows.
+- **A static "currently-liquid" allow-list cannot be cleanly walk-forward-tested into the
+  past** — its constituents didn't all exist. Such a list is a *forward* tool; validate it
+  on the period where it has full history, against the broad set over the same period.
+- **Watch the holdings count, not just the Sharpe.** "Always hits the min-holdings floor"
+  was the tell that a constraint (not the universe) was binding and driving the result.
+- **Reduced kurtosis is not automatically good — check skew.** A lower fat-tail moment with
+  negative skew (downside tail) is worse than a higher one with positive skew (upside tail).
 
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
@@ -422,10 +491,12 @@ Note: Geographic exposure is tracked via the `country` column on `tickers`, not 
 
 ### Universe Scope
 
+**Policy: ETFs only — no single stocks.** Production portfolios are built exclusively from ETFs, by deliberate design choice (June 2026): single names carry idiosyncratic blow-up risk and cut against the diversification objective. Single-stock equities were trialled as an experiment and are **excluded from production runs**. The rebalance loads with `asset_type='etf'` by default (`run_rebalance.py` defaults to `--asset-type etf`; pass `--asset-type all` only to reproduce the equities experiment).
+
 All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/config.py`.
 
-- **Equities**: ~22k across 27 countries (US, Canada, UK, Japan, Australia, Germany, France, Switzerland, Netherlands, Sweden, Norway, Denmark, Finland, Ireland, Belgium, Austria, Singapore, Hong Kong, Israel, New Zealand, Brazil, Mexico, India, South Korea, Taiwan, South Africa, Thailand). Foreign companies are available as US-listed ADRs.
-- **ETFs**: ~2,900 covering equities, bonds/treasuries, commodities, REITs, crypto, managed futures/CTA
+- **ETFs (production universe)**: ~2,900 (≈3,900 incl. foreign-listed) covering equities, bonds/treasuries, commodities, REITs, crypto, managed futures/CTA. The only asset class used for live portfolios.
+- **Equities (excluded from production)**: ~22k single names across 27 countries remain in the DB for research only; the ETF-only policy filters them out of the optimisation.
 - **Excluded**: China, Russia (geopolitical risk)
 - **History filter**: 5+ years of daily price data required (~1,260 trading days)
 
@@ -442,7 +513,9 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 
 ### Portfolio Constraints
 
-- **Positions**: 10–20 (cardinality constraint)
+- **Instruments**: ETFs only — no single stocks (see Universe Scope policy)
+- **Positions**: up to 10 holdings (cardinality cap; `run_rebalance.py --max-etfs 10`). Earlier runs used 10–20; capped to 10 (June 2026) for a focused, lower-turnover book.
+- **Per-holding weight**: 5–25% (June 2026; `run_rebalance.py --max-weight 0.25`). Tightened from 45% to limit single-holding concentration; forces ≥4 holdings to fill the book.
 - **Rebalancing**: Quarterly
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
 

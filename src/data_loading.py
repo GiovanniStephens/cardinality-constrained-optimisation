@@ -1,6 +1,7 @@
 """Price data loading: DB-first with CSV fallback, filtering, and cleaning."""
 
 import logging
+import os
 
 import pandas as pd
 
@@ -9,20 +10,44 @@ from src.config import (
     DATA_FFILL_LIMIT,
     DATA_LOOKBACK_DAYS,
     DATA_MIN_COVERAGE_PERMISSIVE,
+    CURATED_UNIVERSE_CSV,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def load_curated_universe(path=None):
+    """Return the curated ETF allow-list (the 'ticker' column of the curated CSV).
+
+    Built by ``curate_universe.py``. Raises FileNotFoundError with a helpful hint
+    if the list hasn't been generated yet.
+    """
+    path = path or CURATED_UNIVERSE_CSV
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Curated universe not found at {path}. Build it first: "
+            f"`python curate_universe.py` (needs volume seeded via "
+            f"`python -m src.db backfill-volume`).")
+    tickers = pd.read_csv(path)['ticker'].astype(str).str.upper().tolist()
+    logger.info("Loaded curated universe: %d tickers from %s", len(tickers), path)
+    return tickers
+
+
 def load_prices(exchange='US', csv_fallback=None, conn=None,
-                last_n_days=None, min_coverage=None, ffill_limit=None):
+                last_n_days=None, min_coverage=None, ffill_limit=None,
+                asset_type=None):
     """Load price data from DB with CSV fallback, applying standard filters.
 
     :param exchange: exchange code for DB query (default 'US').
     :param csv_fallback: CSV path to use if DB is empty.
     :param conn: sqlite3 connection. If None, opens and closes one automatically.
     :param last_n_days: if set, keep only the most recent N calendar days.
-    :param min_coverage: minimum non-null fraction to keep a column (default from config).
+    :param asset_type: optional asset-type filter (e.g. 'etf' to exclude single
+        stocks). None loads all asset types. Ignored on the CSV fallback path.
+    :param min_coverage: minimum non-null fraction to keep a column (default
+        from config). Enforced over the ``last_n_days`` window when set (so a
+        security only needs full coverage over the recent analysis period, not
+        over its entire stored history); over the full history otherwise.
     :param ffill_limit: max consecutive NaN to forward-fill (default from config).
     :return: cleaned DataFrame with dates as index, tickers as columns.
     """
@@ -39,7 +64,13 @@ def load_prices(exchange='US', csv_fallback=None, conn=None,
 
     try:
         from src import db as _db
-        data = _db.load_prices(conn, exchange=exchange)
+        # Do NOT let the DB loader apply its coverage filter here: it would
+        # compute coverage over the full stored history (~13 years), forcing a
+        # security to have ~13 years of data to survive. We want coverage
+        # enforced over the analysis window only (the last_n_days slice below),
+        # so disable the full-history filter and apply the windowed one later.
+        data = _db.load_prices(conn, exchange=exchange, asset_type=asset_type,
+                               min_coverage=0)
     finally:
         if own_conn:
             conn.close()
@@ -62,7 +93,7 @@ def load_prices(exchange='US', csv_fallback=None, conn=None,
 
 
 def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
-                       min_coverage=None):
+                       min_coverage=None, asset_type=None):
     """Load and filter price data for training, with DB-first-CSV-fallback.
 
     Convenience wrapper for entry-point scripts that consolidates the common
@@ -73,6 +104,8 @@ def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
     :param csv_fallback: CSV path to use if DB is empty.
     :param lookback_days: restrict to last N calendar days (default from config).
     :param min_coverage: minimum non-null fraction to keep a column (default from config).
+    :param asset_type: optional asset-type filter (e.g. 'etf' to exclude single
+        stocks). None loads all asset types.
     :return: cleaned DataFrame.
     :raises ValueError: if the resulting DataFrame is empty.
     """
@@ -82,7 +115,8 @@ def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
         min_coverage = DATA_MIN_COVERAGE
 
     data = load_prices(exchange=exchange, csv_fallback=csv_fallback,
-                       last_n_days=lookback_days, min_coverage=min_coverage)
+                       last_n_days=lookback_days, min_coverage=min_coverage,
+                       asset_type=asset_type)
     if data.empty:
         raise ValueError("No price data available from DB or CSV fallback.")
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
