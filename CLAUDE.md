@@ -256,7 +256,7 @@ The walk-forward + CPCV results materially refined the priors. Key findings:
 
 - **The GA-selection / fancy-weighting edge in walk-forward was largely an artefact of regime concentration** between 5-year train and 6-month test windows. Once CPCV breaks that regime correlation, the simpler MC + equal-weight methods dominate.
 
-- **Sample-mean expected returns degrade OOS performance**. Methods that ignore ER entirely (CCC baseline, copula, min-variance, inverse vol) consistently outperform `cc_optimised` (full max-Sharpe SLSQP).
+- **Heavier weight-optimisation doesn't pay off OOS — and the lever is the covariance/weighting choice, not the expected-return input.** All four max-Sharpe SLSQP variants (`cc_optimised`, `cc_copulae`, `cc_ccc_baseline`, `mc_optimised`) feed on the *same* noisy sample-mean ER; what separates them is the covariance construction and the selection. `cc_optimised` (Ledoit-Wolf sample cov) sits mid-pack (rank 5), while the correlation-focused `cc_copulae` leads and the ER-free heuristic weightings (equal-weight, inverse-vol) travel well. Swapping sample-mean ER for an ARIMA forecast (`cc_arima_er`) was only a marginal lift. *(Genuinely ER-free methods: min-variance, inverse-vol, risk-parity, max-diversification, equal-weight. `cc_copulae` and `cc_ccc_baseline` still use sample-mean ER — they differ from `cc_optimised` only in how the covariance is built.)*
 
 - **GARCH variance forecasting hurts**. `cc_garch_var` and `cc_arima_garch` rank near the bottom of cc_* methods in both walk-forward and CPCV (~50-62% IS-OOS degradation). The GARCH inputs add noise instead of signal.
 
@@ -328,10 +328,13 @@ hurt.**
 
 **1. Diversification beats cleverness — repeatedly.**
 Every result points the same way: more holdings + a broader candidate set generalise
-better than concentrated, "optimised" books. Empirical-mean expected returns hurt
-(CCC/copula/min-var/inverse-vol all beat full max-Sharpe SLSQP OOS); GARCH variance
-forecasting hurt (ranks 9–10); min-variance had the worst IS-OOS gap; and the curated
-universe hurt by forcing concentration. The 1/N / broad-diversification result
+better than concentrated, "optimised" books. Heavier weight-optimisation hurt — the
+ER-free or correlation-focused weightings (equal-weight, inverse-vol, min-var, plus the
+copula/CCC *covariance* variants) all beat the full sample-mean-ER + Ledoit-Wolf
+max-Sharpe SLSQP (`cc_optimised`) OOS (note copula/CCC still use sample-mean ER, so the
+lever is the covariance/weighting choice, not dropping ER); GARCH variance forecasting
+hurt (ranks 9–10); min-variance had the worst IS-OOS gap; and the curated universe hurt
+by forcing concentration. The 1/N / broad-diversification result
 (DeMiguel-Garlappi-Uppal 2009) keeps winning. **Default to broad + simple + many holdings.**
 
 **2. A smaller universe forced concentration and worsened the tail (the curation test).**
@@ -403,7 +406,7 @@ The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 sp
 **Key takeaways from this matrix**:
 
 1. **The top 7 methods all have overlapping 95% CIs.** `cc_copulae` leads on the mean but with std 0.67, vs `mc_optimised` at std 0.29. By any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
-2. **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-only), MC search (no estimation), MC + random weights, GA + 1/N, GA + max-Sharpe.
+2. **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-focused covariance), MC search (no estimation), MC + random weights, GA + 1/N, GA + max-Sharpe.
 3. **Walk-forward winners are not CPCV winners.** The 5 cc_* methods that ranked top in walk-forward all dropped 4-7 ranks in CPCV.
 4. **Forecasting hurts more often than it helps.** GARCH-variance methods rank 9-10. Drop GARCH variance forecasting in this universe.
 5. **Min-variance is the worst overfitter on the IS-OOS gap dimension** — IS Sharpe ~1.44, OOS ~0.81, despite being rank 14 in OOS mean. The objective rewards quirky low-variance combinations that don't generalise.

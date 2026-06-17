@@ -280,11 +280,33 @@ python -m src.backtest --mode cpcv \
 
 ### Strategies compared (16)
 
-The runner sweeps a matrix of selection × weighting strategies:
+The runner sweeps a matrix of **selection × weighting** strategies. Each method differs along three axes: how holdings are *selected*, how they are *weighted*, and which *expected-return* and *covariance/correlation* inputs feed the weighting step.
 
-- **Selection**: GA (cardinality-constrained, 8-15 holdings), Monte Carlo (best of 100k random), random baseline
-- **Weighting**: SLSQP max-Sharpe (`optimised`), Bollerslev CCC, Gaussian copula correlation, equal-weight, inverse-vol, risk-parity (ERC), max-diversification, min-variance, ARIMA expected returns, GARCH variance, ARIMA+GARCH combined, random weights
-- **Benchmarks**: SPY 100% and a 60/40 SPY/AGG split (when those tickers are in the universe)
+| Method | Selection | Weighting | Expected-return input | Covariance / correlation input |
+|---|---|---|---|---|
+| `cc_optimised` | GA | max-Sharpe SLSQP | sample mean | Ledoit-Wolf sample cov |
+| `cc_copulae` | GA | max-Sharpe SLSQP | sample mean | sample vols × Gaussian-copula correlation |
+| `cc_ccc_baseline` | GA | max-Sharpe SLSQP | sample mean | CCC: historical vols × sample correlation |
+| `cc_arima_er` | GA | max-Sharpe SLSQP | **ARIMA forecast** | Ledoit-Wolf sample cov |
+| `cc_garch_var` | GA | max-Sharpe SLSQP | sample mean | CCC: **GARCH-forecast** vols × sample correlation |
+| `cc_arima_garch` | GA | max-Sharpe SLSQP | **ARIMA forecast** | CCC: **GARCH-forecast** vols × sample correlation |
+| `cc_min_variance` | GA | min-variance SLSQP | — (ignored) | Ledoit-Wolf sample cov |
+| `cc_inverse_vol` | GA | inverse-vol (1/σ) | — | per-asset vol only |
+| `cc_risk_parity` | GA | risk parity (ERC) | — | sample cov |
+| `cc_max_diversification` | GA | max diversification ratio | — | sample cov |
+| `cc_equal_weight` | GA | equal (1/N) | — | — |
+| `cc_random_weights` | GA | random | — | — |
+| `mc_optimised` | Monte Carlo | max-Sharpe SLSQP | sample mean | Ledoit-Wolf sample cov |
+| `mc_random_weights` | Monte Carlo | random | — | — |
+| `random_optimised` | random | max-Sharpe SLSQP | sample mean | Ledoit-Wolf sample cov |
+| `random_random` | random | random | — | — |
+
+- **Selection**: GA = cardinality-constrained island GA (8-15 holdings); Monte Carlo = best Sharpe of 100k random draws; random = unoptimised baseline.
+- **Weighting**: `max-Sharpe SLSQP` maximises in-sample Sharpe; the rest are heuristic or ER-free objectives. Only the max-Sharpe variants consume an expected-return input.
+- **Benchmarks**: SPY 100% and a 60/40 SPY/AGG split (when those tickers are in the universe).
+- Two further copula+GARCH variants (`cc_garch_copula`, `cc_arima_garch_copula`) are gated off by default behind `BACKTEST_RUN_FORECAST_COPULA_STRATEGIES` (super-cubic t-copula cost).
+
+See [Empirical findings](#empirical-findings-may-2026) below for how these rank out-of-sample — the short version: simpler weighting and ER-free objectives travel best.
 
 Each portfolio is held without rebalancing across the OOS window. Per-window log lines include in-sample Sharpe, out-of-sample Sharpe, IS/OOS degradation %, and a [Deflated Sharpe Ratio](#robustness-gating-deflated-sharpe-and-cpcv) gate (`PASS` / `WEAK` / `FAIL`).
 
@@ -320,7 +342,7 @@ Key takeaways:
 
 - **The top 7 methods have overlapping 95% CIs.** `cc_copulae` leads on the mean but with the widest std (0.67); `mc_optimised` is half a step behind (+1.04) with the tightest distribution (std 0.29). On any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
 - **Walk-forward Sharpes are systematically inflated.** The walk-forward winner (`cc_ccc_baseline`, +1.86) collapsed to +0.96 in CPCV (−48%). Trust CPCV over walk-forward.
-- **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-only), MC search, MC + random weights, GA + 1/N, GA + max-Sharpe.
+- **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-focused covariance), MC search, MC + random weights, GA + 1/N, GA + max-Sharpe.
 - **Forecasting hurts more often than it helps.** GARCH-variance methods (`cc_garch_var`, `cc_arima_garch`) rank 9-10 in CPCV.
 - **Realistic OOS Sharpe ceiling for this universe is ~1.0-1.1** net of costs, not 1.5+. Anything above 1.5 OOS sustained over 10+ years is a red flag.
 
@@ -336,16 +358,12 @@ Key takeaways:
 - **Hierarchical Risk Parity** (López de Prado 2016): clustering-based weighting that avoids covariance inversion.
 - **Tu-Zhou shrinkage to 1/N** (Tu & Zhou 2011, *JFE*): `w = δ·w_method + (1−δ)·w_1/N` as a cheap variance reducer.
 - **Turnover penalty** in SLSQP (`λ·||w_new − w_old||₁`): reduces real costs and damps IS-noise reweighting.
-- **Pre-filtered universe** (~30 to 60 hand-curated ETFs): single biggest PBO-reduction lever.
+- ~~**Pre-filtered universe** (~30 to 60 hand-curated ETFs): single biggest PBO-reduction lever.~~ **Tested June 2026 — it backfired.** A 142-ETF data-driven curated universe lost to the broad set on a clean common-window A/B (mean per-window OOS Sharpe +0.17 vs +1.30): shrinking the universe forced concentration under the 12% return floor and flipped return skew negative. Revisit only jointly with constraint re-tuning, not as a standalone PBO lever (see CLAUDE.md → *Lessons Learned (June 2026)*).
 - **Trend-following sleeve** (DBMF or DIY 10-futures TSMOM): orthogonal premium, crisis alpha.
 - **Defined-risk short SPX vol sleeve**: VRP harvesting via 30-45 DTE 10-15 delta put spreads.
 - **Levered risk parity wrapper** (NTSX/NTSI or DIY ES + ZN/ZB futures): captures leverage aversion premium.
 
 Combined multi-strategy stack target: realistic OOS Sharpe **1.4-1.7** with 3-5 uncorrelated sleeves vs. the 1.0-1.2 long-only ceiling.
-
-![Out-of-sample Sharpe Ratio Distributions by Portfolio Construction Method](https://github.com/GiovanniStephens/cardinality-constrained-optimisation/blob/main/images/Out-of-sample%20Sharpe%20Ratio%20Distributions%20by%20Portfolio%20Construction%20Method.png)
-
-> **Note:** The plot above is from an earlier 6-group configuration and predates the DSR/CPCV machinery; it is retained for reference but does not reflect the current strategy matrix. Refresh after the running CPCV completes.
 
 ## Building the C++ Optimiser
 
@@ -439,7 +457,7 @@ See `pyproject.toml` for exact version constraints.
 - [ ] Hierarchical Risk Parity (López de Prado 2016): clustering-based weighting that avoids covariance inversion
 - [ ] Tu-Zhou shrinkage to 1/N (`w = δ·w_method + (1−δ)·w_1/N`) as a cheap variance reducer
 - [ ] Turnover penalty in SLSQP objective (`λ·||w_new − w_old||₁`) to damp IS-noise reweighting
-- [ ] Pre-filtered universe (~30 to 60 hand-curated ETFs): biggest single PBO-reduction lever
+- [x] Pre-filtered universe (~30 to 60 hand-curated ETFs) — tested June 2026; backfired (forced concentration, lost the common-window A/B). Machinery shipped as `curate_universe.py` + `--curated`; not adopted.
 - [ ] Trend-following / managed futures sleeve (DBMF or DIY 10-futures TSMOM)
 - [ ] Defined-risk short SPX vol sleeve (30-45 DTE 10-15 delta put spreads)
 - [ ] Portfolio beta and alpha (requires benchmark specification)
