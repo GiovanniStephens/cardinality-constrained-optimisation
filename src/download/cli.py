@@ -62,6 +62,7 @@ def _add_file_logging(log_dir='data'):
 
 def main():
     from src.logging_config import setup_logging
+    from src import config
     setup_logging()
     parser = argparse.ArgumentParser(
         description='Build a security universe and download price data.')
@@ -137,10 +138,13 @@ def main():
                         help='Bypass the known-bad-ticker cache filter '
                              '(retry tickers Yahoo previously refused). '
                              'Useful after a Yahoo outage or proxy-pool change.')
-    parser.add_argument('--bad-cache-min-failures', type=int, default=1,
+    parser.add_argument('--bad-cache-min-failures', type=int,
+                        default=config.PIPELINE_BAD_CACHE_MIN_FAILURES,
                         metavar='N',
                         help='Skip tickers with at least N cached failures '
-                             '(default: 1).')
+                             '(default: %(default)s). Protected core tickers '
+                             '(data/core_etfs.csv) are never skipped, and entries '
+                             'expire after PIPELINE_BAD_TICKER_TTL_DAYS.')
     parser.add_argument('--rate-limit', type=float, default=None,
                         help='Seconds to wait between batches '
                              '(default: from config).')
@@ -159,11 +163,14 @@ def main():
     parser.add_argument('--validate-only', action='store_true',
                         help='Run data quality checks on existing DB without '
                              'downloading.')
+    parser.add_argument('--health-check', action='store_true',
+                        help='Verify the liquid core (data/core_etfs.csv) is '
+                             'current and active, then exit (no download).')
     parser.add_argument('--skip-validation', action='store_true',
                         help='Skip data quality checks after download.')
     args = parser.parse_args()
 
-    from src import db, config
+    from src import db
 
     # -- Apply default filters for equities ----------------------------------
     if args.all_countries:
@@ -217,6 +224,10 @@ def main():
         summary = validate_universe(conn, exchange=args.exchange)
         conn.close()
         logger.info("Validation summary: %s", summary)
+        return
+
+    if args.health_check:
+        _health_report(args.exchange)
         return
 
     # -- File logging (survives terminal close) ------------------------------
@@ -381,6 +392,7 @@ def main():
                 n_workers=args.workers,
                 ignore_bad_cache=args.ignore_bad_cache,
                 bad_cache_min_failures=args.bad_cache_min_failures,
+                is_incremental=args.incremental,
             )
             all_manifests.append((db_type, manifest))
 
@@ -410,6 +422,7 @@ def main():
             n_workers=args.workers,
             ignore_bad_cache=args.ignore_bad_cache,
             bad_cache_min_failures=args.bad_cache_min_failures,
+            is_incremental=args.incremental,
         )
         dl = manifest.get('download_result', {})
         logger.info("Pipeline: status=%s, saved=%s, failed_batches=%s",
@@ -432,6 +445,10 @@ def main():
     # -- Final summary -------------------------------------------------------
     _log_final_summary(all_manifests if 'AssetType' in tickers_df.columns
                        else [('all', manifest)], log_path)
+
+    # -- Post-run health check: did the liquid core actually land? -----------
+    if not args.stage_only:
+        _health_report(args.exchange)
 
 
 def _log_final_summary(manifests, log_path):
@@ -489,3 +506,79 @@ def _log_final_summary(manifests, log_path):
     logger.info("Totals: %d saved, %d failed tickers", total_saved, total_failed_tickers)
     logger.info("Log file: %s", log_path)
     logger.info("=" * 60)
+
+
+def _health_report(exchange: str = 'US') -> bool:
+    """Post-run health check: verify the liquid core actually landed.
+
+    Reports the latest price date and active-ticker count, then asserts that
+    every protected core ticker (data/core_etfs.csv) is present, not excluded,
+    and traded within MAX_STALENESS_DAYS of the latest date. If any are
+    stale/missing it WARNS loudly with the exact recovery command, so "done"
+    can't silently mean "the important tickers never refreshed".
+
+    Returns True iff all core tickers are healthy.
+    """
+    from datetime import datetime, timedelta
+    from src import db, config
+    from src.db.bad_tickers import load_protected_tickers
+
+    core = sorted(load_protected_tickers())
+    conn = db.get_connection()
+    try:
+        ex = db._get_exchange_id(conn, exchange)
+        latest = conn.execute(
+            "SELECT MAX(p.date) FROM prices p JOIN tickers t ON t.id = p.ticker_id "
+            "WHERE t.exchange_id = ?", (ex,)).fetchone()[0]
+        active = conn.execute(
+            "SELECT COUNT(*) FROM tickers WHERE exchange_id = ? AND excluded IS NULL",
+            (ex,)).fetchone()[0]
+        info = {}
+        if core:
+            ph = ','.join('?' * len(core))
+            for r in conn.execute(
+                f"SELECT t.symbol, t.excluded, "
+                f"  (SELECT MAX(date) FROM prices p WHERE p.ticker_id = t.id) AS last_date "
+                f"FROM tickers t WHERE t.exchange_id = ? AND t.symbol IN ({ph})",
+                    [ex, *core]).fetchall():
+                info[r['symbol']] = (r['last_date'], r['excluded'])
+    finally:
+        conn.close()
+
+    cutoff = None
+    if latest:
+        try:
+            cutoff = (datetime.strptime(latest[:10], '%Y-%m-%d')
+                      - timedelta(days=config.MAX_STALENESS_DAYS)).strftime('%Y-%m-%d')
+        except ValueError:
+            cutoff = None
+
+    logger.info("=" * 60)
+    logger.info("HEALTH CHECK (%s)", exchange)
+    logger.info("  latest price date: %s", latest)
+    logger.info("  active tickers:    %d", active)
+    logger.info("  core watchlist:    %d tickers (data/core_etfs.csv)", len(core))
+
+    problems = []
+    for sym in core:
+        last_date, excl = info.get(sym, (None, 'MISSING'))
+        if last_date is None:
+            problems.append((sym, 'no data', excl or 'MISSING'))
+        elif excl:
+            problems.append((sym, last_date, excl))
+        elif cutoff and last_date[:10] < cutoff:
+            problems.append((sym, last_date, 'stale (not yet re-validated)'))
+
+    if problems:
+        logger.warning("  ⚠️  %d/%d core tickers are STALE or MISSING:",
+                        len(problems), len(core))
+        for sym, last_date, reason in problems[:30]:
+            logger.warning("       %-10s last=%-12s %s", sym, last_date, reason)
+        logger.warning("  Recover with:")
+        logger.warning("       python -m src.download --from-csv data/core_etfs.csv "
+                       "--asset-type etf --ignore-bad-cache")
+        logger.warning("       (or: make retry-failed)")
+    else:
+        logger.info("  ✅ all %d core tickers current and active", len(core))
+    logger.info("=" * 60)
+    return not problems

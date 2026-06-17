@@ -316,10 +316,17 @@ def _save_dropped_tickers(result, data_dir, asset_type, run_id, manifest,
                     len(all_failed))
 
 
-def _run_validation(conn_staging, exchange, manifest):
-    """Validate staging DB data quality. Returns True if OK."""
-    logger.info("Running data quality validation on staging DB...")
-    validation = validate_universe(conn_staging, exchange=exchange)
+def _run_validation(conn_staging, exchange, manifest, is_incremental=False):
+    """Validate staging DB data quality. Returns True if OK.
+
+    On incremental runs the staging DB holds only the newly-downloaded rows, so
+    the min_history check is skipped (it would fail every ticker); the
+    authoritative min_history check runs post-promotion against production.
+    """
+    logger.info("Running data quality validation on staging DB%s...",
+                " (incremental: skipping min_history)" if is_incremental else "")
+    validation = validate_universe(conn_staging, exchange=exchange,
+                                   skip_min_history=is_incremental)
     manifest['validation'] = validation
 
     exclusion_rate = (validation['total_excluded'] / validation['total_tickers']
@@ -403,6 +410,7 @@ def run_pipeline(
     n_workers: Optional[int] = None,
     ignore_bad_cache: bool = False,
     bad_cache_min_failures: int = 1,
+    is_incremental: bool = False,
 ) -> dict[str, Any]:
     """
     Full staged pipeline: preflight -> stage -> validate -> promote.
@@ -540,7 +548,8 @@ def run_pipeline(
 
     # ── Validate ──────────────────────────────────────────────────────────
     if not skip_validation:
-        if not _run_validation(conn_staging, exchange, manifest):
+        if not _run_validation(conn_staging, exchange, manifest,
+                               is_incremental=is_incremental):
             conn_staging.close()
             return _write_and_return()
 
@@ -558,6 +567,22 @@ def run_pipeline(
                              checkpoint_path)
     except Exception:
         return _write_and_return()
+
+    # ── Post-promotion validation on PRODUCTION ───────────────────────────
+    # Re-validate the merged production data so exclusion flags are correct:
+    # clears stale flags on freshly-downloaded tickers and applies min_history
+    # against full history. This removes the manual `python -m src.data_quality`
+    # step and is what makes incremental refreshes usable end to end.
+    try:
+        conn_prod = db.get_connection(prod_db_path)
+        post = validate_universe(conn_prod, exchange=exchange)
+        conn_prod.close()
+        manifest['post_promotion_validation'] = post
+        logger.info("Post-promotion validation: %d active / %d total tickers",
+                    post.get('total_active', 0), post.get('total_tickers', 0))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Post-promotion validation failed: %s", exc)
+        manifest['post_promotion_validation_error'] = str(exc)
 
     # ── Final manifest ────────────────────────────────────────────────────
     manifest['duration_seconds'] = round(time.time() - t_start, 1)

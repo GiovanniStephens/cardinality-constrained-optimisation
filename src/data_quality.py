@@ -188,10 +188,15 @@ def _check_extreme_returns(prices_by_ticker, max_extreme_pct):
 
 # ─── Main validation entry point ─────────────────────────────────────────────
 
-def validate_universe(conn, exchange='US', dry_run=False):
+def validate_universe(conn, exchange='US', dry_run=False, skip_min_history=False):
     """Run all quality checks and flag bad tickers. Returns summary dict.
 
     If dry_run=True, prints what would be excluded without modifying the DB.
+
+    If skip_min_history=True, the min_history check is skipped — used when
+    validating an *incremental* staging DB that only holds the newly-downloaded
+    rows (~weeks), so every ticker would otherwise fail the ≥5yr-history check.
+    The authoritative min_history check runs post-promotion against production.
     """
     exchange_id = db._get_exchange_id(conn, exchange)
 
@@ -205,8 +210,11 @@ def validate_universe(conn, exchange='US', dry_run=False):
     # Batch-load prices once for the three checks that need per-ticker prices.
     prices_by_ticker = _load_prices_by_ticker(conn, exchange_id)
 
-    checks = [
-        ('min_history', _check_min_history(conn, exchange_id, config.MIN_HISTORY_DAYS)),
+    checks = []
+    if not skip_min_history:
+        checks.append(
+            ('min_history', _check_min_history(conn, exchange_id, config.MIN_HISTORY_DAYS)))
+    checks += [
         ('stale', _check_stale_prices(conn, exchange_id, config.MAX_STALENESS_DAYS)),
         ('zero_variance', _check_zero_variance(prices_by_ticker, config.MIN_ANNUAL_VOLATILITY)),
         ('frozen_price', _check_frozen_prices(prices_by_ticker, config.MAX_CONSECUTIVE_SAME_PRICE)),
