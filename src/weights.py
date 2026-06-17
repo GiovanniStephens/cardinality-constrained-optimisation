@@ -149,6 +149,21 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
     else:
         x0 = np.ones(n) / n
 
+    # ── Adaptive lower-bound floor ────────────────────────────────────────
+    # If the per-position floors consume (nearly) the whole budget, the
+    # feasible region collapses: with n positions each >= min_weight and
+    # sum(w) = 1, an n*min_weight of 1.0 forces every weight to exactly 1/n,
+    # so SLSQP cannot move and every objective returns the same 1/N portfolio
+    # (and n*min_weight > 1 is infeasible outright). Relax the floor so a
+    # meaningful share of the budget stays free to optimise.
+    FLOOR_BUDGET = 0.70
+    if min_weight > 0 and n * min_weight > FLOOR_BUDGET:
+        relaxed = FLOOR_BUDGET / n
+        logger.debug("Relaxing min_weight %.3f -> %.3f for n=%d (floor budget "
+                     "%.2f) to preserve optimisation freedom.",
+                     min_weight, relaxed, n, FLOOR_BUDGET)
+        min_weight = relaxed
+
     # ── Constraints ───────────────────────────────────────────────────────
     bounds = [(min_weight, max_weight) for _ in range(n)]
     constraints = [{'type': 'eq', 'fun': lambda x: np.sum(x) - 1}]

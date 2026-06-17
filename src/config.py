@@ -83,6 +83,10 @@ NZ_ETF_PRICES_CSV = os.path.join(DATA_DIR, 'NZ_ETF_Prices.csv')
 INVESTNOW_PRICES_CSV = os.path.join(DATA_DIR, 'time_series_20251016_113257.csv')
 EXPECTED_RETURNS_CSV = os.path.join(DATA_DIR, 'expected_returns.csv')
 VARIANCES_CSV = os.path.join(DATA_DIR, 'variances.csv')
+# Data-driven curated ETF allow-list (built by curate_universe.py). Opt-in via
+# the --curated flag on run_rebalance.py / backtest_rebalance.py; restricts the
+# search universe to one liquid representative per correlation cluster.
+CURATED_UNIVERSE_CSV = os.path.join(DATA_DIR, 'curated_universe.csv')
 
 # ─── C++ binary ──────────────────────────────────────────────────────────
 
@@ -146,6 +150,39 @@ GROUP_CONSTRAINTS = {
         **_NON_US_COUNTRY_CAPS,
     },
     'sector': {s: (0.0, 0.50) for s in CONSTRAINED_SECTORS},
+}
+
+# ─── Asset-class category limits for the ETF rebalance (run_rebalance.py) ─────
+# FinanceDatabase sector/category metadata is ~blank for ETFs, so these caps are
+# driven by the crude name classifier (src.categorise). Tuned for a young,
+# high-risk, decorrelation-seeking investor whose NZ/AU equity is already held
+# via KiwiSaver (see CLAUDE.md "Investment Universe").
+REBALANCE_EXCLUDE_CATEGORIES = []      # none excluded — all categories kept, just capped
+REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-group
+    'Equity': 0.70,                    # growth core, but forces >=30% into diversifiers
+    'Fixed Income': 0.30,
+    'Cash/FX': 0.10,                   # Currency + Cash combined — dry powder only
+    'Commodity': 0.25,
+    'Real Estate': 0.20,
+    'Alternatives': 0.30,              # managed futures / CTA — crisis alpha
+    'Inverse': 0.15,                   # short/inverse hedges (incl 2x/3x short) — kept for crisis vol reduction; some decay accepted
+    'Leveraged': 0.05,                 # long-amplifying — reduced; get leverage from account margin instead
+    'Crypto': 0.15,
+    'Unknown': 0.10,                   # backstop for unclassified names
+}
+# Conviction "must-have" holdings — forced into every rebalance portfolio at the
+# selection stage (held at >= the per-position floor, still counted toward the
+# category caps). Override per-run with `run_rebalance.py --must-have SMH,VOO`.
+REBALANCE_MUST_HAVE = ['SMH']
+
+# Classifier label -> cap-group (merges Currency+Cash; Leveraged/Inverse split by direction).
+REBALANCE_CAP_GROUP = {
+    'Equity': 'Equity', 'Fixed Income': 'Fixed Income',
+    'Currency': 'Cash/FX', 'Cash': 'Cash/FX',
+    'Commodity': 'Commodity', 'Real Estate': 'Real Estate',
+    'Alternatives': 'Alternatives',
+    'Inverse': 'Inverse', 'Leveraged': 'Leveraged',
+    'Crypto': 'Crypto', 'Unknown': 'Unknown',
 }
 
 # ─── Backtest parameters ────────────────────────────────────────────────────
@@ -215,6 +252,14 @@ PIPELINE_DEFAULT_WORKERS = 1              # sequential by default (1 = use downl
 PIPELINE_MAX_WORKERS = 24                 # cap for --workers
 PIPELINE_SUBPROCESS_STAGGER = (15, 30)    # random range seconds between subprocess launches — 16 workers now spread over ~5 min instead of ~80s
 PIPELINE_SESSION_ROTATE_INTERVAL = 50     # rotate proxy session every N batches
+
+# ─── Bad-ticker cache (known_bad_tickers) ────────────────────────────────────
+# Hardening after June 2026 incident: a single transient Yahoo failure on
+# 2026-04-16 blacklisted SPY/VOO/AGG (failure_count=1, no expiry), and the
+# pipeline silently skipped them on every subsequent run for ~2 months.
+PIPELINE_BAD_CACHE_MIN_FAILURES = 3       # require N failures before skipping a ticker (one blip no longer blacklists)
+PIPELINE_BAD_TICKER_TTL_DAYS = 30         # cache entries expire after N days so transient failures self-heal and get retried
+PIPELINE_PROTECTED_TICKERS_CSV = os.path.join(DATA_DIR, 'core_etfs.csv')  # liquid core that must NEVER be cached/skipped
 
 # ─── Fingerprint rotation (anti-Akamai) ──────────────────────────────────────
 # curl_cffi impersonation targets. Rotating these breaks the "N workers with
