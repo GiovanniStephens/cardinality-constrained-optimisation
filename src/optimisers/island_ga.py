@@ -317,6 +317,18 @@ class IslandGAOptimiser(BaseOptimiser):
                 metadata={'error': 'No valid solution found'},
             )
 
+        # The fitness hard-enforces cardinality, but if an entire final island
+        # population is constraint-violating the argmax can still surface an
+        # out-of-range individual. The parallel workers reseed independently
+        # (np.random.seed(None)), so this is nondeterministic across runs and
+        # Python/BLAS versions. Repair the winner so a valid, in-cardinality
+        # portfolio is always emitted — a no-op when the winner is already valid.
+        count = int(np.asarray(best_solution).sum())
+        if not (self.min_securities <= count <= self.max_securities):
+            best_solution = repair_cardinality(
+                np.asarray(best_solution).reshape(1, -1).copy(),
+                self.min_securities, self.max_securities)[0]
+
         selected = list(prices.columns[best_solution == 1])
         weights = np.ones(len(selected)) / len(selected)
 
