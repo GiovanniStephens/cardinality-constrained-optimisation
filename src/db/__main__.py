@@ -19,6 +19,21 @@ elif len(sys.argv) > 1 and sys.argv[1] == 'backfill':
     conn = get_connection()
     backfill_metadata(conn)
     conn.close()
+elif len(sys.argv) > 1 and sys.argv[1] == 'backfill-volume':
+    import argparse
+    from src.db.volume_backfill import backfill_volume
+    p = argparse.ArgumentParser(prog='python -m src.db backfill-volume')
+    p.add_argument('--period', default='9mo',
+                   help='yfinance period to fetch (default: %(default)s)')
+    p.add_argument('--batch-size', type=int, default=60)
+    p.add_argument('--sleep', type=float, default=0.5,
+                   help='seconds between batches (default: %(default)s)')
+    p.add_argument('--asset-type', default='etf')
+    a = p.parse_args(sys.argv[2:])
+    conn = get_connection()
+    backfill_volume(conn, asset_type=a.asset_type, period=a.period,
+                    batch_size=a.batch_size, sleep=a.sleep)
+    conn.close()
 else:
     # Create empty database with schema
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

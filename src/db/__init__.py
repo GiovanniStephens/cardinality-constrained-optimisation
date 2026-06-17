@@ -15,7 +15,13 @@ from src.db.tickers import (
     clear_ticker_excluded,
     get_excluded_tickers,
 )
-from src.db.prices import save_prices, load_prices, get_latest_prices_date, get_tickers_with_prices
+from src.db.prices import (
+    save_prices,
+    load_prices,
+    load_avg_dollar_volume,
+    get_latest_prices_date,
+    get_tickers_with_prices,
+)
 from src.db.bad_tickers import save_known_bad_tickers, load_known_bad_tickers, clear_known_bad_tickers
 from src.db.forecasts import (
     save_forecast_results,
@@ -49,7 +55,8 @@ __all__ = [
     'load_ticker_metadata', 'backfill_metadata',
     'set_ticker_excluded', 'clear_ticker_excluded', 'get_excluded_tickers',
     # prices
-    'save_prices', 'load_prices', 'get_latest_prices_date', 'get_tickers_with_prices',
+    'save_prices', 'load_prices', 'load_avg_dollar_volume',
+    'get_latest_prices_date', 'get_tickers_with_prices',
     # bad tickers
     'save_known_bad_tickers', 'load_known_bad_tickers', 'clear_known_bad_tickers',
     # forecasts

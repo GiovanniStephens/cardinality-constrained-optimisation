@@ -23,7 +23,8 @@ def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
                 sectors: Optional[dict[str, str]] = None,
                 industries: Optional[dict[str, str]] = None,
                 category_groups: Optional[dict[str, str]] = None,
-                categories: Optional[dict[str, str]] = None) -> int:
+                categories: Optional[dict[str, str]] = None,
+                volumes_df: Optional[pd.DataFrame] = None) -> int:
     """
     Save a wide-format DataFrame of prices to the database.
 
@@ -31,6 +32,9 @@ def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
     exchange: 'US', 'NZX', 'ASX'
     names: optional dict {symbol: name_string} to populate ticker names.
     countries: optional dict {symbol: country_string} to populate ticker countries.
+    volumes_df: optional wide DataFrame (same shape/labels as prices_df) of share
+        volumes. When given, the matching volume is stored alongside each close;
+        otherwise volume is left NULL (legacy behaviour).
     Returns data_source id.
     """
     import time as _time
@@ -55,17 +59,34 @@ def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
         # integer index — convert to string as-is
         df.index = df.index.astype(str)
 
+    # Align an optional volume frame to the same string index for lookup.
+    vol = None
+    if volumes_df is not None:
+        vol = volumes_df.copy()
+        if hasattr(vol.index, 'date'):
+            vol.index = pd.to_datetime(vol.index).strftime('%Y-%m-%d')
+        else:
+            vol.index = vol.index.astype(str)
+
+    def _volume_at(date_str: str, symbol: str):
+        if vol is None or symbol not in vol.columns or date_str not in vol.index:
+            return None
+        v = vol.at[date_str, symbol]
+        return int(v) if pd.notna(v) else None
+
     # Build rows for bulk insert
     rows = []
     for date_str in df.index:
         for symbol in symbols:
             val = df.at[date_str, symbol]
             if pd.notna(val):
-                rows.append((ticker_map[symbol], date_str, float(val)))
+                rows.append((ticker_map[symbol], date_str, float(val),
+                             _volume_at(date_str, symbol)))
 
     with conn:
         conn.executemany(
-            "INSERT OR REPLACE INTO prices (ticker_id, date, close) VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close, volume) "
+            "VALUES (?, ?, ?, ?)",
             rows,
         )
 
@@ -163,6 +184,93 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
     logger.info("load_prices: %d rows x %d tickers in %.1fs",
                 len(df), df.shape[1], _time.time() - t0)
     return df
+
+
+def update_volumes(conn: sqlite3.Connection, volumes_df: pd.DataFrame,
+                   exchange: str, asset_type: str = 'etf') -> int:
+    """Write share volumes onto EXISTING price rows (UPDATE only).
+
+    volumes_df: wide DataFrame (index = dates, columns = symbols, values = volume).
+    Only (ticker_id, date) pairs that already have a close row are updated, so the
+    carefully-maintained adjusted-close series is never disturbed and no synthetic
+    close is fabricated. Symbols/dates without an existing row are skipped.
+    Returns the number of rows updated.
+    """
+    exchange_id = _get_exchange_id(conn, exchange)
+    symbols = list(volumes_df.columns)
+    # Map symbols to ticker ids (only those already present).
+    placeholders = ','.join('?' for _ in symbols) if symbols else "''"
+    id_map = {r['symbol']: r['id'] for r in conn.execute(
+        f"SELECT id, symbol FROM tickers WHERE exchange_id = ? "
+        f"AND asset_type = ? AND symbol IN ({placeholders})",
+        [exchange_id, asset_type, *symbols]).fetchall()}
+
+    df = volumes_df.copy()
+    if hasattr(df.index, 'date'):
+        df.index = pd.to_datetime(df.index).strftime('%Y-%m-%d')
+    else:
+        df.index = df.index.astype(str)
+
+    rows = []
+    for symbol in symbols:
+        tid = id_map.get(symbol)
+        if tid is None:
+            continue
+        col = df[symbol]
+        for date_str, val in col.items():
+            if pd.notna(val):
+                rows.append((int(val), tid, date_str))
+    if not rows:
+        return 0
+    with conn:
+        cur = conn.executemany(
+            "UPDATE prices SET volume = ? WHERE ticker_id = ? AND date = ?", rows)
+    updated = cur.rowcount if cur.rowcount is not None else 0
+    logger.info("update_volumes: %d (ticker,date) volume cells written", updated)
+    return updated
+
+
+def load_avg_dollar_volume(conn: sqlite3.Connection,
+                           exchange: Optional[str] = None,
+                           asset_type: Optional[str] = None,
+                           tickers: Optional[list[str]] = None,
+                           window: Optional[int] = 126) -> pd.Series:
+    """Return average dollar volume (close x volume) per ticker as a Series.
+
+    Averages over each ticker's most recent `window` rows that carry a non-NULL
+    volume (default ~126 trading days / 6 months). Tickers with no stored volume
+    are omitted. Used as the liquidity score for universe curation.
+    """
+    query = """
+        SELECT t.symbol AS symbol, p.date AS date, p.close AS close, p.volume AS volume
+        FROM prices p
+        JOIN tickers t ON p.ticker_id = t.id
+        WHERE p.volume IS NOT NULL
+    """
+    params: list[Any] = []
+    if exchange is not None:
+        query += " AND t.exchange_id = ?"
+        params.append(_get_exchange_id(conn, exchange))
+    if asset_type is not None:
+        query += " AND t.asset_type = ?"
+        params.append(asset_type)
+    if tickers:
+        placeholders = ','.join('?' for _ in tickers)
+        query += f" AND t.symbol IN ({placeholders})"
+        params.extend(tickers)
+    query += " ORDER BY t.symbol, p.date"
+
+    rows = conn.execute(query, params).fetchall()
+    if not rows:
+        return pd.Series(dtype=float)
+
+    df = pd.DataFrame([(r['symbol'], r['close'], r['volume']) for r in rows],
+                      columns=['symbol', 'close', 'volume'])
+    df['dollar'] = df['close'].astype(float) * df['volume'].astype(float)
+
+    # rows arrive ordered by (symbol, date); keep each symbol's most recent window.
+    recent = df.groupby('symbol', sort=False).tail(window) if window else df
+    return recent.groupby('symbol', sort=True)['dollar'].mean()
 
 
 def get_latest_prices_date(conn: sqlite3.Connection, exchange: Optional[str] = None,

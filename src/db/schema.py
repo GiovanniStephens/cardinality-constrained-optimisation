@@ -33,11 +33,13 @@ CREATE TABLE IF NOT EXISTS tickers (
 );
 
 -- Daily close prices (normalised: one row per ticker per date)
+-- volume is nullable: legacy rows predate volume capture (added schema v4).
 CREATE TABLE IF NOT EXISTS prices (
     ticker_id  INTEGER NOT NULL REFERENCES tickers(id),
     date       TEXT NOT NULL
         CHECK(date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     close      REAL NOT NULL,
+    volume     INTEGER,
     PRIMARY KEY (ticker_id, date)
 );
 
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS known_bad_tickers (
     failure_count  INTEGER NOT NULL DEFAULT 1,
     first_failed   TEXT NOT NULL,
     last_failed    TEXT NOT NULL,
+    expires_at     TEXT,  -- ISO datetime; entry ignored/purged once past (TTL self-heal)
     PRIMARY KEY (symbol, exchange_id)
 );
 
@@ -194,7 +197,7 @@ DEFAULT_EXCHANGES = [
     ('ASX', 'Australian Securities Exchange', 'AU'),
 ]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def _migrate_to_1(conn: sqlite3.Connection) -> None:
@@ -211,9 +214,30 @@ def _migrate_to_2(conn: sqlite3.Connection) -> None:
             pass  # column already exists
 
 
+def _migrate_to_3(conn: sqlite3.Connection) -> None:
+    """Add TTL expiry to the known-bad-ticker cache so transient failures
+    self-heal instead of blacklisting a ticker forever."""
+    try:
+        conn.execute("ALTER TABLE known_bad_tickers ADD COLUMN expires_at TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
+def _migrate_to_4(conn: sqlite3.Connection) -> None:
+    """Add a (nullable) volume column to prices. Legacy rows stay NULL; volume
+    is captured for new downloads and seeded by `python -m src.db backfill-volume`,
+    enabling liquidity-aware universe curation (average dollar volume)."""
+    try:
+        conn.execute("ALTER TABLE prices ADD COLUMN volume INTEGER")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 MIGRATIONS = {
     1: _migrate_to_1,
     2: _migrate_to_2,
+    3: _migrate_to_3,
+    4: _migrate_to_4,
 }
 
 
