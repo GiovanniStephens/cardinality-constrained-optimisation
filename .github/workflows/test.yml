@@ -10,6 +10,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false   # run every Python leg to completion so all failures surface together
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
 
