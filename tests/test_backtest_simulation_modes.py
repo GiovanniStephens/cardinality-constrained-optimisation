@@ -48,13 +48,20 @@ class TestWeightModes(unittest.TestCase):
         self.assertTrue(np.all(w >= -1e-6))
 
     def test_max_sharpe_with_er_override_changes_weights(self):
-        """An aggressive ER override should pull weight onto its target."""
+        """An ER override should move weight off a penalised ticker.
+
+        Uses a bearish override (very negative ER on ticker 0) rather than a
+        bullish one: a bullish override is brittle because the baseline may
+        already saturate the per-holding weight cap (so the favoured ticker
+        can't rise — this differs by scipy/SLSQP version). A penalty can always
+        push a non-trivial weight down, so the assertion is version-robust.
+        """
         baseline = _max_sharpe_weights(self.portfolio)
         override = np.zeros(len(self.portfolio))
-        override[0] = 10.0  # massively favour ticker 0
+        override[0] = -10.0  # heavily penalise ticker 0
         biased = _max_sharpe_weights(
             self.portfolio, expected_returns_override=override)
-        self.assertGreater(biased[0], baseline[0])
+        self.assertLess(biased[0], baseline[0])
         self.assertAlmostEqual(float(biased.sum()), 1.0, places=4)
 
     def test_optimal_ccc_path_uses_forecast_variances(self):
