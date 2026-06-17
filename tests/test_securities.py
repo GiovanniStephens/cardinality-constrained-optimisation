@@ -186,9 +186,13 @@ class TestDownloadBatchValidation(unittest.TestCase):
 
     @patch('src.download.core.yf.download')
     def test_handles_non_datetime_index(self, mock_yf):
-        # Return a DataFrame with integer index that can be coerced to datetime
+        # Non-datetime (string) index that can be coerced to datetime. Columns
+        # use the (ticker, field) MultiIndex layout that yf.download(group_by=
+        # "ticker") returns and that _download_batch reads as prices[ticker]["Close"].
         dates = pd.date_range('2024-01-01', periods=3, freq='B')
-        df = pd.DataFrame({'Close': [100, 101, 102]}, index=dates.strftime('%Y-%m-%d'))
+        df = pd.DataFrame({('SPY', 'Close'): [100, 101, 102]},
+                          index=dates.strftime('%Y-%m-%d'))
+        df.columns = pd.MultiIndex.from_tuples(df.columns)
         mock_yf.return_value = df
         result = _download_batch(['SPY'], '2024-01-01', '2024-01-05')
         # Should succeed after coercing index

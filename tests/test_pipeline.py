@@ -295,8 +295,9 @@ class TestCircuitBreaker(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
+    @patch('src.download.core._classify_empty_batch', return_value='rate_limit')
     @patch('src.download.core._download_batch_with_timeout', return_value=None)
-    def test_circuit_breaker_trips_after_threshold(self, mock_dl):
+    def test_circuit_breaker_trips_after_threshold(self, mock_dl, mock_classify):
         tickers = [f'T{i}' for i in range(25)]  # 5 batches of 5
         result = download_and_save(
             tickers, self.conn, exchange='US', batch_size=5,
@@ -602,9 +603,10 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         self.conn.close()
         super().tearDown()
 
+    @patch('src.download.core._classify_empty_batch', return_value='rate_limit')
     @patch('src.download.core.time.sleep')
     @patch('src.download.core._download_batch_with_timeout', return_value=None)
-    def test_cooldown_resets_counter_and_continues(self, mock_dl, mock_sleep):
+    def test_cooldown_resets_counter_and_continues(self, mock_dl, mock_sleep, mock_classify):
         """After first trip, cooldown should reset counter and continue."""
         tickers = [f'T{i}' for i in range(30)]  # 6 batches of 5
         result = download_and_save(
@@ -619,9 +621,10 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         # Should have processed more than just 2 batches (continued after first trip)
         self.assertGreater(len(result['failed_batches']), 2)
 
+    @patch('src.download.core._classify_empty_batch', return_value='rate_limit')
     @patch('src.download.core.time.sleep')
     @patch('src.download.core._download_batch_with_timeout')
-    def test_success_after_cooldown_prevents_abort(self, mock_dl, mock_sleep):
+    def test_success_after_cooldown_prevents_abort(self, mock_dl, mock_sleep, mock_classify):
         """If batches succeed after a cooldown, no hard abort."""
         dates = pd.date_range('2024-01-01', periods=5, freq='B')
         call_count = [0]
@@ -645,8 +648,9 @@ class TestCircuitBreakerCooldown(BaseTmpDirTest):
         self.assertEqual(result['circuit_breaker_trip_count'], 1)
         self.assertGreater(result['saved_tickers'], 0)
 
+    @patch('src.download.core._classify_empty_batch', return_value='rate_limit')
     @patch('src.download.core._download_batch_with_timeout', return_value=None)
-    def test_trip_count_in_result(self, mock_dl):
+    def test_trip_count_in_result(self, mock_dl, mock_classify):
         """Result dict should include circuit_breaker_trip_count."""
         tickers = [f'T{i}' for i in range(10)]
         result = download_and_save(
