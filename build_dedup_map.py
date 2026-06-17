@@ -156,7 +156,7 @@ def main():
     print(f"Map written to:      {args.out}")
     print(f"Deduped universe:    {uni_path}")
     print("-" * 78)
-    print(f"Largest clusters (kept representative  ←  collapsed aliases):")
+    print("Largest clusters (kept representative  ←  collapsed aliases):")
     for size, rep, aliases in sorted(cluster_detail, key=lambda x: -x[0])[:20]:
         rep_name = (names.get(rep) or '')[:38]
         print(f"\n  [{size}] {rep:12s} {rep_name}")

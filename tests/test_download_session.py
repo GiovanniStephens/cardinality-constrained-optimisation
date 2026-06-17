@@ -72,7 +72,7 @@ class TestMakeSession(unittest.TestCase):
         mock_session_cls.return_value = mock_instance
         from src import config as _cfg
 
-        result = sess._make_session()
+        sess._make_session()
 
         args, kwargs = mock_session_cls.call_args
         self.assertIn(kwargs.get('impersonate'), _cfg.IMPERSONATE_TARGETS + ['chrome'])

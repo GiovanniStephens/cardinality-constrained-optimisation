@@ -410,13 +410,8 @@ class TestValidateTickers(unittest.TestCase):
     @patch('src.download.core._download_batch_with_timeout')
     def test_two_windows_union(self, mock_dl):
         """Ticker valid in window 2 but not window 1 → still valid."""
-        # Window 1: only AAPL has data
-        result_w1 = self._make_result(['AAPL'],
-                                       pd.date_range('2019-07-01', periods=5, freq='B'))
-        # Window 2: GOOG also has data
-        result_w2 = self._make_result(['GOOG'],
-                                       pd.date_range('2024-07-01', periods=5, freq='B'))
-
+        # Per-window data is produced by side_effect below (AAPL in window 1,
+        # GOOG in window 2).
         def side_effect(tickers, start, end, timeout):
             if start == '2019-07-01':
                 returned = [t for t in tickers if t == 'AAPL']
