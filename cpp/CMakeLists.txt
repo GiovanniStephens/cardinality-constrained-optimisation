@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.14)
-project(portfolio_ga CXX OBJCXX)
+# OBJCXX is only needed for the Metal fitness shader (macOS). Enabling it at the
+# project() level forces an Objective-C++ compiler probe on every platform, which
+# fails on Linux CI (no cc1objplus). Enable it conditionally on Apple instead.
+project(portfolio_ga CXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
