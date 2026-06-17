@@ -12,7 +12,6 @@ dependencies = [
     "curl_cffi>=0.5",
     "financedatabase>=2.0",
     "matplotlib>=3.3",
-    "muarch>=0.2,<1",
     "numpy>=1.21,<2",
     "pandas>=1.1,<3",
     "pmdarima>=2.0,<3",

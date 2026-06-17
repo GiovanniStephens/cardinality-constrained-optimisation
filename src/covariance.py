@@ -70,47 +70,6 @@ def shrink_correlation_matrix(corr_matrix, log_returns):
     return (1 - alpha) * corr_matrix + alpha * np.eye(N)
 
 
-_muarch_patched = False
-
-
-def _patch_muarch_for_arch_v8() -> None:
-    """Bridge muarch 0.2.2 to arch >= 8.0.
-
-    muarch's distribution wrappers call ``arch.SkewStudent.__init__(self,
-    random_state)`` with a positional argument, but arch 8 made ``seed``
-    keyword-only. Without this patch every fit on ``dist='skewt'`` (and
-    the other muarch dists) fails with TypeError, so the copula path
-    silently falls back to sample correlation.
-
-    Idempotent. Patches the four wrappers muarch ships.
-    """
-    global _muarch_patched
-    if _muarch_patched:
-        return
-    from muarch.distributions import (
-        GeneralizedError, Normal, SkewStudent, StudentsT,
-    )
-    from muarch.distributions._base import DistributionMixin
-    from arch.univariate.distribution import (
-        GeneralizedError as _GE,
-        Normal as _N,
-        SkewStudent as _SS,
-        StudentsT as _T,
-    )
-
-    def _make_init(parent_cls):
-        def __init__(self, random_state=None):
-            DistributionMixin.__init__(self)
-            parent_cls.__init__(self, seed=random_state)
-        return __init__
-
-    SkewStudent.__init__ = _make_init(_SS)
-    StudentsT.__init__ = _make_init(_T)
-    Normal.__init__ = _make_init(_N)
-    GeneralizedError.__init__ = _make_init(_GE)
-    _muarch_patched = True
-
-
 # Per-process cache of standardised AR(1)-GARCH(1,1) residuals, keyed by
 # (ticker_name, hash of the series values). Survives across calls within
 # a single Python process; multiprocessing workers each hold their own.
@@ -262,7 +221,7 @@ def calculate_covariance_matrix(log_returns, annualise=True, shrinkage=None, *,
     :param forecast_variances: optional Series of GARCH-forecast annualised
         variances, indexed by ticker.  Enables CCC mode.
     :param use_copulae: if True, estimate R via copula instead of sample
-        correlation (requires copulae/muarch packages).
+        correlation (requires the copulae package).
     :return: covariance matrix.  DataFrame in mode 1, numpy array in
         modes 2/3.
     """
