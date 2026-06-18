@@ -33,6 +33,9 @@ from src.config import (
     BACKTEST_STEP_DAYS,
     BACKTEST_RUN_FORECAST_STRATEGIES,
     BACKTEST_RUN_FORECAST_COPULA_STRATEGIES,
+    BACKTEST_RUN_SLEEVE_STRATEGIES,
+    BACKTEST_SLEEVE_BASE_METHODS,
+    TSMOM_ALPHAS,
     ISLAND_GA_NUM_GENERATIONS,
     TRADING_DAYS_PER_YEAR,
     DATA_MIN_COVERAGE,
@@ -114,6 +117,7 @@ from .simulation import (
     create_portfolio,
     create_random_portfolios,
     evaluate_portfolios,
+    evaluate_portfolios_with_sleeve,
     benchmark_portfolio,
     _random_selection,
     _init_worker,
@@ -399,6 +403,33 @@ def evaluate_split(
             category_portfolios[cat_name], category_weights[cat_name],
             oos_log_returns, train_log_returns, cat_name)
 
+    # -- Managed-futures sleeve overlay arms (research experiment) -------------
+    # Blend a precomputed, full-history TSMOM sleeve into the best-travelling
+    # base methods at fixed alpha levels. Each arm REUSES its base method's
+    # portfolios + weights (only the OOS/IS evaluation is blended), so this adds
+    # no weight optimisation. The sleeve is computed once on full DB history then
+    # sliced per window inside evaluate_portfolios_with_sleeve (causal — see
+    # src/sleeves/). Gated; default off → base-arm numbers are untouched.
+    # Note: arm names start cc_/mc_ so _method_type and the DSR/PBO machinery
+    # accept them. The DSR moment-correction reconstructs un-blended book returns
+    # (a minor diagnostic approximation); the CPCV PBO + CIs are the verdict.
+    if BACKTEST_RUN_SLEEVE_STRATEGIES:
+        from src.sleeves.overlay import get_cached_sleeve_series
+        try:
+            sleeve_series = get_cached_sleeve_series(conn)
+        except Exception:
+            logger.exception("Sleeve series unavailable; skipping sleeve arms")
+            sleeve_series = None
+        if sleeve_series is not None:
+            for base_cat in BACKTEST_SLEEVE_BASE_METHODS:
+                if base_cat not in category_portfolios:
+                    continue
+                for a in TSMOM_ALPHAS:
+                    arm = f"{base_cat}_trend{int(round(a * 100))}"
+                    result.method_results[arm] = evaluate_portfolios_with_sleeve(
+                        category_portfolios[base_cat], category_weights[base_cat],
+                        oos_log_returns, train_log_returns, arm, sleeve_series, a)
+
     # -- Market-benchmark strategies -------------------------------------------
     # Fixed-allocation portfolios that bypass the GA + SLSQP pipeline. Skipped
     # for windows where the required tickers are missing from training or OOS
@@ -554,6 +585,10 @@ def _report_results(all_results: List[WindowResult]) -> None:
         ('CC optimised vs SPY',            'cc_optimised', 'bench_spy'),
         ('CC optimised vs 60/40',          'cc_optimised', 'bench_6040'),
     ]
+    # Base vs +trend25 sleeve overlay (only fire when the sleeve arms exist).
+    for base in BACKTEST_SLEEVE_BASE_METHODS:
+        comparisons.append(
+            (f'{base} +trend25 vs base', base, f'{base}_trend25'))
 
     # -- Within-window hypothesis tests ----------------------------------------
     logger.info("WITHIN-WINDOW HYPOTHESIS TESTS (per window):")
@@ -779,6 +814,21 @@ def _report_cpcv_results(all_results: List[WindowResult]) -> None:
                 "PBO=%.3f [%s]", n_methods, n_splits, pbo, verdict)
         except ValueError as e:
             logger.warning("PBO computation failed: %s", e)
+
+        # When sleeve arms are present, also report PBO over the base methods
+        # only — the sleeve arms inflate the trial count K, so the with/without
+        # comparison shows whether they help or hurt strategy-family robustness.
+        sleeve_cols = [j for j, m in enumerate(methods) if '_trend' in m]
+        keep = [j for j in range(n_methods) if j not in set(sleeve_cols)]
+        if sleeve_cols and len(keep) >= 2:
+            try:
+                pbo_base = compute_pbo(is_best[:, keep], oos_at_is_best[:, keep])
+                logger.info(
+                    "Method-level PBO EXCLUDING %d sleeve arms "
+                    "(%d base methods): PBO=%.3f",
+                    len(sleeve_cols), len(keep), pbo_base)
+            except ValueError as e:
+                logger.warning("Base-only PBO computation failed: %s", e)
 
     # Per-method OOS distributions with 95% CI.
     logger.info("Per-method OOS Sharpe distribution (across %d splits):",

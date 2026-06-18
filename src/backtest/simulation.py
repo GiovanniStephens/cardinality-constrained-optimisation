@@ -340,6 +340,73 @@ def get_statistics(portfolio, weights, oos_log_returns):
     ]))
 
 
+def get_statistics_with_sleeve(portfolio, weights, oos_log_returns,
+                               sleeve_returns, alpha):
+    """Like :func:`get_statistics`, but blends a managed-futures sleeve return
+    series into the book at the portfolio level::
+
+        combined = (1 - alpha) * book + alpha * sleeve
+
+    ``sleeve_returns`` is the full-history sleeve Series; it is reindexed onto
+    ``oos_log_returns.index`` and any missing date is treated as flat (0.0).
+    ``alpha = 0`` reproduces :func:`get_statistics` exactly (the additivity
+    contract). The existing single-portfolio path is left untouched.
+
+    :param portfolio: list of ticker strings.
+    :param weights: weight allocations (same order as portfolio).
+    :param oos_log_returns: OOS log returns DataFrame (dates x tickers).
+    :param sleeve_returns: daily sleeve log-return Series (datetime index).
+    :param alpha: fraction of the book allocated to the sleeve (0..1).
+    :return: dict keyed by metric name (same shape as get_statistics).
+    """
+    book = run_portfolio(portfolio, weights, oos_log_returns)
+    sleeve = sleeve_returns.reindex(oos_log_returns.index).fillna(0.0).to_numpy()
+    combined = ((1.0 - alpha) * np.asarray(book, dtype=float)
+                + alpha * sleeve).tolist()
+    max_dd = maximum_drawdown(combined)
+    dd = downside_deviation(combined)
+    r = np.mean(combined) * TRADING_DAYS_PER_YEAR
+    std = np.std(combined) * np.sqrt(TRADING_DAYS_PER_YEAR)
+    sharpe = r / std if std != 0 else 0.0
+    return dict(zip(METRIC_NAMES, [
+        r, std, sharpe, dd, max_dd,
+        calmar_ratio(r, max_dd),
+        sortino_ratio(r, dd),
+    ]))
+
+
+def evaluate_portfolios_with_sleeve(portfolios, weights_list, oos_log_returns,
+                                    train_log_returns, category,
+                                    sleeve_returns, alpha):
+    """:func:`evaluate_portfolios` variant that blends the sleeve into both the
+    OOS metrics and the in-sample Sharpe, so DSR / IS-OOS degradation / PBO stay
+    consistent with what the sleeved arm actually traded.
+
+    Reuses the base method's already-computed ``portfolios`` and ``weights_list``
+    (only the evaluation differs), so registering a sleeve arm costs no extra
+    weight optimisation.
+
+    :param sleeve_returns: full-history sleeve log-return Series; reindexed
+        internally onto both the OOS and the training index.
+    :param alpha: fraction of the book allocated to the sleeve (0..1).
+    :return: MethodResults object.
+    """
+    prs = []
+    for p, w in zip(portfolios, weights_list):
+        metrics = get_statistics_with_sleeve(
+            p, w, oos_log_returns, sleeve_returns, alpha)
+        try:
+            is_stats = get_statistics_with_sleeve(
+                p, w, train_log_returns, sleeve_returns, alpha)
+            is_sr = is_stats['sharpe_ratio']
+        except Exception:
+            is_sr = None
+        prs.append(PortfolioResult(
+            portfolio=p, weights=w, metrics=metrics, is_sharpe=is_sr,
+        ))
+    return MethodResults(category=category, portfolios=prs)
+
+
 def fitness(portfolio_returns):
     """
     Calculates the portfolio Sharpe Ratio.

@@ -214,6 +214,45 @@ BACKTEST_RUN_FORECAST_STRATEGIES = True
 # cc_arima_garch) can run by default.
 BACKTEST_RUN_FORECAST_COPULA_STRATEGIES = False
 
+# ─── Managed-futures / trend-following sleeve (research experiment) ──────────
+# A separately-managed return stream blended into the book at the portfolio
+# level: combined = (1-alpha)*book + alpha*sleeve. The sleeve runs canonical
+# time-series momentum (Moskowitz-Ooi-Pedersen 2012) on a fixed basket of
+# long-history liquid ETFs. The spec is FROZEN (parameter-free) so it adds no
+# overfitting surface; only `alpha` is swept, at the fixed levels below.
+# See CLAUDE.md "Future Work" (trend-following sleeve) and docs.
+#
+# Default OFF → existing walk-forward / CPCV runs are byte-identical. Flip to
+# True to register the sleeve A/B arms.
+BACKTEST_RUN_SLEEVE_STRATEGIES = False
+
+# One long-history liquid ETF per asset class. Each value is a fallback chain
+# tried in order at load time (first with usable history wins); resolved once
+# and logged. NEVER tuned to results.
+TSMOM_BASKET = {
+    'equity':    ['SPY', 'IVV', 'VOO'],
+    'bond':      ['IEF', 'TLT', 'AGG'],
+    'commodity': ['DBC', 'GSG', 'DJP'],
+    'gold':      ['GLD', 'IAU'],
+    'reit':      ['VNQ', 'IYR', 'SCHH'],
+}
+TSMOM_LOOKBACK_DAYS    = 252    # 12-month trailing-return sign (MOP-2012)
+TSMOM_VOL_LOOKBACK     = 60     # ~3-month ex-ante vol for inverse-vol sizing
+TSMOM_TARGET_VOL_INSTR = 0.10   # 10% annualised per-instrument vol target
+TSMOM_TARGET_VOL_BOOK  = 0.10   # 10% annualised book-level vol target
+TSMOM_REBALANCE_DAYS   = 21     # refresh signal+sizing monthly, hold between
+TSMOM_ALLOW_SHORT      = True   # longs+shorts — the crisis-alpha source
+
+# Swept knob: fraction of the book allocated to the sleeve. Kept to 3 fixed
+# levels to limit multiple-testing inflation (PBO sensitivity).
+TSMOM_ALPHAS = (0.15, 0.25, 0.35)
+
+# Base methods that get sleeve-overlay variants (the best-travelling OOS
+# methods per the CLAUDE.md strategy taxonomy). 4 bases × 3 alphas = 12 arms.
+BACKTEST_SLEEVE_BASE_METHODS = (
+    'cc_copulae', 'cc_equal_weight', 'cc_inverse_vol', 'mc_optimised',
+)
+
 # ─── Combinatorially Purged CV (López de Prado 2018) ────────────────────────
 # Used by `python -m src.backtest --mode cpcv`. With 12 years of data and
 # n_groups=12, k=2 → C(12,2)=66 splits. Smaller n_groups = fewer splits but

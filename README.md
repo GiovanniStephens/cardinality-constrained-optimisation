@@ -359,11 +359,36 @@ Key takeaways:
 - **Tu-Zhou shrinkage to 1/N** (Tu & Zhou 2011, *JFE*): `w = δ·w_method + (1−δ)·w_1/N` as a cheap variance reducer.
 - **Turnover penalty** in SLSQP (`λ·||w_new − w_old||₁`): reduces real costs and damps IS-noise reweighting.
 - ~~**Pre-filtered universe** (~30 to 60 hand-curated ETFs): single biggest PBO-reduction lever.~~ **Tested June 2026 — it backfired.** A 142-ETF data-driven curated universe lost to the broad set on a clean common-window A/B (mean per-window OOS Sharpe +0.17 vs +1.30): shrinking the universe forced concentration under the 12% return floor and flipped return skew negative. Revisit only jointly with constraint re-tuning, not as a standalone PBO lever (see CLAUDE.md → *Lessons Learned (June 2026)*).
-- **Trend-following sleeve** (DBMF or DIY 10-futures TSMOM): orthogonal premium, crisis alpha.
+- **Trend-following sleeve** (DBMF or DIY futures TSMOM): orthogonal premium, crisis alpha. **A synthetic, parameter-free TSMOM proxy is now implemented** (`src/sleeves/`, gated behind `BACKTEST_RUN_SLEEVE_STRATEGIES`, run via `run_sleeve_experiment.py`); reality-checks at +0.48 correlation to DBMF. **Full-fidelity CPCV (66 splits, ~10h) lifts all four base methods** (+0.02–0.07 mean, best `mc_optimised_trend35` +0.91 vs +0.87) and **tightens the OOS distribution** (clearer risk-adjusted/`mean÷std` gain), but the mean lift **stays within the 95% CIs** (not statistically decisive) and family PBO nudged up (0.606 vs 0.515 base-only). A real, small, variance-reducing lift — not transformative. The production upgrade is a multi-market futures book (see the stack below).
 - **Defined-risk short SPX vol sleeve**: VRP harvesting via 30-45 DTE 10-15 delta put spreads.
 - **Levered risk parity wrapper** (NTSX/NTSI or DIY ES + ZN/ZB futures): captures leverage aversion premium.
 
 Combined multi-strategy stack target: realistic OOS Sharpe **1.4-1.7** with 3-5 uncorrelated sleeves vs. the 1.0-1.2 long-only ceiling.
+
+### The multi-strategy stack: what actually reaches 1.6+
+
+Nothing done to the *equity* book breaks the ~1.0-1.2 long-only ceiling — better selection, weighting, or factor tilting moves 1.0 → ~1.1. **1.6+ comes only from stacking uncorrelated return streams.** For uncorrelated streams optimally combined, squared Sharpes add:
+
+```
+SR_stack = √(S₁² + S₂² + … + Sₙ²)
+```
+
+so the dominant lever is **orthogonality, not standalone Sharpe**: a 0.4-Sharpe *uncorrelated* sleeve does more than grinding the equity book to 1.1. With the full **futures / options / margin** toolkit the menu opens up and ~1.4-1.6 net becomes reachable — at which point it is an **execution and tail-risk** problem, not a strategy-availability one.
+
+| Sleeve | Vehicle | Net S | Skew |
+|---|---|---|---|
+| Core book (equity or levered risk parity) | ETFs / NTSX / ES+ZN futures | ~1.0 | − |
+| Multi-market trend (50-100 markets) | futures | 0.5-0.7 | **+ (crisis alpha)** |
+| Volatility risk premium | defined-risk options | 0.4-0.7 | − (fat left) |
+| Cross-asset carry | FX / rates / commodity futures | 0.4-0.6 | − |
+| Market-neutral relative value | long/short | 0.4-0.6 | mixed |
+
+**Two design rules that fall out of the skew column:**
+
+1. **Tails offset, not just correlations.** Trend has *positive* skew (it profits in crashes); VRP and carry have *negative* skew (they sell insurance). The trend sleeve literally pays out when the short-vol/carry sleeves detonate — combine them.
+2. **Sharpe flatters the negative-skew sleeves.** Size VRP/carry on a tail-aware / Deflated-Sharpe basis, defined-risk only, and haircut their standalone Sharpes before trusting the stack number.
+
+**Build order (by diversification value, not standalone Sharpe):** (1) upgrade the trend sleeve from the 5-ETF proxy to a multi-market futures book — biggest single move, raises trend's own Sharpe ~0.4→0.6 and supplies the positive-skew engine; (2) defined-risk VRP; (3) cross-asset carry; (4) modest leverage (futures) to scale the finished stack to ~12-15% vol; (5) CPCV the **joint stack** with a cost model and tail-aware metrics — the combination is the only number that counts. **Realistic landing: 1.4-1.6 net with excellent execution, 1.3-1.5 robust; treat any backtest above ~1.6 as a red flag until it survives CPCV + DSR + costs.**
 
 ## Building the C++ Optimiser
 
@@ -458,7 +483,11 @@ See `pyproject.toml` for exact version constraints.
 - [ ] Tu-Zhou shrinkage to 1/N (`w = δ·w_method + (1−δ)·w_1/N`) as a cheap variance reducer
 - [ ] Turnover penalty in SLSQP objective (`λ·||w_new − w_old||₁`) to damp IS-noise reweighting
 - [x] Pre-filtered universe (~30 to 60 hand-curated ETFs) — tested June 2026; backfired (forced concentration, lost the common-window A/B). Machinery shipped as `curate_universe.py` + `--curated`; not adopted.
-- [ ] Trend-following / managed futures sleeve (DBMF or DIY 10-futures TSMOM)
+- [~] Trend-following / managed futures sleeve — synthetic parameter-free TSMOM proxy built; full-fidelity CPCV (66 splits) done: consistent small lift on all four bases (+0.02–0.07) + lower std, but within CIs (not decisive) and PBO nudged up. Multi-market futures upgrade pending (`src/sleeves/`, `run_sleeve_experiment.py`)
+- [ ] Multi-market futures trend upgrade (50-100 markets) — raises the trend sleeve's own Sharpe ~0.4→0.6; the positive-skew engine of the stack
 - [ ] Defined-risk short SPX vol sleeve (30-45 DTE 10-15 delta put spreads)
+- [ ] Cross-asset carry sleeve (FX / rates / commodity futures)
+- [ ] Market-neutral relative-value sleeve
+- [ ] CPCV the **joint** multi-strategy stack with a cost model + tail-aware (Deflated-Sharpe) metrics
 - [ ] Portfolio beta and alpha (requires benchmark specification)
 - [ ] Verify weights match an independent optimisation engine

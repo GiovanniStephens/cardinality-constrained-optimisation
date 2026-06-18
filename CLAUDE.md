@@ -380,6 +380,59 @@ left the fat tails unchanged — kept *split* in production per design.
 - **Reduced kurtosis is not automatically good — check skew.** A lower fat-tail moment with
   negative skew (downside tail) is worse than a higher one with positive skew (upside tail).
 
+### Managed-futures sleeve & the path past 1.0 (June 18, 2026)
+
+**7. A managed-futures sleeve is the first lever that *helps* OOS instead of backfiring.**
+Built a synthetic, **parameter-free** time-series-momentum sleeve (TSMOM, Moskowitz-Ooi-Pedersen
+2012 — 12-month trend, long/short, vol-targeted) on a fixed basket of long-history liquid ETFs
+(SPY/IEF/DBC/GLD/VNQ), blended into the book at the *portfolio* level (`(1−α)·book + α·sleeve`).
+Machinery in `src/sleeves/` (`trend.py` engine, `overlay.py` full-history cache), gated behind
+`config.BACKTEST_RUN_SLEEVE_STRATEGIES` (default off), A/B-registered as `<base>_trend15/25/35`
+arms; run via `run_sleeve_experiment.py`. Reality-check vs real CTAs: the synthetic stream
+correlates **+0.48 with DBMF** at a matching ~10.5% annualised vol — a faithful proxy. The
+"futures" of managed futures = a long/short, vol-targeted *trend rule*; we model that return
+stream on cash-ETF price tape rather than holding the ETFs long.
+
+**8. The sleeve's value only appears under CPCV — walk-forward actively masks it.** Indicative
+(reduced-param) runs: in *walk-forward* the sleeve appeared to HURT the inflated high-base
+methods (`cc_inverse_vol`, `cc_copulae`) while helping the honest low-base ones (`mc_optimised`,
+`cc_equal_weight`). In *CPCV* it **lifts all four bases** — confirmed at **full fidelity** (66 splits, 8000 pop × 30
+portfolios, ~10.2h): mean **+0.02 to +0.07** (best `mc_optimised_trend35` **+0.907** vs +0.873
+base), with **lower std for 3 of 4** → a clearer **risk-adjusted (mean/std)** gain (`mc_optimised`
+2.64→3.02; `cc_copulae` 2.72→3.21). Same mechanism as lesson 5: walk-forward regime-inflation
+hides a diversifier; CPCV reveals it. **Two honest caveats from the deciding run:** (a) the mean
+lift stays **WITHIN the 95% CIs** — consistent and reliable, but **not statistically decisive**;
+(b) the family-level **PBO went the wrong way at full fidelity** (0.606 with the sleeve vs **0.515**
+base-only — the *reduced* run had it the other way, 0.591 vs 0.636), most likely a
+correlated-near-duplicate-arms artifact (4 bases × 3 α are near-identical, inflating PBO rank-noise),
+but by that metric the sleeve does **not** reduce overfitting. **Net: a genuine, small,
+variance-reducing lift — exactly what the `√(ΣSᵢ²)` math (lesson 11) predicts for *one* ETF-proxy
+sleeve (~0.4 standalone S). The compounding toward 1.4+ comes from the multi-market futures upgrade
++ additional orthogonal sleeves, not from this proxy alone.**
+
+**9. A diversifier shows up in variance and PBO before it shows up in mean.** The cleanest,
+most consistent sleeve effect was *tighter* OOS distributions and lower PBO — not a big mean
+bump. Judge a low-correlation sleeve on mean/std and tail, not mean alone; raw Sharpe
+under-credits it.
+
+**10. The 12% return floor is correctly a WHOLE-PORTFOLIO constraint** (verified across all four
+code paths: `island_ga.py:77,82`; `cpp/ga_types.h:226-227`; `weights.py:171-175`;
+`run_rebalance.py:286,290`) — never per-asset. And because the sleeve blends at the book level
+*after* optimisation, the floor never constrains it; it governs only the equity book.
+
+**11. 1.6+ Sharpe comes from a multi-sleeve stack, not a better equity book.** For uncorrelated
+streams optimally combined, squared Sharpes add: `SR_stack = √(ΣSᵢ²)`. So the dominant lever is
+**orthogonality (low correlation), not any single stream's standalone Sharpe** — a 0.4-Sharpe
+*uncorrelated* sleeve beats grinding the 1.0 equity book to 1.1. With the full futures/options/
+margin toolkit (multi-market trend + VRP + carry + relative-value) ~1.4-1.6 net is reachable, at
+which point it is an **execution + tail-risk** problem, not a strategy-availability one. Two
+honesty checks: (a) **trend has positive skew and hedges the negative-skew sleeves (VRP/carry) —
+their tails offset**, so combine them; (b) **Sharpe flatters negative-skew sleeves** — haircut
+VRP/carry with DSR/tail-aware metrics before believing the stack number. Equity *factor tilting*
+(value/quality/low-vol/cross-sectional momentum, à la Crack) is a 1.0→1.1 lever — useful but
+still long equity beta, so the smallest marginal diversification of the candidate sleeves. The
+long-only ceiling (~1.0-1.2) is unchanged; the stack is the only way past it.
+
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
 The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):
