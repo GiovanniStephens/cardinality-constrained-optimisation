@@ -17,7 +17,8 @@ import logging
 
 import pandas as pd
 
-from src.config import TSMOM_BASKET, DATA_FFILL_LIMIT
+from src.config import (TSMOM_BASKET, TSMOM_BASKET_MULTI,
+                        TSMOM_USE_MULTI_MARKET, DATA_FFILL_LIMIT)
 from src.sleeves.trend import compute_tsmom_returns
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,18 @@ _sleeve_cache = None
 
 
 def _basket_candidates(basket):
-    """Flatten the basket's fallback chains into a single ticker list."""
+    """Flatten the basket's fallback chains into a single ticker list.
+
+    Handles both basket shapes: flat ``{slot: [chain]}`` and nested
+    ``{cluster: {slot: [chain]}}`` (the multi-market basket).
+    """
     out = []
-    for candidates in basket.values():
-        out.extend(candidates)
+    for value in basket.values():
+        if isinstance(value, dict):              # nested: {slot: [chain]}
+            for chain in value.values():
+                out.extend(chain)
+        else:                                    # flat: [chain]
+            out.extend(value)
     return out
 
 
@@ -50,7 +59,12 @@ def get_cached_sleeve_series(conn, basket=None, force=False):
         return _sleeve_cache
 
     from src import db
-    basket = TSMOM_BASKET if basket is None else basket
+    # Default basket follows the TSMOM_USE_MULTI_MARKET flag so the cached
+    # full-history sleeve matches what compute_tsmom_returns builds. The flag is
+    # a module constant (fixed per process), so the basket-independent process
+    # cache below can never serve a stale-shape series within one run.
+    if basket is None:
+        basket = TSMOM_BASKET_MULTI if TSMOM_USE_MULTI_MARKET else TSMOM_BASKET
     prices = db.load_prices(
         conn, exchange='US', tickers=_basket_candidates(basket),
         exclude_flagged=False, min_coverage=None, ffill_limit=DATA_FFILL_LIMIT,

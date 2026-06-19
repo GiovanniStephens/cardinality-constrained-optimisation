@@ -236,6 +236,33 @@ TSMOM_BASKET = {
     'gold':      ['GLD', 'IAU'],
     'reit':      ['VNQ', 'IYR', 'SCHH'],
 }
+
+# Multi-market basket (research experiment, opt-in via TSMOM_USE_MULTI_MARKET).
+# A broader managed-futures proxy: more markets → more independent trends.
+# Nested {cluster: {slot: [fallback_chain]}}. Aggregation is two-level EQUAL
+# weight — equal-weight legs within a cluster, then equal-weight ACROSS clusters
+# — so each asset class caps at 1/N_clusters of book risk regardless of leg
+# count, and a numerous-but-correlated cluster (esp. equities) cannot dominate
+# and turn the sleeve into long equity beta (which would kill its orthogonality
+# to the book it diversifies). 15 markets, 4 clusters. Gold folds into commodity
+# (a single instrument shouldn't own a full cluster). Thin FX wrappers (FXA
+# ~$1m/day ADV) and broad-commodity baskets (DBC/GSG/DJP — they double-count the
+# single-commodity legs) are deliberately screened out on tradeability + signal
+# quality. FROZEN/parameter-free, same discipline as TSMOM_BASKET. NEVER tuned.
+TSMOM_BASKET_MULTI = {
+    'equity':    {'us_lc': ['SPY', 'IVV', 'VOO'], 'us_growth': ['QQQ'],
+                  'us_sc': ['IWM'], 'em': ['EEM'], 'dev_exus': ['EFA']},
+    'rates':     {'short': ['SHY'], 'mid': ['IEF'], 'long': ['TLT', 'AGG'],
+                  'ig': ['LQD'], 'hy': ['HYG']},
+    'commodity': {'gold': ['GLD', 'IAU'], 'oil': ['USO'], 'ags': ['DBA']},
+    'reit':      {'us': ['VNQ', 'IYR', 'SCHH'], 'intl': ['VNQI']},
+}
+
+# Selector: when True the sleeve is built from the nested TSMOM_BASKET_MULTI;
+# when False from the original flat 5-ETF TSMOM_BASKET. Default False → every
+# existing run (and the committed 5-ETF results) stays byte-identical.
+TSMOM_USE_MULTI_MARKET = False
+
 TSMOM_LOOKBACK_DAYS    = 252    # 12-month trailing-return sign (MOP-2012)
 TSMOM_VOL_LOOKBACK     = 60     # ~3-month ex-ante vol for inverse-vol sizing
 TSMOM_TARGET_VOL_INSTR = 0.10   # 10% annualised per-instrument vol target

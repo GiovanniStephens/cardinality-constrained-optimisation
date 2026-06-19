@@ -433,6 +433,29 @@ VRP/carry with DSR/tail-aware metrics before believing the stack number. Equity 
 still long equity beta, so the smallest marginal diversification of the candidate sleeves. The
 long-only ceiling (~1.0-1.2) is unchanged; the stack is the only way past it.
 
+**12. Broadening the trend sleeve from 5 to 15 ETF markets was a WASH (June 19, 2026) — lesson 11
+in the data.** Tested a 15-market, 4-cluster basket (`config.TSMOM_BASKET_MULTI`, gated behind
+`config.TSMOM_USE_MULTI_MARKET`, default OFF) with **cluster-balanced two-level weighting**
+(equal-weight legs within a cluster, then equal-weight across clusters, so equities can't dominate
+by leg count). A cheap **Stage-0 diagnostic** (build the sleeve on full history; check standalone
+Sharpe + correlation-to-book + skew + the optimal-combine stack — no GA/CPCV) killed it in minutes:
+standalone Sharpe **0.61→0.54** (a *loss*), orthogonality genuinely *improved* (corr-to-book
+0.28→0.21, corr-to-SPY 0.19→0.13), skew ~unchanged (−0.47→−0.51, both negative on a *daily*
+measure — trend's "positive skew" is a monthly/crisis-horizon property), and the
+**optimally-combined stack was a dead wash: 1.056→1.054.** *Why:* equal-weighting clusters
+**dilutes the gold/commodity trend** — the engine of the 5-ETF sleeve's Sharpe — to **12% of book
+variance**, handing 33% each to equity and REIT (correlated, higher-vol, less diversifying vs the
+book). More ETF "markets" added correlated redundancy + thin-liquidity noise, not independent
+trend. **A single trend sleeve broadened is still ONE stream — it does not add an orthogonal
+premium** (lesson 11); recovering the Sharpe by tilting cluster weights toward commodity would just
+reintroduce a tuned/overfitting surface. **Verdict: keep the 5-ETF proxy in production.** The
+multi-market machinery is sound, tested (14/14 sleeve tests), and reversible (flag off → existing
+runs byte-identical) — kept documented like the curated-universe machinery, not enabled. The real
+lever remains a *second* uncorrelated premium (VRP/carry), not a fatter trend sleeve. *(Caveat: the
+faithful CTA reality-check is `sleeve_reality_check.py`'s vol-matched +0.48 vs DBMF; a raw-daily
+correlation proxy reads ~0.21 for both baskets — same method both sides, so no regression, but
+don't read the raw-daily number as the proxy breaking.)*
+
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
 The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):

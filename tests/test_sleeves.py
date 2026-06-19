@@ -11,8 +11,15 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from src.config import TSMOM_BASKET_MULTI
 from src.returns import calculate_log_returns
-from src.sleeves.trend import compute_tsmom_returns, _instrument_position
+from src.sleeves.trend import (
+    compute_tsmom_returns,
+    _instrument_position,
+    _resolve_basket,
+    _aggregate,
+)
+from src.sleeves.overlay import _basket_candidates
 from src.backtest.simulation import (
     run_portfolio,
     evaluate_portfolios,
@@ -166,6 +173,107 @@ class TestSleeveBlend(unittest.TestCase):
         combined = (1 - alpha) * book + alpha * aligned
         self.assertTrue(np.isclose(stats['annualised_return'],
                                    combined.mean() * 252))
+
+
+class TestMultiMarketBasket(unittest.TestCase):
+    """The nested, cluster-balanced multi-market basket (TSMOM_BASKET_MULTI)."""
+
+    _AGG = dict(lookback=20, vol_lookback=10, target_vol_instr=0.1,
+                allow_short=True, rebalance_days=5)
+
+    def _leg_pnl(self, log_returns, tk):
+        r = log_returns[tk]
+        pos = _instrument_position(r, allow_short=True, target_vol_instr=0.1,
+                                   **_FAST)
+        return pos * r
+
+    def test_cluster_balance(self):
+        """Two-level weighting caps each CLUSTER at 1/N_clusters of the book,
+        regardless of leg count — a 3-leg equity cluster and a 1-leg bond
+        cluster each contribute 50%, NOT 3/4 vs 1/4 (which a flat mean gives).
+        This is the orthogonality fix: equities can't dominate by leg count.
+        """
+        prices = make_synthetic_prices(n_days=200, n_tickers=4, seed=21)
+        prices.columns = ['EA', 'EB', 'EC', 'BX']
+        log_returns = calculate_log_returns(prices)
+
+        nested = {'equity': {'a': 'EA', 'b': 'EB', 'c': 'EC'},
+                  'bond':   {'x': 'BX'}}
+        combined = _aggregate(nested, log_returns, **self._AGG)
+
+        eq = pd.concat([self._leg_pnl(log_returns, t)
+                        for t in ('EA', 'EB', 'EC')], axis=1).mean(axis=1)
+        bx = self._leg_pnl(log_returns, 'BX')
+        expected = 0.5 * eq + 0.5 * bx           # equal cluster weight
+        self.assertTrue(np.allclose(combined.iloc[50:].values,
+                                    expected.iloc[50:].values),
+                        "nested aggregate is not cluster-balanced 50/50")
+
+        # And it genuinely differs from the flat 4-leg mean (bond at 1/4),
+        # proving the cluster weighting changes the result when counts differ.
+        flat = {'a': 'EA', 'b': 'EB', 'c': 'EC', 'x': 'BX'}
+        flat_combined = _aggregate(flat, log_returns, **self._AGG)
+        self.assertFalse(np.allclose(combined.iloc[50:].values,
+                                     flat_combined.iloc[50:].values),
+                         "cluster-balanced aggregate matched the flat mean")
+
+    def test_flat_equals_single_leg_nested(self):
+        """A nested basket with exactly one leg per cluster must produce the
+        IDENTICAL sleeve to the equivalent flat basket — pins the equivalence
+        and guards the flat path (the committed 5-ETF results) against drift."""
+        prices = make_synthetic_prices(n_days=220, n_tickers=2, seed=22)
+        flat = {'eq': ['S0'], 'bd': ['S1']}
+        nested = {'c_eq': {'eq': ['S0']}, 'c_bd': {'bd': ['S1']}}
+        a = compute_tsmom_returns(prices, basket=flat, **_FAST)
+        b = compute_tsmom_returns(prices, basket=nested, **_FAST)
+        self.assertTrue(np.allclose(a.values, b.values),
+                        "one-leg-per-cluster nested != equivalent flat basket")
+
+    def test_sleeve_is_causal_nested(self):
+        """Causality must hold under the nested cluster-balanced path too:
+        perturbing a leg's price on day t changes no sleeve return before t."""
+        prices = make_synthetic_prices(n_days=200, n_tickers=6, seed=23)
+        nested = {'eq': {'a': ['S0'], 'b': ['S1']},
+                  'bd': {'c': ['S2'], 'd': ['S3']}}
+        base = compute_tsmom_returns(prices, basket=nested, **_FAST)
+
+        t = 120
+        perturbed = prices.copy()
+        perturbed.iloc[t, 0] *= 1.5              # perturb leg 'a' (S0)
+        out = compute_tsmom_returns(perturbed, basket=nested, **_FAST)
+        self.assertTrue(np.allclose(base.values[:t], out.values[:t]),
+                        "nested sleeve leaked: a return before t reacted")
+        self.assertFalse(np.allclose(base.values[t:], out.values[t:]))
+
+    def test_nested_resolution_drops_empty_clusters(self):
+        """A cluster whose every leg is missing from `prices` is dropped; the
+        surviving clusters remain (and re-share the weight by count)."""
+        prices = make_synthetic_prices(n_days=200, n_tickers=5, seed=24)
+        nested = {'equity': {'a': ['S0']},
+                  'missing': {'z': ['NOPE']},     # no usable ticker
+                  'bond':   {'b': ['S1']}}
+        resolved = _resolve_basket(prices, nested, min_obs=30)
+        self.assertNotIn('missing', resolved)
+        self.assertEqual(resolved,
+                         {'equity': {'a': 'S0'}, 'bond': {'b': 'S1'}})
+
+    def test_basket_candidates_flattens_nested(self):
+        """`_basket_candidates` flattens the nested basket to every fallback
+        ticker, so the DB load fetches the full multi-market set."""
+        cands = _basket_candidates(TSMOM_BASKET_MULTI)
+        for tk in ('SPY', 'QQQ', 'IWM', 'EEM', 'EFA', 'SHY', 'IEF', 'TLT',
+                   'AGG', 'LQD', 'HYG', 'GLD', 'IAU', 'USO', 'DBA', 'VNQ',
+                   'IYR', 'SCHH', 'VNQI'):
+            self.assertIn(tk, cands)
+
+    def test_multi_basket_screens_fx_and_broad_commodity(self):
+        """Thin FX wrappers and broad-commodity baskets are deliberately NOT in
+        the multi-market basket (tradeability + signal quality). Encoding it
+        here trips a test if a future edit silently re-adds them."""
+        cands = set(_basket_candidates(TSMOM_BASKET_MULTI))
+        for tk in ('UUP', 'FXE', 'FXY', 'FXB', 'FXA', 'FXF',  # thin FX
+                   'DBC', 'GSG', 'DJP'):                       # broad commodity
+            self.assertNotIn(tk, cands)
 
 
 if __name__ == '__main__':

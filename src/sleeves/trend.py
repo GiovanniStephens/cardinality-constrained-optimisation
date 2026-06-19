@@ -28,6 +28,8 @@ import pandas as pd
 
 from src.config import (
     TSMOM_BASKET,
+    TSMOM_BASKET_MULTI,
+    TSMOM_USE_MULTI_MARKET,
     TSMOM_LOOKBACK_DAYS,
     TSMOM_VOL_LOOKBACK,
     TSMOM_TARGET_VOL_INSTR,
@@ -46,24 +48,52 @@ logger = logging.getLogger(__name__)
 _VOL_FLOOR = 1e-4
 
 
-def _resolve_basket(prices, basket, min_obs):
-    """Pick one ticker per asset-class slot.
-
-    For each slot, take the first fallback ticker present in ``prices`` with at
-    least ``min_obs`` non-NaN observations (enough to form a signal). Slots with
-    no usable ticker are dropped. Returns ``{slot: ticker}`` and logs the
-    resolution. Resolved once per run so the basket never drifts between windows.
+def _resolve_slot(prices, slot, candidates, min_obs):
+    """First fallback ticker present in ``prices`` with >= ``min_obs`` non-NaN
+    observations (enough to form a signal), or ``None`` if the slot is unusable.
     """
-    resolved = {}
-    for slot, candidates in basket.items():
-        for tk in candidates:
-            if tk in prices.columns and prices[tk].notna().sum() >= min_obs:
+    for tk in candidates:
+        if tk in prices.columns and prices[tk].notna().sum() >= min_obs:
+            return tk
+    logger.warning("TSMOM basket: no usable ticker for slot %r (tried %s)",
+                   slot, candidates)
+    return None
+
+
+def _resolve_basket(prices, basket, min_obs):
+    """Pick one ticker per slot. Supports two basket shapes:
+
+    * **flat** ``{slot: [fallback_chain]}`` → ``{slot: ticker}`` (the original
+      5-ETF basket; legs are equal-weighted).
+    * **nested** ``{cluster: {slot: [fallback_chain]}}`` → ``{cluster: {slot:
+      ticker}}`` (the multi-market basket; legs are cluster-balanced — see
+      ``_aggregate``).
+
+    Slots with no usable ticker are dropped; nested clusters left empty are
+    dropped too. Resolved once per run so the basket never drifts between
+    windows. The shape is detected from whether the basket's values are dicts.
+    """
+    nested = all(isinstance(v, dict) for v in basket.values())
+    if not nested:
+        resolved = {}
+        for slot, candidates in basket.items():
+            tk = _resolve_slot(prices, slot, candidates, min_obs)
+            if tk is not None:
                 resolved[slot] = tk
-                break
-        else:
-            logger.warning("TSMOM basket: no usable ticker for slot %r "
-                           "(tried %s)", slot, candidates)
-    logger.info("TSMOM basket resolved: %s", resolved)
+        logger.info("TSMOM basket resolved (flat): %s", resolved)
+        return resolved
+
+    resolved = {}
+    for cluster, slots in basket.items():
+        cl = {}
+        for slot, candidates in slots.items():
+            tk = _resolve_slot(prices, slot, candidates, min_obs)
+            if tk is not None:
+                cl[slot] = tk
+        if cl:
+            resolved[cluster] = cl
+    logger.info("TSMOM basket resolved (nested, %d clusters): %s",
+                len(resolved), resolved)
     return resolved
 
 
@@ -99,6 +129,50 @@ def _instrument_position(r, lookback, vol_lookback, target_vol_instr,
     return _hold_monthly(size, rebalance_days)
 
 
+def _resolved_tickers(resolved):
+    """Flat list of every resolved ticker, for either basket shape:
+    flat ``{slot: ticker}`` or nested ``{cluster: {slot: ticker}}``.
+    """
+    nested = all(isinstance(v, dict) for v in resolved.values())
+    if nested:
+        return [tk for cl in resolved.values() for tk in cl.values()]
+    return list(resolved.values())
+
+
+def _aggregate(resolved, log_returns, lookback, vol_lookback, target_vol_instr,
+               allow_short, rebalance_days):
+    """Combine per-leg P&L (``position * return``) into one daily book series.
+
+    * **flat** ``{slot: ticker}`` → equal-weight across legs (the original
+      5-ETF behaviour, byte-for-byte: a single ``mean(axis=1)`` over legs).
+    * **nested** ``{cluster: {slot: ticker}}`` → two-level equal weight: mean
+      legs *within* a cluster, then mean *across* clusters. Each cluster gets
+      ``1/N_clusters`` of book risk regardless of how many legs it holds, so a
+      numerous-but-correlated cluster (equities) can't dominate. Reduces to the
+      flat result exactly when every cluster has one leg.
+
+    The aggregate is a linear combination of the causal ``position * return``
+    legs, so causality is inherited from ``_instrument_position`` — no new
+    dependence on future prices is introduced here.
+    """
+    def _leg_pnl(tk):
+        r = log_returns[tk]
+        pos = _instrument_position(r, lookback, vol_lookback, target_vol_instr,
+                                   allow_short, rebalance_days)
+        return pos * r
+
+    nested = all(isinstance(v, dict) for v in resolved.values())
+    if not nested:
+        legs = [_leg_pnl(tk) for tk in resolved.values()]
+        return pd.concat(legs, axis=1).mean(axis=1)
+
+    cluster_pnl = []
+    for slots in resolved.values():
+        legs = pd.concat([_leg_pnl(tk) for tk in slots.values()], axis=1)
+        cluster_pnl.append(legs.mean(axis=1))          # equal-weight within
+    return pd.concat(cluster_pnl, axis=1).mean(axis=1)  # equal-weight across
+
+
 def compute_tsmom_returns(prices, basket=None, lookback=None, vol_lookback=None,
                           target_vol_instr=None, target_vol_book=None,
                           rebalance_days=None, allow_short=None):
@@ -106,13 +180,16 @@ def compute_tsmom_returns(prices, basket=None, lookback=None, vol_lookback=None,
 
     :param prices: wide DataFrame (dates x tickers) containing the basket
         candidate columns; index must be sorted ascending.
-    :param basket: ``{slot: [ticker, fallback, ...]}`` (default
-        ``config.TSMOM_BASKET``). All other params default to their frozen
-        ``config.TSMOM_*`` values — overridable only for tests.
+    :param basket: flat ``{slot: [ticker, fallback, ...]}`` or nested
+        ``{cluster: {slot: [fallbacks]}}``. Default follows the
+        ``config.TSMOM_USE_MULTI_MARKET`` flag (``TSMOM_BASKET_MULTI`` when on,
+        flat ``TSMOM_BASKET`` when off). All other params default to their
+        frozen ``config.TSMOM_*`` values — overridable only for tests.
     :return: ``pd.Series`` of daily sleeve log returns, indexed like ``prices``,
         with the warmup period (insufficient history) filled with 0.0.
     """
-    basket = TSMOM_BASKET if basket is None else basket
+    if basket is None:
+        basket = TSMOM_BASKET_MULTI if TSMOM_USE_MULTI_MARKET else TSMOM_BASKET
     lookback = TSMOM_LOOKBACK_DAYS if lookback is None else lookback
     vol_lookback = TSMOM_VOL_LOOKBACK if vol_lookback is None else vol_lookback
     target_vol_instr = (TSMOM_TARGET_VOL_INSTR if target_vol_instr is None
@@ -129,16 +206,12 @@ def compute_tsmom_returns(prices, basket=None, lookback=None, vol_lookback=None,
             "TSMOM basket resolved to zero instruments; cannot build the "
             "sleeve. Check the basket tickers exist in the price data.")
 
-    log_returns = calculate_log_returns(prices[list(resolved.values())])
+    log_returns = calculate_log_returns(prices[_resolved_tickers(resolved)])
 
-    # Per-instrument daily P&L per unit of book notional = position * return.
-    instr_pnl = []
-    for tk in resolved.values():
-        r = log_returns[tk]
-        pos = _instrument_position(r, lookback, vol_lookback, target_vol_instr,
-                                   allow_short, rebalance_days)
-        instr_pnl.append(pos * r)
-    combined = pd.concat(instr_pnl, axis=1).mean(axis=1)  # equal-weight legs
+    # Per-leg daily P&L (position * return), aggregated to one book series —
+    # equal-weight legs (flat basket) or cluster-balanced (nested basket).
+    combined = _aggregate(resolved, log_returns, lookback, vol_lookback,
+                          target_vol_instr, allow_short, rebalance_days)
 
     # Book-level vol target: scale the aggregate to the book vol target using a
     # trailing realized-vol estimate, lagged one day and held monthly (causal).
