@@ -6,8 +6,8 @@ country/sector group constraints to every SLSQP path — and prints a
 side-by-side comparison with dollar allocations.
 
 Methods compared (see CLAUDE.md "Strategy Taxonomy & Empirical Verdicts"):
-    mc_optimised       MC selection + max-Sharpe SLSQP   (most robust OOS)
-    cc_copulae         GA selection + Gaussian copula     (highest mean OOS)
+    cc_copulae         GA selection + Gaussian copula     (deployable pick — tightest OOS)
+    mc_optimised       MC selection + max-Sharpe SLSQP    (best OOS mean-robustness)
     cc_optimised       GA selection + max-Sharpe SLSQP
     cc_equal_weight    GA selection + 1/N                 (robust baseline)
     mc_random_weights  MC selection + random weights      (reference floor)
@@ -16,9 +16,14 @@ The reported Sharpe is in-sample and biased upward. The printed OOS column
 applies a 50% haircut and a Harvey-Liu multiple-testing correction; treat any
 in-sample Sharpe above 1.5 as a red flag, not a win.
 
+The search universe is liquidity-filtered (US-listed ETFs above a dollar-volume
+floor; see src.liquidity), and the deployable book is reported as the equity
+portfolio plus a managed-futures (DBMF) trend-sleeve capital split.
+
 Usage:
     python run_rebalance.py [--portfolio-value 100000] [--time-budget 600]
-                            [--min-etfs 10] [--max-etfs 20] [--no-gpu] [--seed N]
+                            [--min-etfs 10] [--max-etfs 15] [--min-adv 1e6]
+                            [--sleeve-alpha 0.25] [--no-sleeve] [--no-gpu] [--seed N]
 """
 
 import argparse
@@ -43,14 +48,14 @@ BINARY_PATH = os.path.join(os.path.dirname(__file__), 'cpp', 'optimisation')
 
 # Candidate methods, in display order. (label, selection_source, weight_mode)
 METHODS = [
-    ('mc_optimised',      'mc', 'optimal'),
     ('cc_copulae',        'cc', 'copulae'),
+    ('mc_optimised',      'mc', 'optimal'),
     ('cc_optimised',      'cc', 'optimal'),
     ('cc_equal_weight',   'cc', 'equal'),
     ('mc_random_weights', 'mc', 'random'),
 ]
 
-DEPLOYABLE_RECOMMENDATION = 'mc_optimised'
+DEPLOYABLE_RECOMMENDATION = 'cc_copulae'
 
 
 def parse_args():
@@ -59,7 +64,7 @@ def parse_args():
                    help='Portfolio value for dollar allocations (default: %(default)s)')
     p.add_argument('--min-etfs', type=int, default=10,
                    help='Minimum holdings (default: %(default)s)')
-    p.add_argument('--max-etfs', type=int, default=10,
+    p.add_argument('--max-etfs', type=int, default=15,
                    help='Maximum holdings (default: %(default)s)')
     p.add_argument('--lookback-days', type=int, default=config.DATA_LOOKBACK_DAYS,
                    help='Calendar days of history to use (default: %(default)s)')
@@ -89,6 +94,18 @@ def parse_args():
     p.add_argument('--curated', action='store_true',
                    help="Restrict the search universe to the curated allow-list "
                         "(data/curated_universe.csv, built by curate_universe.py).")
+    p.add_argument('--min-adv', type=float, default=config.REBALANCE_MIN_ADV_USD,
+                   help='Minimum average daily dollar volume per holding '
+                        '(default: %(default)s; 0 disables the ADV floor, '
+                        'leaving only the foreign-listing filter).')
+    p.add_argument('--no-liquidity-filter', action='store_true',
+                   help='Disable the liquidity/tradeability filter entirely '
+                        '(allows foreign listings and sub-ADV names).')
+    p.add_argument('--sleeve-alpha', type=float, default=0.25,
+                   help='Managed-futures (DBMF) capital fraction of the deployable '
+                        'book (default: %(default)s).')
+    p.add_argument('--no-sleeve', action='store_true',
+                   help='Report the equity book only, without the DBMF trend split.')
     return p.parse_args()
 
 
@@ -98,7 +115,7 @@ def run_cpp_ga(binary_data_path, args):
     """Invoke the C++ island GA and return its parsed JSON result.
 
     Parameterised on cardinality / min-return (unlike run_optimisation.py which
-    bakes these into module constants), so the GA respects the 10-20 holding
+    bakes these into module constants), so the GA respects the 10-15 holding
     constraint for the rebalance.
     """
     cmd = [
@@ -328,6 +345,19 @@ def main():
                 prices.shape[0], prices.shape[1],
                 prices.index[0].date(), prices.index[-1].date())
 
+    # Open the DB early — both the liquidity filter and the group constraints
+    # below need a connection.
+    from src import db
+    conn = db.get_connection()
+
+    # ── Liquidity / tradeability filter ──────────────────────────────────────
+    # Drop foreign (dot-suffix) listings and US ETFs below the ADV floor so the
+    # book only holds IB-tradeable names. Must-haves are protected from the filter.
+    if not args.no_liquidity_filter:
+        from src.liquidity import filter_by_liquidity
+        _must = [t.strip().upper() for t in (args.must_have or '').split(',') if t.strip()]
+        prices = filter_by_liquidity(prices, conn, args.min_adv, protect=_must)
+
     # ── Must-have (forced) holdings ──────────────────────────────────────────
     must_haves = [t.strip().upper() for t in (args.must_have or '').split(',') if t.strip()]
     missing = [t for t in must_haves if t not in prices.columns]
@@ -343,9 +373,7 @@ def main():
         logger.info("Must-have holdings (forced into every portfolio): %s", must_haves)
 
     # ── Category caps + group constraints ────────────────────────────────────
-    from src import db
     from src.group_constraints import load_membership, check_constraints
-    conn = db.get_connection()
 
     # Asset-class caps from the crude classifier; drop any excluded categories
     # (but never drop a must-have, even if its category is excluded).
@@ -481,6 +509,40 @@ def main():
         for v in violations:
             print(f"  ! group cap: {v}")
 
+    # ── Deployable book: equity + managed-futures (DBMF) capital split ────────
+    # The trend sleeve is a synthetic return stream, not tradeable equity weights,
+    # so it enters a live book as a capital allocation: (1-alpha) to the equity
+    # book, alpha to DBMF (the managed-futures ETF the sleeve is validated against).
+    alpha = 0.0 if args.no_sleeve else args.sleeve_alpha
+    rec = next((p for p in portfolios if p[0] == DEPLOYABLE_RECOMMENDATION), None)
+    if rec is None:
+        logger.warning("Recommended method %s unavailable; deployable book uses %s.",
+                       DEPLOYABLE_RECOMMENDATION, portfolios[0][0])
+        rec = portfolios[0]
+    rec_label, rec_tickers, rec_weights = rec[0], rec[1], rec[2]
+    eq = 1.0 - alpha
+    print()
+    print("=" * 78)
+    header = f"DEPLOYABLE BOOK — {rec_label} equity book"
+    if alpha:
+        header += f" + {alpha:.0%} DBMF (managed-futures trend sleeve)"
+    print(header)
+    print("=" * 78)
+    print(f"{'Ticker':<10}{'Weight':>9}{f'  ${pv:,.0f}':>16}")
+    for t, w in sorted(zip(rec_tickers, rec_weights), key=lambda x: -x[1]):
+        if w * eq > 1e-4:
+            star = ' ★' if t in must_haves else ''
+            print(f"{t:<10}{w * eq:>8.1%}{w * eq * pv:>15,.0f}{star}")
+    if alpha:
+        print(f"{'DBMF':<10}{alpha:>8.1%}{alpha * pv:>15,.0f}  managed futures")
+    print("-" * 78)
+    if alpha:
+        print(f"Split: {eq:.0%} equity / {alpha:.0%} DBMF. Trend sleeve validated vs "
+              f"DBMF (+0.48 corr, sleeve_reality_check.py); CPCV shows a small OOS "
+              f"mean lift + variance reduction at alpha=0.25.")
+    else:
+        print("Equity book only (--no-sleeve); trend sleeve omitted.")
+
     # ── Persist ──────────────────────────────────────────────────────────────
     if not args.no_save:
         from src.portfolio_utils import save_optimisation_result
@@ -506,7 +568,7 @@ def main():
     conn.close()
     print()
     print(f"Recommended deployable portfolio: {DEPLOYABLE_RECOMMENDATION} "
-          f"(most robust OOS; tightest CPCV distribution).")
+          f"(highest OOS mean and tightest distribution among GA-selected methods).")
 
 
 if __name__ == '__main__':

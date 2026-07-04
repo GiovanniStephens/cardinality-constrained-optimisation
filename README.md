@@ -340,7 +340,7 @@ The walk-forward and CPCV runs disagree, and the disagreement is itself the stor
 
 Key takeaways:
 
-- **The top 7 methods have overlapping 95% CIs.** `cc_copulae` leads on the mean but with the widest std (0.67); `mc_optimised` is half a step behind (+1.04) with the tightest distribution (std 0.29). On any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
+- **The top 7 methods have overlapping 95% CIs.** `cc_copulae` leads on the mean (widest std, 0.67 in this run); `mc_optimised` is half a step behind (+1.04) with the tightest distribution (std 0.29). The two are statistically tied. The production deployable pick is **`cc_copulae`** (chosen July 2026 for consistency and its correlation-focused covariance — the June CPCV with trend arms showed it with the tightest per-fold distribution); `mc_optimised` is the mean-robustness alternative.
 - **Walk-forward Sharpes are systematically inflated.** The walk-forward winner (`cc_ccc_baseline`, +1.86) collapsed to +0.96 in CPCV (−48%). Trust CPCV over walk-forward.
 - **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-focused covariance), MC search, MC + random weights, GA + 1/N, GA + max-Sharpe.
 - **Forecasting hurts more often than it helps.** GARCH-variance methods (`cc_garch_var`, `cc_arima_garch`) rank 9-10 in CPCV.

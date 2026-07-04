@@ -175,6 +175,13 @@ REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-g
 # category caps). Override per-run with `run_rebalance.py --must-have SMH,VOO`.
 REBALANCE_MUST_HAVE = ['SMH']
 
+# Production-rebalance liquidity floor: minimum average daily dollar volume (USD)
+# for a US-listed ETF to be selectable. Foreign (dot-suffix) listings carry no
+# stored volume and are always dropped; US ETFs below this ADV are excluded so the
+# book stays IB-tradeable. Applied in run_rebalance.py via src.liquidity. Run
+# `python -m src.db backfill-volume` to keep ADV coverage current.
+REBALANCE_MIN_ADV_USD = 1_000_000
+
 # Classifier label -> cap-group (merges Currency+Cash; Leveraged/Inverse split by direction).
 REBALANCE_CAP_GROUP = {
     'Equity': 'Equity', 'Fixed Income': 'Fixed Income',

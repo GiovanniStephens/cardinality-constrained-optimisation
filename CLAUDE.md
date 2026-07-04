@@ -481,7 +481,7 @@ The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 sp
 
 **Key takeaways from this matrix**:
 
-1. **The top 7 methods all have overlapping 95% CIs.** `cc_copulae` leads on the mean but with std 0.67, vs `mc_optimised` at std 0.29. By any robustness-adjusted criterion (mean / std), `mc_optimised` is the most reliable choice.
+1. **The top 7 methods all have overlapping 95% CIs.** `cc_copulae` leads on the mean; in this May run `mc_optimised` had the tighter distribution (std 0.29 vs 0.67). The two are statistically tied — both defensible top-cluster picks. **Production uses `cc_copulae`** (the July 2026 `DEPLOYABLE_RECOMMENDATION` in `run_rebalance.py`) for its correlation-focused covariance and consistency; `mc_optimised` is the mean-robustness alternative. The fresh June CPCV (which added the trend-sleeve arms) showed `cc_copulae` with the *tightest* per-fold distribution — mean/std 2.07 base, 2.37 with the trend25 sleeve — reinforcing the pick.
 2. **Simpler weighting beats sophisticated weighting OOS.** The top 5 CPCV methods are all "low parameter count": copula (correlation-focused covariance), MC search (no estimation), MC + random weights, GA + 1/N, GA + max-Sharpe.
 3. **Walk-forward winners are not CPCV winners.** The 5 cc_* methods that ranked top in walk-forward all dropped 4-7 ranks in CPCV.
 4. **Forecasting hurts more often than it helps.** GARCH-variance methods rank 9-10. Drop GARCH variance forecasting in this universe.
@@ -593,8 +593,11 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 ### Portfolio Constraints
 
 - **Instruments**: ETFs only — no single stocks (see Universe Scope policy)
-- **Positions**: up to 10 holdings (cardinality cap; `run_rebalance.py --max-etfs 10`). Earlier runs used 10–20; capped to 10 (June 2026) for a focused, lower-turnover book.
+- **Positions**: up to 15 holdings (cardinality cap; `run_rebalance.py --max-etfs 15`, min 10). Was 10 (June 2026); raised to 15 (July 2026) for a slightly wider, better-diversified book.
 - **Per-holding weight**: 5–25% (June 2026; `run_rebalance.py --max-weight 0.25`). Tightened from 45% to limit single-holding concentration; forces ≥4 holdings to fill the book.
+- **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$1M/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
+- **Deployable method**: **`cc_copulae`** (GA selection + Gaussian-copula covariance) — chosen July 2026 as `run_rebalance.py`'s `DEPLOYABLE_RECOMMENDATION` for the tightest OOS distribution among the top-cluster methods (`mc_optimised` remains the best mean-robustness alternative; the two are statistically tied).
+- **Managed-futures sleeve**: the deployable book is reported as an equity portfolio plus a **DBMF capital split** (default α = 0.25 → 75% equity / 25% DBMF; `run_rebalance.py --sleeve-alpha`, `--no-sleeve`). The TSMOM trend sleeve is a synthetic *return stream*, so it enters a live book as a capital allocation, not as equity weights.
 - **Rebalancing**: Quarterly
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
 
