@@ -189,8 +189,10 @@ REBALANCE_MIN_ADV_USD = 1_000_000
 # allocation protects the diversifier the in-sample optimiser would underweight.
 # Several funds diversify single-manager risk (though they are mutually correlated
 # trend-followers, so it is manager diversification, not a new premium). Override
-# with `run_rebalance.py --sleeve-etfs DBMF,KMLM,CTA`.
-REBALANCE_SLEEVE_ETFS = ['DBMF', 'KMLM']
+# with `run_rebalance.py --sleeve-etfs DBMF,KMLM`. Three distinct trend models:
+# DBMF (SG-CTA index replication), KMLM (fixed-weight Mount Lucas index), CTA
+# (Simplify actively-managed adaptive trend).
+REBALANCE_SLEEVE_ETFS = ['DBMF', 'KMLM', 'CTA']
 
 # Classifier label -> cap-group (merges Currency+Cash; Leveraged/Inverse split by direction).
 REBALANCE_CAP_GROUP = {

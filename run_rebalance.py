@@ -19,7 +19,7 @@ in-sample Sharpe above 1.5 as a red flag, not a win.
 The search universe is liquidity-filtered (US-listed ETFs above a dollar-volume
 floor; see src.liquidity), and the deployable book is reported as the equity
 portfolio plus a managed-futures trend-sleeve capital split, spread equally over
-a basket of CTA ETFs (DBMF/KMLM by default; see --sleeve-etfs).
+a basket of CTA ETFs (DBMF/KMLM/CTA by default; see --sleeve-etfs).
 
 Usage:
     python run_rebalance.py [--portfolio-value 100000] [--time-budget 600]
