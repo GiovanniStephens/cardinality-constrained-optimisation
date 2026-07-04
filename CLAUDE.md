@@ -598,17 +598,23 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 - **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$1M/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
 - **Deployable method**: **`cc_copulae`** (GA selection + Gaussian-copula covariance) — chosen July 2026 as `run_rebalance.py`'s `DEPLOYABLE_RECOMMENDATION` for the tightest OOS distribution among the top-cluster methods (`mc_optimised` remains the best mean-robustness alternative; the two are statistically tied).
 - **Managed-futures sleeve**: the deployable book is reported as an equity portfolio plus a **managed-futures capital split** (default α = 0.25 → 75% equity / 25% CTA ETFs, split equally across `REBALANCE_SLEEVE_ETFS` = DBMF + KMLM + CTA, ~8.3% each; `run_rebalance.py --sleeve-alpha`, `--sleeve-etfs`, `--no-sleeve`). The TSMOM trend sleeve is a synthetic *return stream*, so it enters a live book as a fixed capital allocation, not as GA-selected equity weights (the funds are also too young for the 5y history filter). Holding several CTA ETFs diversifies single-manager risk — though they are mutually correlated trend-followers, so it is manager diversification, not a new premium.
-- **Return floor**: `run_rebalance.py` defaults to **no floor** (July 2026; `--min-return 0` = disabled → pure max-Sharpe; pass `0.12` to restore the old floor). Verified binding before removal: the 12% floor forced return to exactly 12.00% and cost ~0.42 IS Sharpe (2.79 unconstrained vs 2.37). NB the two backends spell "off" differently — C++ GA needs a negative sentinel, Python paths need `None`; `run_rebalance.normalise_min_return` maps `<= 0` correctly to both. `config.ISLAND_GA_MIN_RETURN = 0.12` still governs research/backtest paths.
+- **Return floor**: **12% (reinstated July 2026** after the leverage analysis; `--min-return`, default `config.ISLAND_GA_MIN_RETURN`; `<= 0` disables for pure max-Sharpe). The floor was briefly removed to pursue unconstrained-max-Sharpe + margin leverage, but leverage proved uneconomic at 2026 financing rates (see Margin Leverage below) — and **without cheap leverage, Tobin separation says to move along the frontier, which is what the floor does**. It is also the validated config: all CPCV/walk-forward numbers and run 68's 11y realised Sharpe 1.01 were produced with the floor on, and the floor *counteracts* the hedge-stuffing tendency of unconstrained max-Sharpe (verified: unconstrained drops to a 3.2%-vol shorts-heavy book). NB the two backends spell "off" differently — C++ GA needs a negative sentinel, Python paths need `None`; `run_rebalance.normalise_min_return` maps `<= 0` correctly to both.
 - **Rebalancing**: Quarterly
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
 
 ### Margin Leverage (July 2026)
 
-The production recipe is now **unconstrained max-Sharpe + margin leverage** (Tobin
-two-fund separation: lever the tangency portfolio instead of chasing return along the
-frontier via a return floor). Sizing machinery in `src/leverage.py`, CLI
+**Verdict (July 2026): margin leverage is uneconomic at current rates — the production
+recipe stays 12%-floor, unlevered.** The unconstrained-max-Sharpe + leverage recipe
+(Tobin two-fund separation) was built and tested; the sizing tool answered **L = 1.0,
+don't lever** at every financing rate tried (USD margin 5.14%, NZD ~3.75–4.75%, box
+spreads ~4.2%) — the binding constraint is the financing spread vs the haircut return,
+NOT liquidation risk (P(breach) < 1%/yr up to ~1.7x even at stressed vol). Half-Kelly
+won't even margin-lever plain SPY at 2026 retail rates (0.69). The verdict flips if:
+(1) the stack's true Sharpe rises (a second orthogonal sleeve — the real lever), or
+(2) financing falls materially. Sizing machinery in `src/leverage.py`, CLI
 `run_leverage_analysis.py` (loads a saved book by `--run-id`, blends the synthetic MF
-sleeve, prints a cap table + recommendation).
+sleeve, prints a cap table + recommendation) — re-run it whenever either input changes.
 
 - **Recommendation = min of independent caps**: half-Kelly with financing
   (`L* = (μ−r_b)/σ²`, upper sanity bound only), vol-target, stressed-drawdown identity,

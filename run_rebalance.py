@@ -86,10 +86,11 @@ def parse_args():
                    help='Calendar days of history to use (default: %(default)s)')
     p.add_argument('--time-budget', type=float, default=600,
                    help='GA time budget in seconds (default: %(default)s)')
-    p.add_argument('--min-return', type=float, default=0,
-                   help='Minimum annualised return floor; <= 0 disables it '
-                        '(default: %(default)s — pure max-Sharpe). Pass e.g. '
-                        '0.12 to restore the old 12%% floor.')
+    p.add_argument('--min-return', type=float, default=config.ISLAND_GA_MIN_RETURN,
+                   help='Minimum annualised return floor; <= 0 disables it for '
+                        'pure max-Sharpe (default: %(default)s). Without cheap '
+                        'leverage the floor picks the growth point on the '
+                        'frontier — the validated production config.')
     p.add_argument('--pop-size', type=int, default=10_000,
                    help='GA population per island (default: %(default)s)')
     p.add_argument('--generations', type=int, default=10_000,

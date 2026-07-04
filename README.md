@@ -392,10 +392,11 @@ so the dominant lever is **orthogonality, not standalone Sharpe**: a 0.4-Sharpe 
 
 ## Margin Leverage Analysis
 
-The production recipe (July 2026) is **unconstrained max-Sharpe + margin leverage**
-(Tobin two-fund separation): `run_rebalance.py` now defaults to *no* return floor
-(`--min-return 0` = disabled), and `run_leverage_analysis.py` sizes how much IB margin
-the resulting book can safely carry:
+**Verdict (July 2026): margin leverage is uneconomic at current financing rates — the
+production book stays at the 12% return floor, unlevered.** The full
+unconstrained-max-Sharpe + leverage recipe was built and evaluated;
+`run_leverage_analysis.py` sizes how much IB margin a saved book can safely carry
+(`--min-return 0` on the rebalance disables the floor to produce the tangency book):
 
 ```bash
 python run_leverage_analysis.py                    # latest cc_copulae book
@@ -408,9 +409,13 @@ The recommendation is the **minimum of independent caps** — half-Kelly with fi
 33%), a CVaR budget, a stationary-bootstrap **first-passage P(liquidation) < 1%/yr**
 simulation (IB auto-liquidates in real time — first passage, not terminal VaR, is the
 binding statistic), and a 2.0 hard ceiling. Sizing uses haircut inputs (μ×0.5, σ
-inflated to stressed levels); with honest numbers the tool will often answer
-**"L = 1.0 — don't lever"** because the ~5.5% floating borrow rate exceeds the haircut
-expected return. Machinery in `src/leverage.py`; tests in `tests/test_leverage.py`.
+inflated to stressed levels); with honest numbers the answer at 2026 rates is
+**"L = 1.0 — don't lever"** at every financing tested (USD margin ~5.14%, NZD
+~3.75–4.75%, box spreads ~4.2%) — the financing spread over the haircut return binds,
+never liquidation risk. Without cheap leverage, Tobin separation says to move along the
+frontier instead — which is what the reinstated 12% return floor does. Machinery in
+`src/leverage.py`; tests in `tests/test_leverage.py`; re-run the analysis when a new
+sleeve raises the stack's Sharpe or financing falls.
 
 ## Building the C++ Optimiser
 
