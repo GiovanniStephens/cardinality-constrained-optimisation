@@ -182,6 +182,16 @@ REBALANCE_MUST_HAVE = ['SMH']
 # `python -m src.db backfill-volume` to keep ADV coverage current.
 REBALANCE_MIN_ADV_USD = 1_000_000
 
+# Managed-futures ETFs that make up the trend-sleeve capital allocation (alpha).
+# The sleeve is a FIXED strategic allocation split equally across these funds — a
+# tradeable proxy for the validated synthetic TSMOM stream, held by hand because
+# (a) these funds are too young for the GA's 5y history filter and (b) a fixed
+# allocation protects the diversifier the in-sample optimiser would underweight.
+# Several funds diversify single-manager risk (though they are mutually correlated
+# trend-followers, so it is manager diversification, not a new premium). Override
+# with `run_rebalance.py --sleeve-etfs DBMF,KMLM,CTA`.
+REBALANCE_SLEEVE_ETFS = ['DBMF', 'KMLM']
+
 # Classifier label -> cap-group (merges Currency+Cash; Leveraged/Inverse split by direction).
 REBALANCE_CAP_GROUP = {
     'Equity': 'Equity', 'Fixed Income': 'Fixed Income',

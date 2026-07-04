@@ -18,7 +18,8 @@ in-sample Sharpe above 1.5 as a red flag, not a win.
 
 The search universe is liquidity-filtered (US-listed ETFs above a dollar-volume
 floor; see src.liquidity), and the deployable book is reported as the equity
-portfolio plus a managed-futures (DBMF) trend-sleeve capital split.
+portfolio plus a managed-futures trend-sleeve capital split, spread equally over
+a basket of CTA ETFs (DBMF/KMLM by default; see --sleeve-etfs).
 
 Usage:
     python run_rebalance.py [--portfolio-value 100000] [--time-budget 600]
@@ -102,10 +103,13 @@ def parse_args():
                    help='Disable the liquidity/tradeability filter entirely '
                         '(allows foreign listings and sub-ADV names).')
     p.add_argument('--sleeve-alpha', type=float, default=0.25,
-                   help='Managed-futures (DBMF) capital fraction of the deployable '
-                        'book (default: %(default)s).')
+                   help='Managed-futures capital fraction of the deployable book '
+                        '(default: %(default)s), split equally across --sleeve-etfs.')
+    p.add_argument('--sleeve-etfs', default=','.join(config.REBALANCE_SLEEVE_ETFS),
+                   help='Comma-separated managed-futures ETFs that share the sleeve '
+                        'allocation equally (default: %(default)s).')
     p.add_argument('--no-sleeve', action='store_true',
-                   help='Report the equity book only, without the DBMF trend split.')
+                   help='Report the equity book only, without the managed-futures split.')
     return p.parse_args()
 
 
@@ -512,8 +516,15 @@ def main():
     # ── Deployable book: equity + managed-futures (DBMF) capital split ────────
     # The trend sleeve is a synthetic return stream, not tradeable equity weights,
     # so it enters a live book as a capital allocation: (1-alpha) to the equity
-    # book, alpha to DBMF (the managed-futures ETF the sleeve is validated against).
-    alpha = 0.0 if args.no_sleeve else args.sleeve_alpha
+    # book, alpha split equally across the managed-futures ETFs (DBMF/KMLM/...),
+    # which proxy the validated synthetic TSMOM stream. Held by hand because the
+    # funds are too young for the GA's history filter and because a fixed strategic
+    # allocation protects the diversifier the in-sample optimiser would underweight.
+    sleeve_etfs = [t.strip().upper() for t in (args.sleeve_etfs or '').split(',') if t.strip()]
+    alpha = 0.0 if (args.no_sleeve or not sleeve_etfs) else args.sleeve_alpha
+    if args.sleeve_alpha and not args.no_sleeve and not sleeve_etfs:
+        logger.warning("--sleeve-alpha set but --sleeve-etfs is empty; "
+                       "reporting the equity book only.")
     rec = next((p for p in portfolios if p[0] == DEPLOYABLE_RECOMMENDATION), None)
     if rec is None:
         logger.warning("Recommended method %s unavailable; deployable book uses %s.",
@@ -525,7 +536,7 @@ def main():
     print("=" * 78)
     header = f"DEPLOYABLE BOOK — {rec_label} equity book"
     if alpha:
-        header += f" + {alpha:.0%} DBMF (managed-futures trend sleeve)"
+        header += f" + {alpha:.0%} managed futures ({'/'.join(sleeve_etfs)})"
     print(header)
     print("=" * 78)
     print(f"{'Ticker':<10}{'Weight':>9}{f'  ${pv:,.0f}':>16}")
@@ -534,14 +545,19 @@ def main():
             star = ' ★' if t in must_haves else ''
             print(f"{t:<10}{w * eq:>8.1%}{w * eq * pv:>15,.0f}{star}")
     if alpha:
-        print(f"{'DBMF':<10}{alpha:>8.1%}{alpha * pv:>15,.0f}  managed futures")
+        each = alpha / len(sleeve_etfs)
+        for etf in sleeve_etfs:
+            print(f"{etf:<10}{each:>8.1%}{each * pv:>15,.0f}  managed futures")
     print("-" * 78)
     if alpha:
-        print(f"Split: {eq:.0%} equity / {alpha:.0%} DBMF. Trend sleeve validated vs "
-              f"DBMF (+0.48 corr, sleeve_reality_check.py); CPCV shows a small OOS "
-              f"mean lift + variance reduction at alpha=0.25.")
+        each = alpha / len(sleeve_etfs)
+        print(f"Split: {eq:.0%} equity / {alpha:.0%} managed futures "
+              f"({', '.join(sleeve_etfs)} equal-weight, {each:.1%} each). Sleeve "
+              f"validated vs DBMF (+0.48 corr, sleeve_reality_check.py); CPCV shows a "
+              f"small OOS mean lift + variance reduction at alpha=0.25. Multiple funds "
+              f"diversify single-manager risk (they are correlated trend-followers).")
     else:
-        print("Equity book only (--no-sleeve); trend sleeve omitted.")
+        print("Equity book only (--no-sleeve); managed-futures sleeve omitted.")
 
     # ── Persist ──────────────────────────────────────────────────────────────
     if not args.no_save:
