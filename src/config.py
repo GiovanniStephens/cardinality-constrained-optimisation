@@ -194,6 +194,13 @@ REBALANCE_MIN_ADV_USD = 1_000_000
 # (Simplify actively-managed adaptive trend).
 REBALANCE_SLEEVE_ETFS = ['DBMF', 'KMLM', 'CTA']
 
+# Margin-leverage analysis defaults (run_leverage_analysis.py / src.leverage).
+# Borrow rate: IB Pro USD tier under $100k is benchmark + 1.5% (~5.1% as of
+# mid-2026) — 0.055 adds headroom; it floats, so stress it, don't trust it.
+# Maintenance: Reg-T 25% on broad 1x ETFs; IB auto-liquidates on breach.
+REBALANCE_BORROW_RATE = 0.055
+REBALANCE_MAINTENANCE_MARGIN = 0.25
+
 # Classifier label -> cap-group (merges Currency+Cash; Leveraged/Inverse split by direction).
 REBALANCE_CAP_GROUP = {
     'Equity': 'Equity', 'Fixed Income': 'Fixed Income',

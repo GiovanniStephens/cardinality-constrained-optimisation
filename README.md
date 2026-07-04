@@ -390,6 +390,28 @@ so the dominant lever is **orthogonality, not standalone Sharpe**: a 0.4-Sharpe 
 
 **Build order (by diversification value, not standalone Sharpe):** (1) upgrade the trend sleeve from the 5-ETF proxy to a multi-market **futures** book — biggest single move, intended to raise trend's own Sharpe ~0.4→0.6 and supply the positive-skew engine. *Note (June 2026): doing this with **ETF proxies** does NOT deliver the lift — a 15-ETF-market cluster-balanced version was tested and washed out (standalone Sharpe fell 0.61→0.54; the liquid distinct-market ETFs cluster and carry no roll/carry). The 0.4→0.6 requires genuine futures across 50-100 markets, which needs a futures-data pipeline — not in scope yet.* (2) defined-risk VRP; (3) cross-asset carry; (4) modest leverage (futures) to scale the finished stack to ~12-15% vol; (5) CPCV the **joint stack** with a cost model and tail-aware metrics — the combination is the only number that counts. **Realistic landing: 1.4-1.6 net with excellent execution, 1.3-1.5 robust; treat any backtest above ~1.6 as a red flag until it survives CPCV + DSR + costs.**
 
+## Margin Leverage Analysis
+
+The production recipe (July 2026) is **unconstrained max-Sharpe + margin leverage**
+(Tobin two-fund separation): `run_rebalance.py` now defaults to *no* return floor
+(`--min-return 0` = disabled), and `run_leverage_analysis.py` sizes how much IB margin
+the resulting book can safely carry:
+
+```bash
+python run_leverage_analysis.py                    # latest cc_copulae book
+python run_leverage_analysis.py --run-id 68 --seed 42 --borrow-rate 0.08
+```
+
+The recommendation is the **minimum of independent caps** — half-Kelly with financing
+(`L* = (μ−r_b)/σ²`), a vol target, the Reg-T liquidation-drop identity
+(`d* = (1−mL)/(L(1−m))`; at 25% maintenance L=1.5 survives a 56% book drop, L=2.0 only
+33%), a CVaR budget, a stationary-bootstrap **first-passage P(liquidation) < 1%/yr**
+simulation (IB auto-liquidates in real time — first passage, not terminal VaR, is the
+binding statistic), and a 2.0 hard ceiling. Sizing uses haircut inputs (μ×0.5, σ
+inflated to stressed levels); with honest numbers the tool will often answer
+**"L = 1.0 — don't lever"** because the ~5.5% floating borrow rate exceeds the haircut
+expected return. Machinery in `src/leverage.py`; tests in `tests/test_leverage.py`.
+
 ## Building the C++ Optimiser
 
 The `cpp/` directory contains a parallel island-model GA written in C++ that is the fastest path for large universes. On Apple Silicon, fitness evaluation can optionally run on the GPU via Metal compute shaders; CMake auto-detects Metal and compiles it in when available. On other platforms the binary compiles CPU-only and `--gpu` falls back with a warning.

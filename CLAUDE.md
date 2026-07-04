@@ -598,8 +598,43 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 - **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$1M/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
 - **Deployable method**: **`cc_copulae`** (GA selection + Gaussian-copula covariance) — chosen July 2026 as `run_rebalance.py`'s `DEPLOYABLE_RECOMMENDATION` for the tightest OOS distribution among the top-cluster methods (`mc_optimised` remains the best mean-robustness alternative; the two are statistically tied).
 - **Managed-futures sleeve**: the deployable book is reported as an equity portfolio plus a **managed-futures capital split** (default α = 0.25 → 75% equity / 25% CTA ETFs, split equally across `REBALANCE_SLEEVE_ETFS` = DBMF + KMLM + CTA, ~8.3% each; `run_rebalance.py --sleeve-alpha`, `--sleeve-etfs`, `--no-sleeve`). The TSMOM trend sleeve is a synthetic *return stream*, so it enters a live book as a fixed capital allocation, not as GA-selected equity weights (the funds are also too young for the 5y history filter). Holding several CTA ETFs diversifies single-manager risk — though they are mutually correlated trend-followers, so it is manager diversification, not a new premium.
+- **Return floor**: `run_rebalance.py` defaults to **no floor** (July 2026; `--min-return 0` = disabled → pure max-Sharpe; pass `0.12` to restore the old floor). Verified binding before removal: the 12% floor forced return to exactly 12.00% and cost ~0.42 IS Sharpe (2.79 unconstrained vs 2.37). NB the two backends spell "off" differently — C++ GA needs a negative sentinel, Python paths need `None`; `run_rebalance.normalise_min_return` maps `<= 0` correctly to both. `config.ISLAND_GA_MIN_RETURN = 0.12` still governs research/backtest paths.
 - **Rebalancing**: Quarterly
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
+
+### Margin Leverage (July 2026)
+
+The production recipe is now **unconstrained max-Sharpe + margin leverage** (Tobin
+two-fund separation: lever the tangency portfolio instead of chasing return along the
+frontier via a return floor). Sizing machinery in `src/leverage.py`, CLI
+`run_leverage_analysis.py` (loads a saved book by `--run-id`, blends the synthetic MF
+sleeve, prints a cap table + recommendation).
+
+- **Recommendation = min of independent caps**: half-Kelly with financing
+  (`L* = (μ−r_b)/σ²`, upper sanity bound only), vol-target, stressed-drawdown identity,
+  CVaR budget, **stationary-bootstrap first-passage P(liquidation) < 1%/yr** (the core
+  engine — IB auto-liquidates in real time, so first passage is the binding statistic,
+  not terminal VaR), and a **2.0 hard ceiling**. All sized on **haircut inputs**
+  (μ × 0.5, σ × 1.5 floored at worst rolling 63d vol) — never raw in-sample moments.
+- **Key identity**: a book drop `d` triggers auto-liquidation at
+  `d* = (1−m·L)/(L·(1−m))`; at Reg-T m=25%: L=1.5 → 56% drop, L=2.0 → 33% (one
+  COVID-speed move). Practitioner safe zone **1.2–1.5×**, 2× = hard ceiling.
+- **IB facts (2026)**: Reg-T regime at this account size (PM needs USD 110k NLV and is
+  fragile there); USD borrow ≈ benchmark + 1.5% ≈ 5.1% floating
+  (`config.REBALANCE_BORROW_RATE = 0.055`); broad 1x ETFs incl. DBMF/KMLM/CTA carry 25%
+  maintenance (`REBALANCE_MAINTENANCE_MARGIN`); **no margin calls — real-time
+  auto-liquidation**.
+- **Three caveats that govern everything**: (1) the max-Sharpe book is the
+  estimation-error maximiser (Michaud) — leverage multiplies exactly the noise-fit;
+  (2) the margin spread degrades Sharpe: `SR_L = SR − [(L−1)/L]·(r_b−r_f)/σ` — brutal on
+  a low-σ book (Buffett/NTSX financed at ≤ r_f; retail margin can't); (3) Kelly
+  overbetting cliff: >2× Kelly guarantees underperforming cash; μ-error makes plug-in
+  Kelly overshoot, so fractional only. If haircut μ < r_b the tool answers **L = 1.0 —
+  don't lever** (negative-carry).
+- References: Asness-Frazzini-Pedersen (FAJ 2012), Frazzini-Pedersen BAB (JFE 2014),
+  MacLean-Thorp-Ziemba (Kelly), Moreira-Muir (JF 2017), Harvey et al. vol-targeting
+  (JPM 2018), Politis-Romano stationary bootstrap, Brunnermeier-Pedersen margin spirals
+  (RFS 2009).
 
 ### Group Allocation Constraints
 

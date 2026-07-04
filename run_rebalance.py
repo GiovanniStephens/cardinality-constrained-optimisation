@@ -59,6 +59,21 @@ METHODS = [
 DEPLOYABLE_RECOMMENDATION = 'cc_copulae'
 
 
+def normalise_min_return(min_return):
+    """Map the CLI --min-return onto per-backend semantics.
+
+    Values <= 0 (or None) disable the floor everywhere — but the two backends
+    spell "off" differently: the C++ GA gate is `minReturn >= 0 && ret <
+    minReturn` (needs a NEGATIVE sentinel), while the Python SLSQP/selection
+    paths bind on any non-None value (need None).
+
+    :return: (min_return_cpp, min_return_py)
+    """
+    if min_return is None or min_return <= 0:
+        return -1.0, None
+    return float(min_return), float(min_return)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description='Rebalance: compare top methods')
     p.add_argument('--portfolio-value', type=float, default=100_000,
@@ -71,8 +86,10 @@ def parse_args():
                    help='Calendar days of history to use (default: %(default)s)')
     p.add_argument('--time-budget', type=float, default=600,
                    help='GA time budget in seconds (default: %(default)s)')
-    p.add_argument('--min-return', type=float, default=config.ISLAND_GA_MIN_RETURN,
-                   help='GA minimum annualised return (default: %(default)s)')
+    p.add_argument('--min-return', type=float, default=0,
+                   help='Minimum annualised return floor; <= 0 disables it '
+                        '(default: %(default)s — pure max-Sharpe). Pass e.g. '
+                        '0.12 to restore the old 12%% floor.')
     p.add_argument('--pop-size', type=int, default=10_000,
                    help='GA population per island (default: %(default)s)')
     p.add_argument('--generations', type=int, default=10_000,
@@ -115,12 +132,13 @@ def parse_args():
 
 # ── Selection: C++ island GA ────────────────────────────────────────────────
 
-def run_cpp_ga(binary_data_path, args):
+def run_cpp_ga(binary_data_path, args, min_return_cpp):
     """Invoke the C++ island GA and return its parsed JSON result.
 
     Parameterised on cardinality / min-return (unlike run_optimisation.py which
     bakes these into module constants), so the GA respects the 10-15 holding
-    constraint for the rebalance.
+    constraint for the rebalance. *min_return_cpp* must already be normalised
+    (negative = no floor; see normalise_min_return).
     """
     cmd = [
         BINARY_PATH, '--binary', '--data', binary_data_path,
@@ -132,7 +150,7 @@ def run_cpp_ga(binary_data_path, args):
         '--num-elites', '100',
         '--migration-interval', '10',
         '--migration-rate', '0.1',
-        '--min-return', str(args.min_return),
+        '--min-return', str(min_return_cpp),
         '--time-budget', str(args.time_budget),
         '--seed', str(args.seed),
         '--mutation-initial', '0.008',
@@ -400,6 +418,11 @@ def main():
     from src.binary_io import write_binary_data
     from src.optimisers.monte_carlo import parallel_monte_carlo, monte_carlo_search
 
+    # Return floor: <= 0 disables it (C++ wants -1, Python wants None).
+    min_return_cpp, min_return_py = normalise_min_return(args.min_return)
+    if min_return_py is None:
+        logger.info("Return floor disabled — pure max-Sharpe optimisation.")
+
     # GA selection via C++ binary
     log_returns_full = calculate_log_returns(prices)
     tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
@@ -407,14 +430,14 @@ def main():
     cc_tickers = None
     try:
         write_binary_data(log_returns_full, tmp.name)
-        ga_result, ga_elapsed = run_cpp_ga(tmp.name, args)
+        ga_result, ga_elapsed = run_cpp_ga(tmp.name, args, min_return_cpp)
     finally:
         os.unlink(tmp.name)
 
     if ga_result is not None:
         cc_tickers = pick_cc_selection(ga_result, prices, gc, gm,
                                        args.min_weight, args.max_weight,
-                                       args.min_return, must_haves, args.max_etfs)
+                                       min_return_py, must_haves, args.max_etfs)
         if cc_tickers:
             logger.info("GA selected (cap-aware) %d tickers: %s",
                         len(cc_tickers), cc_tickers)
@@ -452,7 +475,7 @@ def main():
         try:
             weights = compute_weights(mode, prices, tickers, gc, gm,
                                       args.min_weight, args.max_weight,
-                                      args.min_return)
+                                      min_return_py)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Weighting failed for %s: %s", label, exc)
             continue
@@ -488,8 +511,8 @@ def main():
         notes = []
         if sharpe > 1.5:
             notes.append("IS>1.5 suspect")
-        if args.min_return and ret < args.min_return - 1e-3:
-            notes.append(f"return<{args.min_return:.0%} target")
+        if min_return_py is not None and ret < min_return_py - 1e-3:
+            notes.append(f"return<{min_return_py:.0%} target")
         if violations:
             notes.append(f"{len(violations)} cap breach")
         if label == DEPLOYABLE_RECOMMENDATION:
