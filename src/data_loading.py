@@ -35,7 +35,7 @@ def load_curated_universe(path=None):
 
 def load_prices(exchange='US', csv_fallback=None, conn=None,
                 last_n_days=None, min_coverage=None, ffill_limit=None,
-                asset_type=None):
+                asset_type=None, allow_min_history_flags=False):
     """Load price data from DB with CSV fallback, applying standard filters.
 
     :param exchange: exchange code for DB query (default 'US').
@@ -70,7 +70,8 @@ def load_prices(exchange='US', csv_fallback=None, conn=None,
         # enforced over the analysis window only (the last_n_days slice below),
         # so disable the full-history filter and apply the windowed one later.
         data = _db.load_prices(conn, exchange=exchange, asset_type=asset_type,
-                               min_coverage=0)
+                               min_coverage=0,
+                               allow_min_history_flags=allow_min_history_flags)
     finally:
         if own_conn:
             conn.close()
@@ -93,7 +94,8 @@ def load_prices(exchange='US', csv_fallback=None, conn=None,
 
 
 def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
-                       min_coverage=None, asset_type=None):
+                       min_coverage=None, asset_type=None,
+                       allow_min_history_flags=False):
     """Load and filter price data for training, with DB-first-CSV-fallback.
 
     Convenience wrapper for entry-point scripts that consolidates the common
@@ -116,7 +118,8 @@ def load_training_data(exchange='US', csv_fallback=None, lookback_days=None,
 
     data = load_prices(exchange=exchange, csv_fallback=csv_fallback,
                        last_n_days=lookback_days, min_coverage=min_coverage,
-                       asset_type=asset_type)
+                       asset_type=asset_type,
+                       allow_min_history_flags=allow_min_history_flags)
     if data.empty:
         raise ValueError("No price data available from DB or CSV fallback.")
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)

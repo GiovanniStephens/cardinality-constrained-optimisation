@@ -180,7 +180,9 @@ REBALANCE_MUST_HAVE = ['SMH']
 # stored volume and are always dropped; US ETFs below this ADV are excluded so the
 # book stays IB-tradeable. Applied in run_rebalance.py via src.liquidity. Run
 # `python -m src.db backfill-volume` to keep ADV coverage current.
-REBALANCE_MIN_ADV_USD = 1_000_000
+# 500k (July 2026, was 1M): a small patient book (~$3-12k positions, quarterly,
+# limit orders worked at the spread) is ~1-2% of daily volume at this floor.
+REBALANCE_MIN_ADV_USD = 500_000
 
 # Managed-futures ETFs that make up the trend-sleeve capital allocation (alpha).
 # The sleeve is a FIXED strategic allocation split equally across these funds — a
@@ -193,6 +195,14 @@ REBALANCE_MIN_ADV_USD = 1_000_000
 # DBMF (SG-CTA index replication), KMLM (fixed-weight Mount Lucas index), CTA
 # (Simplify actively-managed adaptive trend).
 REBALANCE_SLEEVE_ETFS = ['DBMF', 'KMLM', 'CTA']
+
+# Production-rebalance history window (calendar days). Research/backtest keeps
+# the 5y standard (DATA_LOOKBACK_DAYS / MIN_HISTORY_DAYS: T >> N for CPCV and
+# stable covariance); the LIVE allocation admits ETFs with ~2 years of history
+# so the book isn't restricted to pre-2021 funds. min_history:* quality flags
+# are treated as ADVISORY on this path (hard flags still exclude); the 95%
+# coverage test over this window does the real admission.
+REBALANCE_LOOKBACK_DAYS = 730
 
 # Margin-leverage analysis defaults (run_leverage_analysis.py / src.leverage).
 # Borrow rate: IB Pro USD tier under $100k is benchmark + 1.5% (~5.1% as of

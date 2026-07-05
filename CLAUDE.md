@@ -572,12 +572,20 @@ Note: Geographic exposure is tracked via the `country` column on `tickers`, not 
 
 **Policy: ETFs only — no single stocks.** Production portfolios are built exclusively from ETFs, by deliberate design choice (June 2026): single names carry idiosyncratic blow-up risk and cut against the diversification objective. Single-stock equities were trialled as an experiment and are **excluded from production runs**. The rebalance loads with `asset_type='etf'` by default (`run_rebalance.py` defaults to `--asset-type etf`; pass `--asset-type all` only to reproduce the equities experiment).
 
-All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/config.py`.
+All instruments sourced from FinanceDatabase (US-listed), **supplemented July 2026 by the
+Nasdaq Trader symbol directory** (`nasdaqtrader.com/dynamic/SymDir/{nasdaqlisted,otherlisted}.txt`,
+nightly, ETF flag): FinanceDatabase's ETF dataset **froze ~2021** — it contains no 2022+
+launches (verified by probe: CTA, JEPQ, IBIT, FBTC, TSLY, MSTY all absent) and only ~2,800
+of ~5,459 actual US ETF listings. New symbols are ingested via
+`python -m src.download --from-csv <list> --asset-type etf --skip-validation --start <2y-ago>`
+(staging validation must be skipped for short-history ingests — it applies the 5y
+`MIN_HISTORY_DAYS` test; the authoritative revalidation runs post-promotion).
+Configuration in `src/config.py`.
 
 - **ETFs (production universe)**: ~2,900 (≈3,900 incl. foreign-listed) covering equities, bonds/treasuries, commodities, REITs, crypto, managed futures/CTA. The only asset class used for live portfolios.
 - **Equities (excluded from production)**: ~22k single names across 27 countries remain in the DB for research only; the ETF-only policy filters them out of the optimisation.
 - **Excluded**: China, Russia (geopolitical risk)
-- **History filter**: 5+ years of daily price data required (~1,260 trading days)
+- **History filter — split by purpose (July 2026)**: research/backtest requires **5+ years** (~1,260 trading days; `DATA_LOOKBACK_DAYS`, `MIN_HISTORY_DAYS` — T >> N for CPCV and covariance stability). The **production rebalance admits at ~2 years** (`REBALANCE_LOOKBACK_DAYS = 730`; `run_rebalance.py --lookback-days`) so the live book isn't restricted to pre-2021 funds: `min_history:*` quality flags are treated as *advisory* on this path (`allow_min_history_flags=True` in the loaders; hard flags — stale/frozen/suspect — still exclude), and the 95% coverage test over the 2y window does the real admission. NB the estimation window shortens with it (T≈504; fine for n≤15 sub-covariance, T/n≈35, but sample-mean ER is noisier — watch for recency-chasing books).
 
 ### Asset Classes of Interest
 
@@ -595,7 +603,7 @@ All instruments sourced from FinanceDatabase (US-listed). Configuration in `src/
 - **Instruments**: ETFs only — no single stocks (see Universe Scope policy)
 - **Positions**: up to 15 holdings (cardinality cap; `run_rebalance.py --max-etfs 15`, min 10). Was 10 (June 2026); raised to 15 (July 2026) for a slightly wider, better-diversified book.
 - **Per-holding weight**: 5–25% (June 2026; `run_rebalance.py --max-weight 0.25`). Tightened from 45% to limit single-holding concentration; forces ≥4 holdings to fill the book.
-- **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$1M/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
+- **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$500k/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`; lowered from $1M July 2026 — a small patient book works positions of ~1-2% of daily volume with limit orders). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
 - **Deployable method**: **`cc_copulae`** (GA selection + Gaussian-copula covariance) — chosen July 2026 as `run_rebalance.py`'s `DEPLOYABLE_RECOMMENDATION` for the tightest OOS distribution among the top-cluster methods (`mc_optimised` remains the best mean-robustness alternative; the two are statistically tied).
 - **Managed-futures sleeve**: the deployable book is reported as an equity portfolio plus a **managed-futures capital split** (default α = 0.25 → 75% equity / 25% CTA ETFs, split equally across `REBALANCE_SLEEVE_ETFS` = DBMF + KMLM + CTA, ~8.3% each; `run_rebalance.py --sleeve-alpha`, `--sleeve-etfs`, `--no-sleeve`). The TSMOM trend sleeve is a synthetic *return stream*, so it enters a live book as a fixed capital allocation, not as GA-selected equity weights (the funds are also too young for the 5y history filter). Holding several CTA ETFs diversifies single-manager risk — though they are mutually correlated trend-followers, so it is manager diversification, not a new premium.
 - **Return floor**: **12% (reinstated July 2026** after the leverage analysis; `--min-return`, default `config.ISLAND_GA_MIN_RETURN`; `<= 0` disables for pure max-Sharpe). The floor was briefly removed to pursue unconstrained-max-Sharpe + margin leverage, but leverage proved uneconomic at 2026 financing rates (see Margin Leverage below) — and **without cheap leverage, Tobin separation says to move along the frontier, which is what the floor does**. It is also the validated config: all CPCV/walk-forward numbers and run 68's 11y realised Sharpe 1.01 were produced with the floor on, and the floor *counteracts* the hedge-stuffing tendency of unconstrained max-Sharpe (verified: unconstrained drops to a 3.2%-vol shorts-heavy book). NB the two backends spell "off" differently — C++ GA needs a negative sentinel, Python paths need `None`; `run_rebalance.normalise_min_return` maps `<= 0` correctly to both.

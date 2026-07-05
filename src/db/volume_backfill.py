@@ -31,11 +31,16 @@ logger = logging.getLogger(__name__)
 
 def candidate_symbols(conn: sqlite3.Connection, exchange: str = 'US',
                       asset_type: str = 'etf') -> list[str]:
-    """US-listed (no '.') non-excluded ETF symbols — the curation candidate pool."""
+    """US-listed (no '.') ETF symbols eligible for volume/ADV backfill.
+
+    min_history:* flags are advisory here (the production rebalance admits at
+    ~2y and needs ADV for those tickers); hard flags still exclude.
+    """
     exchange_id = _get_exchange_id(conn, exchange)
     rows = conn.execute(
         "SELECT symbol FROM tickers WHERE exchange_id = ? AND asset_type = ? "
-        "AND excluded IS NULL AND symbol NOT LIKE '%.%' ORDER BY symbol",
+        "AND (excluded IS NULL OR excluded LIKE 'min_history:%') "
+        "AND symbol NOT LIKE '%.%' ORDER BY symbol",
         (exchange_id, asset_type)).fetchall()
     return [r['symbol'] for r in rows]
 

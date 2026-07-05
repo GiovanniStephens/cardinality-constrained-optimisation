@@ -66,3 +66,29 @@ class TestFilterByLiquidity(BaseDBTest):
         out = filter_by_liquidity(self.prices, self.conn, 0)
         self.assertEqual(list(out.columns),
                          [c for c in self.prices.columns if '.' not in c])
+
+
+class TestMinHistoryAdvisoryFlags(BaseDBTest):
+    """allow_min_history_flags keeps min_history-flagged tickers (advisory for
+    the production 2y admission) while hard flags still exclude."""
+
+    def setUp(self):
+        super().setUp()
+        dates = pd.bdate_range('2024-01-01', periods=60, freq='B')
+        prices = pd.DataFrame({'CLEAN': 100.0, 'YOUNG': 50.0, 'BAD': 10.0},
+                              index=dates)
+        db.save_prices(self.conn, prices, exchange='US', asset_type='etf')
+        self.conn.execute("UPDATE tickers SET excluded='min_history:500_days' "
+                          "WHERE symbol='YOUNG'")
+        self.conn.execute("UPDATE tickers SET excluded='frozen_price:run=30_days' "
+                          "WHERE symbol='BAD'")
+        self.conn.commit()
+
+    def test_default_excludes_all_flagged(self):
+        out = db.load_prices(self.conn, exchange='US', min_coverage=0)
+        self.assertEqual(set(out.columns), {'CLEAN'})
+
+    def test_advisory_keeps_min_history_only(self):
+        out = db.load_prices(self.conn, exchange='US', min_coverage=0,
+                             allow_min_history_flags=True)
+        self.assertEqual(set(out.columns), {'CLEAN', 'YOUNG'})  # BAD still out

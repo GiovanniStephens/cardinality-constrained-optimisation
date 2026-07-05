@@ -82,8 +82,10 @@ def parse_args():
                    help='Minimum holdings (default: %(default)s)')
     p.add_argument('--max-etfs', type=int, default=15,
                    help='Maximum holdings (default: %(default)s)')
-    p.add_argument('--lookback-days', type=int, default=config.DATA_LOOKBACK_DAYS,
-                   help='Calendar days of history to use (default: %(default)s)')
+    p.add_argument('--lookback-days', type=int, default=config.REBALANCE_LOOKBACK_DAYS,
+                   help='Calendar days of history for the live allocation '
+                        '(default: %(default)s = 2y admission; research/backtest '
+                        'stays on the 5y standard).')
     p.add_argument('--time-budget', type=float, default=600,
                    help='GA time budget in seconds (default: %(default)s)')
     p.add_argument('--min-return', type=float, default=config.ISLAND_GA_MIN_RETURN,
@@ -354,9 +356,12 @@ def main():
     asset_type = None if args.asset_type == 'all' else args.asset_type
     logger.info("Loading training data (lookback=%d days, asset_type=%s)...",
                 args.lookback_days, asset_type or 'all')
+    # min_history flags are advisory here: the production admission bar is the
+    # coverage test over this (shorter) window, not the 5y research standard.
     prices = load_training_data(exchange='US', csv_fallback=ETF_PRICES_CSV,
                                 lookback_days=args.lookback_days,
-                                asset_type=asset_type)
+                                asset_type=asset_type,
+                                allow_min_history_flags=True)
     if args.curated:
         from src.data_loading import load_curated_universe
         curated = set(load_curated_universe())

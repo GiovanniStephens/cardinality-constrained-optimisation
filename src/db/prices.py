@@ -112,6 +112,7 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
                 tickers: Optional[list[str]] = None,
                 exclude_countries: Optional[list[str]] = None,
                 exclude_flagged: bool = True,
+                allow_min_history_flags: bool = False,
                 min_coverage: Optional[float] = 0.95,
                 ffill_limit: int = 5) -> pd.DataFrame:
     """
@@ -121,6 +122,11 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
     asset_type: optional filter, e.g. 'etf', 'stock', 'fund'.
     exclude_countries: optional list of country strings to exclude.
     exclude_flagged: if True (default), skip tickers with non-NULL excluded column.
+    allow_min_history_flags: if True (with exclude_flagged), treat
+        ``min_history:*`` flags as ADVISORY — keep those tickers while still
+        excluding hard flags (stale, frozen_price, suspect returns). Used by
+        the production rebalance, whose admission bar is shorter than the 5y
+        research standard; the caller's coverage window does the real gating.
     ffill_limit: max consecutive NaN rows to forward-fill (default 5).
     """
     query = """
@@ -153,7 +159,11 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
         conditions.append(f"(t.country IS NULL OR t.country NOT IN ({placeholders}))")
         params.extend(exclude_countries)
     if exclude_flagged:
-        conditions.append("t.excluded IS NULL")
+        if allow_min_history_flags:
+            conditions.append(
+                "(t.excluded IS NULL OR t.excluded LIKE 'min_history:%')")
+        else:
+            conditions.append("t.excluded IS NULL")
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
