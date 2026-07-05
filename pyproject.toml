@@ -25,7 +25,9 @@ dependencies = [
     "scipy>=1.7,<1.16",
     "seaborn>=0.11",
     "tqdm>=4.40",
-    "yfinance>=0.2",
+    # Cap below 1.0: download/core.py uses the internal yf.shared._ERRORS API,
+    # removed in yfinance 1.x. Lift once the downloader migrates off yf.shared.
+    "yfinance>=0.2,<1.0",
 ]
 
 [project.optional-dependencies]
