@@ -36,26 +36,28 @@ def calculate_portfolio_return(weights, expected_returns):
 
 
 def _risk_parity_portfolio_var(w, V):
-    """Portfolio variance via np.matrix (internal, used by risk-parity)."""
-    w = np.matrix(w)
-    return (w * V * w.T)[0, 0]
+    """Portfolio variance w^T V w (internal, used by risk-parity)."""
+    w = np.asarray(w).ravel()
+    V = np.asarray(V)
+    return float(w @ V @ w)
 
 
 def calculate_risk_contribution(w, V):
     """Asset contribution to total risk for risk-parity objective.
 
     :param w: weight vector.
-    :param V: covariance matrix (np.matrix).
-    :return: column vector of risk contributions.
+    :param V: covariance matrix (any array-like, np.matrix accepted).
+    :return: (n, 1) column vector of risk contributions.
     """
-    w = np.matrix(w)
+    w = np.asarray(w).ravel()
+    V = np.asarray(V)
     portfolio_var = _risk_parity_portfolio_var(w, V)
     if portfolio_var <= 0:
-        return np.zeros_like(w.T)
+        return np.zeros((w.size, 1))
     sigma = np.sqrt(portfolio_var)
-    MRC = V * w.T
-    RC = np.multiply(MRC, w.T) / sigma
-    return RC
+    MRC = V @ w                       # marginal risk contributions, shape (n,)
+    RC = (MRC * w) / sigma
+    return RC.reshape(-1, 1)
 
 
 def risk_budget_objective(x, pars):
@@ -68,10 +70,9 @@ def risk_budget_objective(x, pars):
     V = pars[0]     # covariance table
     x_t = pars[1]   # risk target in percent of portfolio risk
     sig_p = np.sqrt(_risk_parity_portfolio_var(x, V))
-    risk_target = np.asmatrix(np.multiply(sig_p, x_t))
-    asset_RC = calculate_risk_contribution(x, V)
-    J = sum(np.square(asset_RC - risk_target.T))[0, 0]
-    return J
+    risk_target = sig_p * np.asarray(x_t, dtype=float).ravel()
+    asset_RC = calculate_risk_contribution(x, V).ravel()
+    return float(np.sum(np.square(asset_RC - risk_target)))
 
 
 def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
@@ -200,7 +201,7 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
     if risk_parity:
         risk_proportion = [1 / n] * n
         return minimize(risk_budget_objective, x0,
-                        args=([np.matrix(cov), risk_proportion]),
+                        args=([np.asarray(cov), risk_proportion]),
                         method='SLSQP', bounds=bounds,
                         constraints=constraints)
 

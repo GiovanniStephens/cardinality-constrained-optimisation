@@ -679,7 +679,7 @@ class TestCalculateRiskContribution(unittest.TestCase):
                         [0.01, 0.09, 0.02],
                         [0.005, 0.02, 0.06]])
         rc = calculate_risk_contribution(w, V)
-        total_risk = np.sqrt(float(np.matrix(w) * V * np.matrix(w).T))
+        total_risk = np.sqrt(float(w @ np.asarray(V) @ w))
         self.assertAlmostEqual(float(np.sum(rc)), total_risk, places=10)
 
     def test_zero_variance_returns_zeros(self):
