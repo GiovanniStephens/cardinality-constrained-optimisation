@@ -19,6 +19,24 @@ elif len(sys.argv) > 1 and sys.argv[1] == 'backfill':
     conn = get_connection()
     backfill_metadata(conn)
     conn.close()
+elif len(sys.argv) > 1 and sys.argv[1] == 'backfill-names':
+    import argparse
+    from src.db.name_backfill import backfill_names, parse_directory
+    p = argparse.ArgumentParser(prog='python -m src.db backfill-names')
+    p.add_argument('--from-files', nargs='+', default=None, metavar='FILE',
+                   help='Parse local symbol-directory files instead of '
+                        'downloading from nasdaqtrader.com.')
+    a = p.parse_args(sys.argv[2:])
+    names = None
+    if a.from_files:
+        names = {}
+        for path in a.from_files:
+            with open(path) as f:
+                for sym, name in parse_directory(f.read()).items():
+                    names.setdefault(sym, name)
+    conn = get_connection()
+    backfill_names(conn, names=names)
+    conn.close()
 elif len(sys.argv) > 1 and sys.argv[1] == 'backfill-volume':
     import argparse
     from src.db.volume_backfill import backfill_volume

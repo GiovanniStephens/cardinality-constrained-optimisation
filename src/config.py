@@ -168,7 +168,10 @@ REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-g
     'Inverse': 0.15,                   # short/inverse hedges (incl 2x/3x short) — kept for crisis vol reduction; some decay accepted
     'Leveraged': 0.05,                 # long-amplifying — reduced; get leverage from account margin instead
     'Crypto': 0.15,
-    'Unknown': 0.10,                   # backstop for unclassified names
+    'Unknown': 0.15,                   # backstop for unclassified names (raised
+                                       # 0.10→0.15 July 2026, user-approved: allows 3
+                                       # legs at the ~4.7% relaxed floor now that the
+                                       # classifier hardening shrank this bucket)
 }
 # Conviction "must-have" holdings — forced into every rebalance portfolio at the
 # selection stage (held at >= the per-position floor, still counted toward the

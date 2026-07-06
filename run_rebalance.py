@@ -159,7 +159,10 @@ def run_cpp_ga(binary_data_path, args, min_return_cpp):
         '--mutation-initial', '0.008',
         '--mutation-final', '0.002',
         '--stagnation-restart', '500',
-        '--top-k', '50',
+        # 200 (was 50): pick_cc_selection scans this hall-of-fame for a
+        # category-cap-compliant candidate — breadth is what makes the caps
+        # actually bind on GA selections rather than falling back.
+        '--top-k', '200',
     ]
     if not args.no_gpu:
         cmd.append('--gpu')

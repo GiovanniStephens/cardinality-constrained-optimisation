@@ -18,6 +18,17 @@ Hedged equity"→currency, resource *equities* (gold miners, oil services)→
 commodity, "Enhanced Income"→leveraged, and plain "Short <index>" inverse funds
 slipping into Equity. Edit with care and re-audit.
 
+July 2026 hardening (driven by the 596 Unknowns left after the Nasdaq-directory
+name backfill): added preferred/convertible/CLO/MBS/structured-credit → Fixed
+Income, buffer-family/buywrite/tail-risk/rate-hedge overlays → Alternatives, and
+a long thematic/sector/brand/country equity tail. Deliberately NOT added, after
+hazard analysis: bare 'income' (equity-income vs bond income), 'alternative'
+(would misroute "Alternative Energy"), 'enhanced' (prior audit false positive),
+'allocation'/'multi-asset' (balanced funds stay Unknown — capped, not trusted),
+'tactical', and 'hedged equity' (collides with "Currency Hedged Equity").
+Substring paddings matter: 'clo ' not 'clo' (cloud/close/clock), ' media' not
+'media' (intermediate), ' mbs', ' ipo', 'adr '.
+
 Buckets: Leveraged, Inverse, Crypto, Real Estate, Commodity, Fixed Income,
 Cash, Currency, Alternatives, Equity, Unknown.
 """
@@ -100,13 +111,17 @@ _RULES = [
                    'copper', 'crude', ' oil', 'natural gas', 'commodit',
                    'precious metal', 'agriculture', 'wheat', 'corn', 'uranium',
                    'rhodium', 'soybean', 'sugar', 'cocoa', 'cotton', 'nickel',
-                   'zinc', 'aluminium', 'aluminum')),
+                   'zinc', 'aluminium', 'aluminum', 'base metal', 'gasoline')),
     ('Fixed Income', ('bond', 'treasury', 'govt', 'government', 'gilt', 'bund',
                       'sovereign', 'aggregate', 'corporate', 'high yield',
                       'investment grade', 'municipal', ' muni', 'tips',
                       'inflation-protected', 'inflation linked', 'fixed income',
                       'senior loan', 'floating rate', 'maturity', 'duration',
-                      ' debt', 'credit', ' ktb', 'iboxx')),
+                      ' debt', 'credit', ' ktb', 'iboxx',
+                      # July 2026: hybrid/securitised income families
+                      'preferred', 'convertible', 'clo ', 'cmbs', ' mbs',
+                      'mortgage', 'securitiz', 'structured credit',
+                      'structured product', 'collateralized')),
     ('Cash', ('money market', 'money mkt', 't-bill', 'treasury bill',
               'overnight', 'liquidity fund', 'ultra short-term')),
     ('Currency', ('currencyshares', 'dollar', ' yen', 'swiss franc', 'sterling',
@@ -115,7 +130,12 @@ _RULES = [
                       'hedge replication', ' vix', 'merger', 'arbitrage',
                       'market neutral', 'multi-strateg', 'long/short',
                       'long short', 'absolute return', 'risk premia', 'buffer',
-                      'covered call', 'put write', 'option')),
+                      'covered call', 'put write', 'option',
+                      # July 2026: defined-outcome / overlay / hedge families
+                      'buywrite', 'buy-write', 'structured outcome',
+                      'defined outcome', 'target outcome', 'defined risk',
+                      'collared', 'tail risk', 'swan sos', 'barrier',
+                      'interest rate hedge', 'inflation expectations')),
     ('Equity', ('equity', 'stock', 's&p', 'sp 500', 'nasdaq', 'msci', 'ftse',
                 'russell', 'stoxx', 'dax', 'nikkei', 'topix', 'kospi',
                 'dividend', 'index', 'large cap', 'large-cap', 'mid cap',
@@ -127,7 +147,23 @@ _RULES = [
                 'low volatility', 'energy', 'water', 'cyber', 'battery',
                 'robot', 'semiconductor', 'infrastructure', 'clean energy',
                 'global ', 'csi300', 'csi 300', 'set50', ' 500', ' 400',
-                ' 600', ' 100', ' 200', '50 ')),
+                ' 600', ' 100', ' 200', '50 ',
+                # July 2026: thematic / sector / brand tail from the Unknowns
+                'biotech', 'pharma', 'medical', 'insurance', 'bank',
+                'aerospace', 'defense', 'transport', 'retail', 'steel',
+                'solar', 'software', 'internet', 'cloud computing', ' media',
+                'entertainment', 'leisure', 'beverage', 'restaurant',
+                'home construction', 'homebuild', 'building', 'micro-cap',
+                'micro cap', 'moat', 'buyback', 'earnings fund', 'alphadex',
+                'dorsey wright', 'dow jones', 'dow 30', 'qqq', ' ipo', 'adr ',
+                'shareholder yield', 'natural resources', 'environmental',
+                'rare earth', 'strategic metals', 'mlp', 'bdc',
+                'broker-dealer', 'gaming', 'esports', 'betting', 'innovation',
+                'disruptive',
+                # single-country equity funds observed in the Unknown set
+                'india', 'vietnam', 'israel', 'switzerland', 'germany',
+                'united kingdom', 'latin america', 'eurozone', 'canada',
+                'brazil', 'mexico', 'taiwan', 'australia')),
 ]
 
 
