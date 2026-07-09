@@ -1,6 +1,6 @@
 # Cardinality-Constrained Portfolio Optimisation
 
-Select N instruments from a universe of ~25,000 equities and ETFs to maximise the Sharpe Ratio, subject to constraints on holdings count, weights, and optionally return/risk targets. The core idea: use a genetic algorithm to choose *which* instruments to hold (the cardinality problem), then use SLSQP to optimise *how much* of each to hold (the weight problem).
+Select N instruments from a universe of ~25,000 equities and ETFs to maximise the Sharpe Ratio, subject to constraints on holdings count, weights, and optionally return/risk targets. The core idea: use a genetic algorithm to choose *which* instruments to hold (the cardinality problem), then use SLSQP to optimise *how much* of each to hold (the weight problem). **Production portfolios are ETFs-only by policy** (June 2026 — single names carry idiosyncratic blow-up risk); the equities remain in the database for research.
 
 ## Contents
 
@@ -33,6 +33,11 @@ python -m src.optimisers.pygad_ga
 
 # 4. Run the backtest to validate performance
 python -m src.backtest
+
+# Production: the quarterly rebalance (full validated config — category caps,
+# 12% return floor, 0.50 beta floor, 12% weight ceiling, managed-futures split).
+# Runbook with pre/post checks: docs/REBALANCE.md
+python run_rebalance.py --portfolio-value 100000
 ```
 
 **Data storage:** All price data, forecasts, optimisation runs, and backtest results live in `data/portfolio.db` (SQLite). CSVs (`data/Prices.csv`, `data/Securities.csv`, etc.) are retained as a fallback for legacy code paths and can be imported with `python -m src.db migrate`.
@@ -63,7 +68,7 @@ python -m src.backtest
 │   │   ├── validate.py                # Ticker validation with resumable caching
 │   │   └── workers.py                 # Multi-worker concurrent download
 │   ├── db/                            # SQLite database package
-│   │   ├── __main__.py                # `python -m src.db [migrate|backfill]`
+│   │   ├── __main__.py                # `python -m src.db [migrate|backfill|backfill-names|backfill-volume]`
 │   │   ├── schema.py                  # Schema DDL, version, seed data
 │   │   ├── connection.py              # Connection management
 │   │   ├── tickers.py                 # Ticker CRUD and metadata backfill
@@ -103,8 +108,16 @@ python -m src.backtest
 │   ├── analysis.py                    # Result analysis and reporting
 │   └── results.py                     # Data structures for benchmark results
 ├── tests/                             # Unit and integration tests
+├── docs/                              # Runbooks (DATA_REFRESH.md, REBALANCE.md)
+├── run_rebalance.py                   # PRODUCTION: quarterly rebalance
+├── backtest_rebalance.py              # PRODUCTION GATE: walk-forward of the production config
 ├── run_benchmark.py                   # Benchmark CLI entry point
 ├── run_throughput_benchmark.py        # Throughput benchmark CLI entry point
+├── run_leverage_analysis.py           # research: margin-leverage sizing
+├── run_sleeve_experiment.py           # research: trend-sleeve A/B arms
+├── sleeve_reality_check.py            # research: synthetic sleeve vs real CTA ETFs
+├── curate_universe.py                 # SHELVED experiment (June 2026, backfired)
+├── build_dedup_map.py                 # SHELVED experiment (curation support)
 └── data/
     ├── portfolio.db                   # SQLite database (gitignored, primary store)
     ├── Prices.csv                     # Daily adjusted close (gitignored; legacy/regenerable)
@@ -205,7 +218,7 @@ Configured in `src/config.py` via `GROUP_CONSTRAINTS`. Supported dimensions:
 | `country` | Each non-US country | 20% | Prevent single non-US country concentration |
 | `sector` | Each of 11 GICS sectors | 50% | Prevent sector concentration (especially tech) |
 
-Tickers with NULL metadata for a dimension are unconstrained in that dimension. Run `python -m src.db backfill` to populate sector and category_group metadata from FinanceDatabase.
+Tickers with NULL metadata for a dimension are unconstrained in that dimension. Run `python -m src.db backfill` to populate sector and category_group metadata from FinanceDatabase. NB these dimensions are inert on ETF-only books (ETFs carry no country/sector metadata) — the name-based category caps in the rebalance are the operative control there.
 
 ### Customising Constraints
 
@@ -301,7 +314,7 @@ The runner sweeps a matrix of **selection × weighting** strategies. Each method
 | `random_optimised` | random | max-Sharpe SLSQP | sample mean | Ledoit-Wolf sample cov |
 | `random_random` | random | random | — | — |
 
-- **Selection**: GA = cardinality-constrained island GA (8-15 holdings); Monte Carlo = best Sharpe of 100k random draws; random = unoptimised baseline.
+- **Selection**: GA = cardinality-constrained island GA (8-20 holdings); Monte Carlo = best Sharpe of 100k random draws; random = unoptimised baseline.
 - **Weighting**: `max-Sharpe SLSQP` maximises in-sample Sharpe; the rest are heuristic or ER-free objectives. Only the max-Sharpe variants consume an expected-return input.
 - **Benchmarks**: SPY 100% and a 60/40 SPY/AGG split (when those tickers are in the universe).
 - Two further copula+GARCH variants (`cc_garch_copula`, `cc_arima_garch_copula`) are gated off by default behind `BACKTEST_RUN_FORECAST_COPULA_STRATEGIES` (super-cubic t-copula cost).

@@ -1,10 +1,19 @@
 """Build a data-driven curated ETF universe by correlation clustering.
 
-Replaces the broad ~15k-US-ETF search space (mostly foreign-listed/illiquid) with
-a compact allow-list of distinct, liquid exposures — the highest-leverage PBO
-reducer (CLAUDE.md). It also removes the foreign/illiquid tickers that drove the
-fat-tail (excess-kurtosis ~67) risk in the walk-forward backtest, since the
-candidate pre-filter keeps only US-listed full-history ETFs.
+VERDICT (June 2026): tested and NOT adopted — the curated universe LOST the
+common-window A/B to the broad universe (mean per-window OOS Sharpe +0.17 vs
++1.30, broad won 16/22): shrinking the candidate set forced concentration under
+the 12% return floor and flipped return skew from +2.4 to -2.2 (upside tail
+traded for a downside one). See CLAUDE.md "Lessons Learned" #2 and #3 before
+reusing. Machinery kept for reproducibility; `run_rebalance.py --curated` and
+`backtest_rebalance.py --curated` still consume its output.
+
+The original hypothesis (now discredited as a standalone lever): replace the
+broad ~15k-US-ETF search space (mostly foreign-listed/illiquid) with a compact
+allow-list of distinct, liquid exposures as a PBO reducer. It also removes the
+foreign/illiquid tickers that drove the fat-tail (excess-kurtosis ~67) risk in
+the walk-forward backtest, since the candidate pre-filter keeps only US-listed
+full-history ETFs.
 
 Method (generalises ``build_dedup_map.py`` from near-identical-twin collapse to
 genuine clustering with a liquidity-aware representative):

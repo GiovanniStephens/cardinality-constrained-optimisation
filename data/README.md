@@ -6,11 +6,15 @@ CSV files and the SQLite database are gitignored. Regenerate them as follows:
 
 ```bash
 # Download ETF and equity prices from Yahoo Finance (requires internet)
-python -m src.download_data --asset-types equities etfs
+python -m src.download --asset-types equities etfs
 
 # Incremental update (only new dates)
-python -m src.download_data --incremental
+python -m src.download --incremental
 ```
+
+NB: price CSVs and forecasts are regenerable; the **results tables** in
+`portfolio.db` (`optimisation_runs`, `portfolio_holdings`, `backtest_sessions`,
+`backtest_results`) are **not** — they encode random seeds and compute-hours.
 
 ## Forecasts
 

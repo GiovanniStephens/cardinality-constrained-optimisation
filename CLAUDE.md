@@ -28,14 +28,19 @@ src/                         # Python source package
 │   ├── __init__.py          # Re-exports public API for `from src.backtest import ...`
 │   ├── __main__.py          # CLI entry point (`python -m src.backtest`)
 │   ├── runner.py            # Orchestrator: evaluate_window(), main()
+│   ├── cpcv.py              # Combinatorially Purged CV: splits, purge/embargo, PBO
+│   ├── forecast_cache.py    # Full-history sleeve/forecast cache for A/B arms
 │   ├── types.py             # Dataclasses: WindowSpec, PortfolioResult, MethodResults, WindowResult
 │   ├── windows.py           # Window generation, data slicing
 │   ├── simulation.py        # Portfolio simulation: get_random_weights, run_portfolio, get_statistics
 │   └── statistics.py        # Hypothesis tests, cross-window aggregation
+├── sleeves/                 # Managed-futures trend sleeve (synthetic TSMOM)
+│   ├── trend.py             # TSMOM engine (12mo trend, long/short, vol-targeted)
+│   └── overlay.py           # Full-history sleeve return cache + book-level blend
 ├── forecast.py              # ARIMA returns + GARCH variance forecasting
 ├── db/                      # SQLite database package (schema, migrations, save/load functions)
 │   ├── __init__.py          # Re-exports all public functions for `from src import db` usage
-│   ├── __main__.py          # CLI entry point (create DB, migrate CSVs, backfill metadata)
+│   ├── __main__.py          # CLI entry point (create DB, migrate CSVs, backfill metadata/names/volume)
 │   ├── schema.py            # Schema DDL, version, default seed data
 │   ├── connection.py        # Connection management (get_connection, DB_PATH)
 │   ├── tickers.py           # Ticker CRUD, metadata backfill, exclusion flags
@@ -44,6 +49,8 @@ src/                         # Python source package
 │   ├── forecasts.py         # Forecast data storage and retrieval
 │   ├── optimisation.py      # Optimisation run storage and retrieval
 │   ├── backtest.py          # Backtest session and result storage
+│   ├── name_backfill.py     # tickers.name backfill from the Nasdaq symbol directory
+│   ├── volume_backfill.py   # ADV (dollar-volume) backfill for the liquidity filter
 │   ├── metadata.py          # Data source and metadata functions
 │   └── migrations.py        # CSV migration functions for importing legacy data
 ├── portfolio_utils.py       # save_optimisation_result DB helper (OptimisationResult re-exported for compat)
@@ -51,9 +58,12 @@ src/                         # Python source package
 ├── covariance.py            # Ledoit-Wolf, copula-CCC, shrinkage covariance estimation
 ├── metrics.py               # Sharpe, Sortino, Calmar, drawdown, overfitting detection
 ├── weights.py               # SLSQP weight optimisation, risk-parity, portfolio variance
+├── categorise.py            # Crude name-based ETF classifier (feeds the category caps)
+├── liquidity.py             # ADV liquidity filter for the production rebalance
+├── leverage.py              # Margin-leverage sizing engine (July 2026 verdict: don't lever)
 ├── data_loading.py          # DB-first / CSV-fallback price data loading
 ├── binary_io.py             # Binary data format for C++ optimiser
-├── group_constraints.py     # Group allocation constraints (country, sector) for SLSQP
+├── group_constraints.py     # Group allocation constraints for SLSQP (country/sector INERT on ETF books — no metadata)
 ├── config.py                # Centralised algorithm/pipeline/universe configuration
 ├── universe.py              # Security universe building (FinanceDatabase queries, ticker filtering)
 ├── download/                # Data download package (Yahoo Finance)
@@ -71,20 +81,30 @@ src/                         # Python source package
 tests/                       # Unit and integration tests
 ├── __init__.py
 ├── helpers.py               # Shared test utilities + base classes (BaseDBTest, BaseTmpDirTest, OptimiserTestMixin)
-├── test_optimisers.py       # Tests for optimisation algorithms
-├── test_backtest.py         # Tests for backtest module
+├── test_optimisers.py       # Tests for optimisation algorithms (+ copula strict/fallback)
+├── test_backtest.py         # Tests for backtest module (simulation invariants, statistics)
 ├── test_backtest_runner.py  # Tests for src/backtest/runner.py
+├── test_backtest_simulation_modes.py # Tests for the weight-mode dispatch in simulation
+├── test_cpcv.py             # Tests for CPCV splits, purging, PBO
 ├── test_db.py               # Tests for database module
-├── test_portfolio_utils.py  # Tests for portfolio utilities
+├── test_portfolio_utils.py  # Tests for portfolio utilities (+ beta-floor constraint)
 ├── test_securities.py       # Tests for security universe/download
 ├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
-├── test_group_constraints.py # Tests for group allocation constraints
+├── test_forecast_cache.py   # Tests for the full-history sleeve/forecast cache
+├── test_group_constraints.py # Tests for group constraints (+ floor-feasibility pre-check)
+├── test_categorise.py       # Tests for the name-based ETF classifier (incident regressions)
+├── test_liquidity.py        # Tests for the ADV liquidity filter
+├── test_leverage.py         # Tests for leverage sizing + min-return normalisation
+├── test_sleeves.py          # Tests for the TSMOM trend sleeve
+├── test_curation.py         # Tests for the (shelved) curated-universe machinery
 ├── test_download_session.py  # Tests for download session/proxy management
 ├── test_download_validate.py # Tests for ticker validation
 ├── test_download_workers.py  # Tests for multi-worker concurrent download
 ├── test_data_quality.py     # Tests for data validation
 ├── test_pipeline.py         # Tests for pipeline orchestration
-├── test_cli_entrypoints.py  # Tests that every console_script / `python -m` entry still imports
+├── test_refresh_reliability.py     # Tests for refresh checkpoint/promotion reliability
+├── test_cli_entrypoints.py  # Smoke-tests the src.db and src.download CLIs
+├── test_root_scripts.py     # Imports every root script (catches cross-script signature drift)
 ├── test_logging_config.py   # Tests for centralised logging setup
 ├── test_benchmark_analysis.py       # Tests for benchmark/analysis.py
 ├── test_cpp_equivalence.py  # Tests for C++/Python parity + Metal GPU equivalence
@@ -117,8 +137,18 @@ data/                        # CSV price data, ETF lists, forecast outputs (~112
 └── ...                      # Other CSV data files (forecast outputs, bad-ticker caches, etc.)
 images/                      # Visualisation outputs
 benchmark_results/           # Benchmark run outputs (JSON/PKL)
-run_benchmark.py             # CLI entry point for benchmarking
-run_throughput_benchmark.py  # CLI entry point for throughput benchmarking
+docs/                        # Runbooks
+├── DATA_REFRESH.md          # Data-refresh runbook (incident-born; trust the health check)
+└── REBALANCE.md             # Quarterly production-rebalance runbook + sanity checklist
+run_rebalance.py             # PRODUCTION: quarterly rebalance (cc_copulae + caps + sleeve split)
+backtest_rebalance.py        # PRODUCTION GATE: quarterly-rebalanced walk-forward of the production config
+run_benchmark.py             # research: CLI entry point for benchmarking
+run_throughput_benchmark.py  # research: CLI entry point for throughput benchmarking
+run_leverage_analysis.py     # research: margin-leverage sizing (July 2026 verdict: don't lever)
+run_sleeve_experiment.py     # research: trend-sleeve A/B arms over the backtest runner
+sleeve_reality_check.py      # research: synthetic sleeve vs real CTA ETFs (DBMF corr check)
+curate_universe.py           # SHELVED experiment: curated universe (tested June 2026, backfired)
+build_dedup_map.py           # SHELVED experiment: ETF dedup map for curation
 Makefile                     # Build automation (install, test, build-cpp, clean)
 pyproject.toml               # Project metadata, dependencies, console_scripts
 .github/workflows/test.yml   # CI: runs tests on push/PR
@@ -139,6 +169,11 @@ python -m src.optimisers.island_ga
 
 # Run the full optimisation with copulas/forecasts
 python -m src.optimisers.pygad_ga
+
+# PRODUCTION quarterly rebalance (runbook: docs/REBALANCE.md; defaults carry
+# the full validated config — caps, floors, 12% weight ceiling, sleeve split)
+python run_rebalance.py --portfolio-value 100000
+python backtest_rebalance.py            # honest OOS gate for the production config
 
 # Run backtests (also available as: portfolio-backtest)
 python -m src.backtest                          # walk-forward (default): 5y train + 6mo OOS, 17 windows
@@ -289,12 +324,47 @@ Where `T` is the number of observations. For normal returns (skewness=0, excess 
 - **Deflated Sharpe Ratio** logged per (method, window) with PASS/WEAK/FAIL gating thresholds at 0.95/0.5
 - Multiple evaluation metrics beyond Sharpe (Sortino, Calmar, max drawdown)
 - Hypothesis testing (paired t-tests, Friedman tests) across windows
-- Cardinality constraints (research/backtest: 8-20 holdings; production rebalance: capped at 10) limiting parameter space
-- Weight bounds preventing extreme concentration (research config 5-45%; production rebalance 5-25% per holding via `run_rebalance.py --max-weight 0.25`)
+- Cardinality constraints (research/backtest: 8-20 holdings; production rebalance: 10-15) limiting parameter space
+- Weight bounds preventing extreme concentration (research config 5-45%; production rebalance 5-12% per holding, `config.REBALANCE_MAX_WEIGHT` / `run_rebalance.py --max-weight`)
 - Ledoit-Wolf shrinkage covariance estimation (default for all covariance paths)
 - Gaussian copula correlation (default; t-copula gated behind `COPULA_TYPE='t'` due to super-cubic scaling in dim)
 - Per-ticker GARCH residual cache (`src/covariance.py:_garch_residuals_cache`) to avoid redundant fits
 - T >> N observation ratio guards (error if T/N < 1, warn if T/N < 10)
+
+### Known Unmodelled Biases (July 2026 review)
+
+Biases the framework does NOT correct for. All inflate *absolute* Sharpes; rankings are
+less affected because every method shares them. Know them before quoting any number.
+
+1. **Survivorship + universe look-ahead.** The backtest candidate filter
+   (`src/backtest/runner.py`, `dropna(thresh=DATA_MIN_COVERAGE * len(data))`) uses
+   coverage over the FULL 2014→2026 frame, so a 2014-2018 training window selects only
+   from instruments known to survive (with 95% coverage) through 2026. The data supply
+   compounds it: Yahoo downloads of the *current* symbol directory contain no ETFs
+   delisted during the sample (US ETF closures run ~100-250/yr, concentrated in poor
+   performers), and present-day quality flags are applied to all history. Cheap partial
+   fix if ever needed: per-window candidate pools from coverage over data ≤ train_end
+   (deliberately not applied yet — it would break comparability with all stored runs).
+2. **Raw-return, frictionless Sharpes (rf = 0, no costs).** All Sharpes in this repo are
+   `mean/std` on raw returns: `config.RISK_FREE_RATE = 0.0` and no transaction-cost
+   model. Decision (July 2026): keep it — the backtests span several rate regimes so no
+   constant rf is right, changing the convention would orphan all 188 stored backtest
+   sessions, and costs on a quarterly-rebalanced liquid-ETF book at IB are genuinely
+   negligible (~1-2 bps/side on ~50% annual turnover). The caveats that follow from it:
+   with 2022-2026 cash at 4-5%, recent-window Sharpes get roughly +0.3-0.5 of free lift
+   on a ~10%-vol book, and because rf=0 is also the GA/SLSQP objective, low-vol carry
+   funds get their embedded cash yield scored as risk-adjusted skill (one more reason
+   the beta floor exists). When comparing against literature (DeMiguel, Harvey — excess
+   returns, net of costs), remember our numbers are gross of both. Proper fix if ever
+   needed: a T-bill series through `get_statistics`; the C++ GA already accepts
+   `--risk-free-rate`.
+3. **Pre-July-2026 stored results carry two since-fixed simulator bugs.** (a)
+   `run_portfolio`'s drift update mixed log/simple returns, compounding ~6-10% phantom
+   leverage over a 5y window (small upward Sharpe bias); (b) Sortino divided an
+   annualised return by a *daily* downside deviation (~16x inflated), and the stored
+   `downside_deviation` column was daily-scale. Both fixed July 2026; `backtest_results`
+   rows saved before then are not comparable to new runs at the second decimal (Sharpe)
+   and the old sortino/dd columns are on a different scale entirely.
 
 ### Future Work
 
@@ -416,8 +486,11 @@ bump. Judge a low-correlation sleeve on mean/std and tail, not mean alone; raw S
 under-credits it.
 
 **10. The 12% return floor is correctly a WHOLE-PORTFOLIO constraint** (verified across all four
-code paths: `island_ga.py:77,82`; `cpp/ga_types.h:226-227`; `weights.py:171-175`;
-`run_rebalance.py:286,290`) — never per-asset. And because the sleeve blends at the book level
+code paths — cited by function, not line, since raw line numbers drifted within weeks: the
+`min_return` gate in `island_ga.batch_fitness`; the `minReturn` gate in `ga_types.h`
+`calculateFitnessExact`/`calculateFitness`; the `min_return` SLSQP inequality in
+`weights.optimise_weights`; and `run_rebalance.normalise_min_return` reconciling the two
+backends' off-sentinels) — never per-asset. And because the sleeve blends at the book level
 *after* optimisation, the floor never constrains it; it governs only the equity book.
 
 **11. 1.6+ Sharpe comes from a multi-sleeve stack, not a better equity book.** For uncorrelated
@@ -455,6 +528,32 @@ lever remains a *second* uncorrelated premium (VRP/carry), not a fatter trend sl
 faithful CTA reality-check is `sleeve_reality_check.py`'s vol-matched +0.48 vs DBMF; a raw-daily
 correlation proxy reads ~0.21 for both baskets — same method both sides, so no regression, but
 don't read the raw-daily number as the proxy breaking.)*
+
+### Constraints & the production book (July 2026)
+
+**13. Label-based participation minimums get Goodhart-gamed; constrain the measured
+exposure instead (July 2026).** Without cheap leverage (the margin verdict above), a
+Sharpe-maximiser never voluntarily holds high-beta equity — the unconstrained 2y book
+held ~25% plain equity at portfolio beta 0.07, an absolute-return profile. The first fix,
+a name-classifier-based **"Equity ≥ 50%" category minimum, was gamed twice in two runs**:
+first with a misclassified bond fund (GSST — 'gold' matched inside "Goldman"), then, after
+that classifier hole was patched, with a fully-buffered defined-protection fund (JAJL,
+legally "Equity" by name, beta ~0.1, 2.5% vol). Patching the classifier just moves the
+hole: the optimiser is an adversarial search over the fence. **The fix that worked is the
+portfolio beta floor** (`REBALANCE_MIN_BETA = 0.50` vs SPY, `run_rebalance.py
+--min-beta`): beta is linear in weights, so it is one SLSQP inequality of the same form
+as the return floor — and it is measured on return covariance, so shorts count negative,
+buffers/cash-likes contribute ~nothing, and labels are irrelevant. `REBALANCE_CATEGORY_MINS`
+was retired to `{}` (machinery kept; any entry is enforced — think twice). The general
+rule: **constraints expressed in the objective's own currency (covariance, return) bind
+honestly; label-derived fences invite corner-hunting. Category caps remain fine as UPPER
+bounds (concentration limits); they fail as LOWER bounds (participation mandates).**
+Same arc produced the 12% per-holding cap (`REBALANCE_MAX_WEIGHT`): at 25% the beta floor
+was satisfied by a 2-leg barbell (SMH ~21% + GSIB ~17%); at 12% the beta spreads across
+~6 real equity legs. Deployed as **run 118** (IS Sharpe 2.38 vs the 4.5 hedge/carry-corner
+fantasy it replaced; OOS estimate ~1.19). Every rebalance run now persists its full CLI +
+config + git-commit record and the deployable blend, so this book is auditable next
+quarter.
 
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
@@ -513,7 +612,7 @@ CPCV `_report_cpcv_results` prints: per-method OOS mean + 95% CI across splits, 
 
 All optimisation results, backtest metrics, and data provenance are stored in `data/portfolio.db` (SQLite). CSVs remain for backward compatibility.
 
-### Schema (12 tables)
+### Schema (13 tables, `SCHEMA_VERSION = 4`)
 
 | Table | Purpose |
 |-------|---------|
@@ -528,6 +627,10 @@ All optimisation results, backtest metrics, and data provenance are stored in `d
 | `portfolio_holdings` | ETF selections + weights per optimisation run |
 | `backtest_sessions` | One row per backtest execution |
 | `backtest_results` | Per-portfolio metrics within a backtest session |
+| `backtest_holdings` | Per-portfolio holdings within a backtest session |
+| `known_bad_tickers` | Failed-download cache (TTL'd; core watchlist protected) |
+
+(A `schema_version` bookkeeping table is created by the migration path.)
 
 ### Key relationships
 
@@ -610,13 +713,15 @@ Configuration in `src/config.py`.
 
 - **Instruments**: ETFs only — no single stocks (see Universe Scope policy)
 - **Positions**: up to 15 holdings (cardinality cap; `run_rebalance.py --max-etfs 15`, min 10). Was 10 (June 2026); raised to 15 (July 2026) for a slightly wider, better-diversified book.
-- **Per-holding weight**: 5–25% (June 2026; `run_rebalance.py --max-weight 0.25`). Tightened from 45% to limit single-holding concentration; forces ≥4 holdings to fill the book.
+- **Per-holding weight**: **5–12%** (July 2026; `config.REBALANCE_MAX_WEIGHT`, `run_rebalance.py --max-weight`). Tightened 45%→25% (June 2026)→12% (July 2026, the deployed run 118's cap made standing policy): at 25% the beta floor was satisfied by a 2-leg barbell (SMH ~21% + GSIB ~17%); 12% forces the beta across ~6 real equity legs.
+- **Beta floor**: portfolio beta to SPY ≥ **0.50** on the equity book (`config.REBALANCE_MIN_BETA` / `REBALANCE_BETA_BENCHMARK`; `run_rebalance.py --min-beta`, ≤0 disables). The market-participation constraint that replaced the Goodhart-gamed name-based Equity minimum — measured on return covariance, so shorts count negative and buffered/cash-like "equity" funds contribute ~nothing (see Lesson 13). The deployable book's beta is ~0.75× this after the sleeve split.
+- **Must-have holdings**: `REBALANCE_MUST_HAVE = ['SMH']` — conviction positions forced into every rebalance book at the selection stage (`run_rebalance.py --must-have SMH,VOO`; empty string disables). Still counted toward category caps and the weight ceiling.
 - **Liquidity filter**: the search universe is restricted to US-listed ETFs (no foreign dot-suffix listings) clearing a **$500k/day average dollar-volume** floor (`REBALANCE_MIN_ADV_USD`, `run_rebalance.py --min-adv`; implemented in `src/liquidity.py`; lowered from $1M July 2026 — a small patient book works positions of ~1-2% of daily volume with limit orders). Removes untradeable foreign micro-listings that previously dominated selection. Run `python -m src.db backfill-volume` to keep ADV coverage current.
-- **Category caps** (`REBALANCE_CATEGORY_CAPS` in `src/config.py`, classified by fund name via `src/categorise.py`): Equity ≤70%, Fixed Income ≤30%, Alternatives ≤30%, Commodity ≤25%, Real Estate ≤20%, Inverse ≤15%, Crypto ≤15%, Cash/FX ≤10%, Leveraged ≤5%, **Unknown ≤15%** (raised from 10% July 2026 alongside a classifier hardening — the cap must admit ≥2–3 legs at the ~4.7% relaxed weight floor or SLSQP goes infeasible on baskets containing unclassifiable names). The classifier needs `tickers.name` populated — see the `backfill-names` note in Universe Scope.
+- **Category caps** (`REBALANCE_CATEGORY_CAPS` in `src/config.py`, classified by fund name via `src/categorise.py`): Equity ≤70%, Fixed Income ≤30%, Alternatives ≤30%, Commodity ≤25%, Real Estate ≤20%, **Inverse ≤10%** (tightened from 15% July 2026 — the 25% MF sleeve is the designated crisis-alpha allocation; paying inverse-fund decay on top is double-hedging), Crypto ≤15%, Cash/FX ≤10%, Leveraged ≤5%, **Unknown ≤15%** (raised from 10% July 2026 alongside a classifier hardening — the cap must admit ≥2–3 legs at the ~4.7% relaxed weight floor or SLSQP goes infeasible on baskets containing unclassifiable names). The classifier needs `tickers.name` populated — see the `backfill-names` note in Universe Scope. Caps are UPPER bounds only; category *minimums* were retired after being Goodhart-gamed (Lesson 13). `optimise_weights` pre-checks `members × weight-floor > cap` infeasibility and names the binding group at ERROR level.
 - **Deployable method**: **`cc_copulae`** (GA selection + Gaussian-copula covariance) — chosen July 2026 as `run_rebalance.py`'s `DEPLOYABLE_RECOMMENDATION` for the tightest OOS distribution among the top-cluster methods (`mc_optimised` remains the best mean-robustness alternative; the two are statistically tied).
 - **Managed-futures sleeve**: the deployable book is reported as an equity portfolio plus a **managed-futures capital split** (default α = 0.25 → 75% equity / 25% CTA ETFs, split equally across `REBALANCE_SLEEVE_ETFS` = DBMF + KMLM + CTA, ~8.3% each; `run_rebalance.py --sleeve-alpha`, `--sleeve-etfs`, `--no-sleeve`). The TSMOM trend sleeve is a synthetic *return stream*, so it enters a live book as a fixed capital allocation, not as GA-selected equity weights (the funds are also too young for the 5y history filter). Holding several CTA ETFs diversifies single-manager risk — though they are mutually correlated trend-followers, so it is manager diversification, not a new premium.
 - **Return floor**: **12% (reinstated July 2026** after the leverage analysis; `--min-return`, default `config.ISLAND_GA_MIN_RETURN`; `<= 0` disables for pure max-Sharpe). The floor was briefly removed to pursue unconstrained-max-Sharpe + margin leverage, but leverage proved uneconomic at 2026 financing rates (see Margin Leverage below) — and **without cheap leverage, Tobin separation says to move along the frontier, which is what the floor does**. It is also the validated config: all CPCV/walk-forward numbers and run 68's 11y realised Sharpe 1.01 were produced with the floor on, and the floor *counteracts* the hedge-stuffing tendency of unconstrained max-Sharpe (verified: unconstrained drops to a 3.2%-vol shorts-heavy book). NB the two backends spell "off" differently — C++ GA needs a negative sentinel, Python paths need `None`; `run_rebalance.normalise_min_return` maps `<= 0` correctly to both.
-- **Rebalancing**: Quarterly
+- **Rebalancing**: Quarterly — runbook in `docs/REBALANCE.md`. Every run persists its full CLI + config snapshot + git commit + resolved seed to the DB, and the deployable blend (equity × (1−α) + sleeve) is saved as its own `rebalance_deployable` row with any DO-NOT-TRADE problems in `notes`.
 - **Objective**: Maximise Sharpe ratio with maximal inter-holding decorrelation
 
 ### Margin Leverage (July 2026)
@@ -662,6 +767,14 @@ sleeve, prints a cap table + recommendation) — re-run it whenever either input
 ### Group Allocation Constraints
 
 Configured in `src/config.py` `GROUP_CONSTRAINTS`. Enforced as linear constraints in SLSQP weight optimisation. Implementation in `src/group_constraints.py` + `src/weights.py`.
+
+**⚠ INERT on the ETF-only production book (July 2026 review finding):** ETF tickers carry
+no `country`/`sector` metadata (FinanceDatabase populates those for single stocks only),
+and `build_slsqp_constraints` skips memberless groups — so on an all-ETF universe the
+table below generates **zero** SLSQP constraints and the book can legally be 100% US.
+`run_rebalance.py` logs this per dimension at run time. The operative concentration
+control on ETF books is the name-based **category caps** (Portfolio Constraints above).
+The machinery works wherever metadata exists (the single-stock research universe).
 
 | Dimension | Group | Max | Rationale |
 |-----------|-------|-----|-----------|
