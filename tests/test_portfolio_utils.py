@@ -711,6 +711,45 @@ class TestRiskBudgetObjective(unittest.TestCase):
 # P1.1  Weight optimisation edge cases
 # ---------------------------------------------------------------------------
 
+class TestOptimiseWeightsBetaFloor(unittest.TestCase):
+    """min_beta/asset_betas: linear market-participation constraint."""
+
+    def test_beta_floor_binds(self):
+        # Sharpe prefers the near-zero-vol asset (beta 0); the floor forces
+        # half the book into the beta-1 asset.
+        er = np.array([0.10, 0.10])
+        cov = np.array([[0.04, 0.0], [0.0, 0.0001]])
+        betas = np.array([1.0, 0.0])
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               asset_betas=betas, min_beta=0.5)
+        self.assertTrue(res.success)
+        self.assertGreaterEqual(float(betas @ res.x), 0.5 - 1e-6)
+
+    def test_no_floor_prefers_low_vol(self):
+        er = np.array([0.10, 0.10])
+        cov = np.array([[0.04, 0.0], [0.0, 0.0001]])
+        res = optimise_weights(expected_returns=er, cov_matrix=cov)
+        self.assertLess(res.x[0], 0.05)
+
+    def test_min_beta_without_betas_is_ignored(self):
+        er = np.array([0.10, 0.10])
+        cov = np.array([[0.04, 0.0], [0.0, 0.0001]])
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               min_beta=0.5)
+        self.assertTrue(res.success)
+        self.assertLess(res.x[0], 0.05)
+
+    def test_shorts_count_negative(self):
+        # A negative-beta asset makes the floor harder, not easier, to satisfy.
+        er = np.array([0.10, 0.10, 0.10])
+        cov = np.diag([0.04, 0.0001, 0.03])
+        betas = np.array([1.0, 0.0, -0.8])
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               asset_betas=betas, min_beta=0.5)
+        self.assertTrue(res.success)
+        self.assertGreaterEqual(float(betas @ res.x), 0.5 - 1e-6)
+
+
 class TestOptimiseWeightsEdgeCases(unittest.TestCase):
     """Edge cases for optimise_weights (SLSQP)."""
 

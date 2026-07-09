@@ -82,7 +82,8 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
                      initial_weights=None, risk_parity=False,
                      minimize_variance=False,
                      group_constraints=None, group_membership=None,
-                     selected_tickers=None):
+                     selected_tickers=None,
+                     asset_betas=None, min_beta=None):
     """SLSQP weight optimisation for a portfolio.
 
     Can be called in two modes:
@@ -122,6 +123,12 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
     :param group_membership: optional membership dict from load_membership().
     :param selected_tickers: optional list of ticker symbols (required when
         group_constraints is non-empty).
+    :param asset_betas: per-asset betas to a benchmark (array aligned with the
+        selection). Portfolio beta is linear in weights, so together with
+        ``min_beta`` this adds the inequality ``sum(w * beta) >= min_beta`` —
+        a market-participation floor the Sharpe objective cannot satisfy with
+        low-covariance look-alikes (unlike name-based category minimums).
+    :param min_beta: if set (with ``asset_betas``), minimum portfolio beta.
     :return: scipy.optimize.OptimizeResult with optimised weights in .x
     """
     from scipy.optimize import minimize
@@ -173,6 +180,12 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         constraints.append({
             'type': 'ineq',
             'fun': lambda x, _er=er: np.dot(_er, x) - min_return,
+        })
+    if min_beta is not None and asset_betas is not None:
+        constraints.append({
+            'type': 'ineq',
+            'fun': lambda x, _b=np.asarray(asset_betas, dtype=float):
+                np.dot(_b, x) - min_beta,
         })
     if target_return is not None and target_risk is None:
         constraints.append({

@@ -177,14 +177,24 @@ REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-g
                                        # classifier hardening shrank this bucket)
 }
 # Category minimums (same dimension as the caps; enforced as SLSQP lower bounds
-# and in the candidate compliance scan). July 2026: without cheap leverage the
-# max-Sharpe objective under-allocates growth — on the 2y window it held only
-# ~25% plain equity, beta 0.07 to SPY. The Equity floor keeps the book a growth
-# vehicle with hedges at the margin (the 25% MF sleeve is the diversifier).
-# The SMH must-have guarantees the Equity group is always non-empty.
-REBALANCE_CATEGORY_MINS = {
-    'Equity': 0.50,
-}
+# and in the candidate compliance scan). RETIRED as a market-participation lever
+# (July 2026): a name-based 'Equity >= 50%' floor was Goodhart-gamed twice — the
+# optimiser filled it with a misclassified bond fund, then with a fully-buffered
+# defined-protection fund (beta ~0.1). Superseded by the beta floor below, which
+# is measured on return covariance and cannot be satisfied by look-alikes.
+# Machinery retained: any {'<group>': min_frac} entry here is enforced.
+REBALANCE_CATEGORY_MINS = {}
+
+# Market-participation floor: minimum portfolio beta to the benchmark over the
+# training window (beta is linear in weights -> one SLSQP inequality, same form
+# as the return floor). July 2026: without cheap leverage max-Sharpe holds ~25%
+# plain equity at beta ~0.07 — an absolute-return profile. The beta floor forces
+# genuine market exposure; shorts/hedges count negative, buffered or cash-like
+# "equity" funds contribute almost nothing, so it cannot be gamed by labels.
+# Applies to the *equity book* (the deployable book's beta is ~0.75x this).
+# CLI: run_rebalance.py --min-beta; <= 0 disables.
+REBALANCE_MIN_BETA = 0.50
+REBALANCE_BETA_BENCHMARK = 'SPY'
 # Conviction "must-have" holdings — forced into every rebalance portfolio at the
 # selection stage (held at >= the per-position floor, still counted toward the
 # category caps). Override per-run with `run_rebalance.py --must-have SMH,VOO`.

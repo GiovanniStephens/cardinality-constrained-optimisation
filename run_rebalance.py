@@ -38,6 +38,7 @@ import tempfile
 import time
 
 import numpy as np
+import pandas as pd
 
 from src.logging_config import setup_logging
 from src import config
@@ -93,6 +94,13 @@ def parse_args():
                         'pure max-Sharpe (default: %(default)s). Without cheap '
                         'leverage the floor picks the growth point on the '
                         'frontier — the validated production config.')
+    p.add_argument('--min-beta', type=float, default=config.REBALANCE_MIN_BETA,
+                   help='Minimum equity-book beta to '
+                        f'{config.REBALANCE_BETA_BENCHMARK} over the training '
+                        'window; <= 0 disables (default: %(default)s). A '
+                        'market-participation floor measured on covariance — '
+                        'shorts count negative, buffered/cash-like funds '
+                        'contribute ~nothing, so labels cannot game it.')
     p.add_argument('--pop-size', type=int, default=10_000,
                    help='GA population per island (default: %(default)s)')
     p.add_argument('--generations', type=int, default=10_000,
@@ -237,11 +245,15 @@ def portfolio_metrics(prices, tickers, weights):
 
 
 def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
-                    min_return=None):
+                    min_return=None, betas=None, min_beta=None):
     """Return weights aligned to *tickers* (canonical order) for a weight mode.
 
     ``min_return`` (annualised) adds a floor on the portfolio's expected return
     in the SLSQP modes, pushing the book toward higher-return holdings.
+    ``min_beta`` (with ``betas``, a per-ticker Series) adds a floor on the
+    portfolio's benchmark beta — a market-participation constraint measured on
+    return covariance, which (unlike name-based category minimums) cannot be
+    satisfied with low-covariance look-alikes.
     """
     from src.weights import optimise_weights
 
@@ -252,6 +264,10 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
         from src.backtest.simulation import get_random_weights
         return get_random_weights(list(tickers))
 
+    beta_vec = None
+    if betas is not None and min_beta is not None:
+        beta_vec = betas.reindex(list(tickers)).fillna(0.0).values
+
     if mode == 'optimal':
         sel = selection_vector(prices, tickers)
         res = optimise_weights(
@@ -259,6 +275,7 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
             min_weight=min_weight, max_weight=max_weight, min_return=min_return,
             group_constraints=gc, group_membership=gm,
             selected_tickers=tickers if gc else None,
+            asset_betas=beta_vec, min_beta=min_beta,
         )
         return np.asarray(res.x)
 
@@ -276,10 +293,36 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
             min_weight=min_weight, max_weight=max_weight, min_return=min_return,
             group_constraints=gc, group_membership=gm,
             selected_tickers=tickers if gc else None,
+            asset_betas=beta_vec, min_beta=min_beta,
         )
         return np.asarray(res.x)
 
     raise ValueError(f"Unknown weight mode: {mode}")
+
+
+def compute_asset_betas(prices, conn):
+    """Per-ticker beta to the benchmark (config.REBALANCE_BETA_BENCHMARK) over
+    the training window, from daily log returns: beta_i = cov(r_i, r_b)/var(r_b).
+
+    The benchmark series is loaded directly from the DB (bypassing coverage/
+    exclusion filters) so the liquidity filter can never remove it. Returns a
+    Series aligned to prices.columns; NaN-safe (missing overlap -> beta 0).
+    """
+    from src import db
+    from src.returns import calculate_log_returns
+    bench = config.REBALANCE_BETA_BENCHMARK
+    if bench in prices.columns:
+        bench_px = prices[bench]
+    else:
+        bdf = db.load_prices(conn, exchange='US', tickers=[bench],
+                             min_coverage=0, exclude_flagged=False)
+        bdf.index = pd.to_datetime(bdf.index)
+        bench_px = bdf[bench].reindex(prices.index).ffill().bfill()
+    rets = calculate_log_returns(prices)
+    bench_ret = np.log(bench_px / bench_px.shift(1)).reindex(rets.index)
+    var_b = bench_ret.var()
+    betas = rets.apply(lambda col: col.cov(bench_ret)) / var_b
+    return betas.fillna(0.0)
 
 
 # ── Category caps (asset-class limits via the crude name classifier) ─────────
@@ -307,12 +350,13 @@ def build_category_caps(prices, conn):
 
 
 def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
-                      must_haves=(), max_etfs=None):
+                      must_haves=(), max_etfs=None, betas=None, min_beta=None):
     """Choose the GA selection that maximises max-Sharpe *while satisfying the
-    category caps AND the return floor*, scanning the C++ GA's top-K candidates.
-    This makes the constraints actually bind on GA-selected portfolios instead of
-    silently falling back when the single best candidate can't meet them. Falls
-    back to the GA's best raw pick if none are compliant.
+    category caps AND the return floor AND the beta floor*, scanning the C++
+    GA's top-K candidates. This makes the constraints actually bind on
+    GA-selected portfolios instead of silently falling back when the single
+    best candidate can't meet them. Falls back to the GA's best raw pick if
+    none are compliant.
 
     *must_haves* are forced into every candidate before weighting (capped to
     *max_etfs*), so the chosen cc selection always contains them.
@@ -327,7 +371,8 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
         if len(tk) < 2:
             continue
         try:
-            w = compute_weights('optimal', prices, tk, gc, gm, min_w, max_w, min_return)
+            w = compute_weights('optimal', prices, tk, gc, gm, min_w, max_w,
+                                min_return, betas, min_beta)
         except Exception:  # noqa: BLE001
             continue
         ret, _, sh = portfolio_metrics(prices, tk, w)
@@ -335,7 +380,12 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
             best_any = (sh, tk)
         caps_ok = check_constraints(tk, w, gm, gc)[0] if (gc and gm) else True
         ret_ok = (min_return is None) or (ret >= min_return - 1e-3)
-        if caps_ok and ret_ok and (best_compliant is None or sh > best_compliant[0]):
+        beta_ok = True
+        if min_beta is not None and betas is not None:
+            beta_p = float(np.dot(betas.reindex(list(tk)).fillna(0.0).values, w))
+            beta_ok = beta_p >= min_beta - 1e-3
+        if (caps_ok and ret_ok and beta_ok
+                and (best_compliant is None or sh > best_compliant[0])):
             best_compliant = (sh, tk)
     chosen = best_compliant or best_any
     if chosen:
@@ -434,6 +484,16 @@ def main():
     if min_return_py is None:
         logger.info("Return floor disabled — pure max-Sharpe optimisation.")
 
+    # Beta floor: market-participation constraint on the equity book.
+    min_beta = args.min_beta if args.min_beta > 0 else None
+    betas = None
+    if min_beta is not None:
+        betas = compute_asset_betas(prices, conn)
+        logger.info("Beta floor active: portfolio beta to %s >= %.2f "
+                    "(universe beta range %.2f..%.2f)",
+                    config.REBALANCE_BETA_BENCHMARK, min_beta,
+                    betas.min(), betas.max())
+
     # GA selection via C++ binary
     log_returns_full = calculate_log_returns(prices)
     tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
@@ -448,7 +508,8 @@ def main():
     if ga_result is not None:
         cc_tickers = pick_cc_selection(ga_result, prices, gc, gm,
                                        args.min_weight, args.max_weight,
-                                       min_return_py, must_haves, args.max_etfs)
+                                       min_return_py, must_haves, args.max_etfs,
+                                       betas, min_beta)
         if cc_tickers:
             logger.info("GA selected (cap-aware) %d tickers: %s",
                         len(cc_tickers), cc_tickers)
@@ -486,7 +547,7 @@ def main():
         try:
             weights = compute_weights(mode, prices, tickers, gc, gm,
                                       args.min_weight, args.max_weight,
-                                      min_return_py)
+                                      min_return_py, betas, min_beta)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Weighting failed for %s: %s", label, exc)
             continue
@@ -494,8 +555,12 @@ def main():
         violations = []
         if gc and gm:
             _, violations = check_constraints(tickers, weights, gm, gc)
+        beta_p = None
+        if betas is not None:
+            beta_p = float(np.dot(
+                betas.reindex(list(tickers)).fillna(0.0).values, weights))
         portfolios.append((label, tickers, weights, ret, vol, sharpe,
-                           violations, source))
+                           violations, source, beta_p))
 
     if not portfolios:
         logger.error("No portfolios produced. Aborting.")
@@ -514,9 +579,9 @@ def main():
           f"({T} trading days)")
     print("=" * 78)
     print(f"{'Method':<18}{'Holds':>6}{'IS Sharpe':>11}{'Return':>9}"
-          f"{'Vol':>8}{'OOS est':>9}  Notes")
+          f"{'Vol':>8}{'Beta':>6}{'OOS est':>9}  Notes")
     print("-" * 78)
-    for label, tickers, weights, ret, vol, sharpe, violations, _ in portfolios:
+    for label, tickers, weights, ret, vol, sharpe, violations, _, beta_p in portfolios:
         # OOS estimate: 50% haircut, then Harvey-Liu multiple-testing correction.
         oos = 0.5 * sharpe * hl_factor
         notes = []
@@ -524,21 +589,26 @@ def main():
             notes.append("IS>1.5 suspect")
         if min_return_py is not None and ret < min_return_py - 1e-3:
             notes.append(f"return<{min_return_py:.0%} target")
+        if min_beta is not None and beta_p is not None and beta_p < min_beta - 1e-3:
+            notes.append(f"beta<{min_beta:.2f} target")
         if violations:
             notes.append(f"{len(violations)} cap breach")
         if label == DEPLOYABLE_RECOMMENDATION:
             notes.append("<< recommended")
+        beta_str = f"{beta_p:>6.2f}" if beta_p is not None else f"{'—':>6}"
         print(f"{label:<18}{len(tickers):>6}{sharpe:>11.3f}{ret:>8.1%}"
-              f"{vol:>8.1%}{oos:>9.3f}  {', '.join(notes)}")
+              f"{vol:>8.1%}{beta_str}{oos:>9.3f}  {', '.join(notes)}")
     print("-" * 78)
     print(f"OOS est = 0.5 x IS Sharpe x Harvey-Liu factor ({hl_factor:.3f}). "
           f"Research OOS ceiling ~1.0-1.2.")
 
     # Per-method holdings + dollar allocations.
     pv = args.portfolio_value
-    for label, tickers, weights, ret, vol, sharpe, violations, _ in portfolios:
+    for label, tickers, weights, ret, vol, sharpe, violations, _, beta_p in portfolios:
         print()
-        print(f"── {label}  (IS Sharpe {sharpe:.3f}, {len(tickers)} holdings) ──")
+        beta_txt = f", beta {beta_p:.2f}" if beta_p is not None else ""
+        print(f"── {label}  (IS Sharpe {sharpe:.3f}{beta_txt}, "
+              f"{len(tickers)} holdings) ──")
         print(f"{'Ticker':<10}{'Weight':>9}{f'  ${pv:,.0f}':>16}")
         for t, w in sorted(zip(tickers, weights), key=lambda x: -x[1]):
             if w > 1e-4:
@@ -596,7 +666,7 @@ def main():
     # ── Persist ──────────────────────────────────────────────────────────────
     if not args.no_save:
         from src.portfolio_utils import save_optimisation_result
-        for label, tickers, weights, ret, vol, sharpe, _, source in portfolios:
+        for label, tickers, weights, ret, vol, sharpe, _, source, _beta in portfolios:
             run_id = save_optimisation_result(
                 conn, tickers, np.asarray(weights), prices,
                 script_name=f'rebalance_{label}',
