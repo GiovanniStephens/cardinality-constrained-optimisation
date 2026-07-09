@@ -47,6 +47,7 @@ data/*.backup_*
 # Pipeline artifacts (regenerable)
 data/*.log
 data/*.json
+data/*.txt
 data/staging_*
 
 # Compiled C++ binary (rebuild from cpp/optimisation.cpp)
