@@ -164,6 +164,22 @@ class TestFalsePositiveGuards(unittest.TestCase):
         self.assertEqual(classify_etf('iShares Core Aggressive Allocation ETF'),
                          'Unknown')
 
+    def test_goldman_bond_fund_is_fixed_income(self):
+        # 'gold' matches inside "Goldman"; the brand-collision override must not
+        # steal bond funds into Equity (July 2026: the optimiser gamed the Equity
+        # minimum through exactly this hole).
+        self.assertEqual(classify_etf('Goldman Sachs Access Ultra Short Bond ETF'),
+                         'Fixed Income')
+        self.assertEqual(classify_etf('Goldman Sachs Access Treasury 0-1 Year ETF'),
+                         'Fixed Income')
+
+    def test_goldman_equity_fund_still_equity(self):
+        self.assertEqual(classify_etf('Goldman Sachs ActiveBeta US Large Cap Equity ETF'),
+                         'Equity')
+
+    def test_gold_miners_still_equity(self):
+        self.assertEqual(classify_etf('VanEck Vectors Gold Miners ETF'), 'Equity')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -192,6 +192,11 @@ def classify_etf(name) -> str:
     for label, terms in _RULES:
         if any(t in n for t in terms):
             if label == 'Commodity' and any(t in n for t in _RESOURCE_EQUITY_TERMS):
+                # Resource equity or a brand collision ("Goldman", "Cornerstone")
+                # — but a brand-collision *bond* fund (e.g. "Goldman Sachs Access
+                # Ultra Short Bond") must still land in Fixed Income, not Equity.
+                if any(t in n for t in _HARD_BOND_TERMS):
+                    return 'Fixed Income'
                 return 'Equity'            # resource equity, not the commodity
             if label == 'Real Estate' and any(t in n for t in _REALESTATE_EQUITY_TERMS):
                 return 'Equity'            # excludes/names RE but is an equity fund
