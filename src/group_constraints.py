@@ -68,6 +68,35 @@ def build_slsqp_constraints(selected_tickers, membership, constraints):
     return scipy_constraints
 
 
+def check_floor_feasibility(selected_tickers, membership, constraints, min_weight):
+    """Detect group caps that are mathematically infeasible against the
+    per-holding weight floor.
+
+    If a capped group contains k selected members, every feasible point gives
+    it at least k * min_weight, so k * min_weight > max_frac means SLSQP can
+    never converge — the July 2026 incident shape (>=4 unnamed holdings x 5%
+    floor > the 10% Unknown cap -> silent equal-weight fallback). This turns
+    that silent failure class into an immediate, named diagnosis.
+
+    :param min_weight: the *effective* per-holding floor (post any relaxation).
+    :returns: list of human-readable descriptions, empty when feasible.
+    """
+    problems = []
+    if not min_weight or min_weight <= 0:
+        return problems
+    for dimension, groups in (constraints or {}).items():
+        for group_name, (_min_frac, max_frac) in groups.items():
+            if max_frac >= 1.0:
+                continue
+            k = sum(1 for t in selected_tickers
+                    if membership.get(t, {}).get(dimension) == group_name)
+            if k and k * min_weight > max_frac + 1e-9:
+                problems.append(
+                    f"{dimension}/{group_name}: {k} members x {min_weight:.1%} "
+                    f"floor = {k * min_weight:.1%} > {max_frac:.1%} cap")
+    return problems
+
+
 def check_constraints(selected_tickers, weights, membership, constraints):
     """Check whether a portfolio satisfies group constraints.
 

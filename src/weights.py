@@ -201,7 +201,16 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
 
     # ── Group allocation constraints ──────────────────────────────────────
     if group_constraints and group_membership and selected_tickers:
-        from src.group_constraints import build_slsqp_constraints
+        from src.group_constraints import (build_slsqp_constraints,
+                                           check_floor_feasibility)
+        # Uses the post-relaxation (effective) min_weight: if a capped group
+        # holds k members, k * floor > cap means no feasible point exists and
+        # SLSQP will fail into the equal-weight fallback — name the culprit
+        # instead of failing silently (July 2026 Unknown-cap incident).
+        for msg in check_floor_feasibility(selected_tickers, group_membership,
+                                           group_constraints, min_weight):
+            logger.error("Group cap infeasible vs weight floor — SLSQP cannot "
+                         "converge: %s", msg)
         constraints.extend(
             build_slsqp_constraints(selected_tickers, group_membership,
                                     group_constraints)

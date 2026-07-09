@@ -246,7 +246,12 @@ def portfolio_metrics(prices, tickers, weights):
 
 def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
                     min_return=None, betas=None, min_beta=None):
-    """Return weights aligned to *tickers* (canonical order) for a weight mode.
+    """Return ``(weights, slsqp_ok)`` aligned to *tickers* for a weight mode.
+
+    ``slsqp_ok`` is False when SLSQP failed to converge and the weights are
+    the silent 1/N fallback from optimise_weights — the July 2026 incident
+    shipped cap-breaching books precisely because no caller surfaced this.
+    Non-SLSQP modes (equal/random) always return True.
 
     ``min_return`` (annualised) adds a floor on the portfolio's expected return
     in the SLSQP modes, pushing the book toward higher-return holdings.
@@ -259,10 +264,10 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
 
     n = len(tickers)
     if mode == 'equal':
-        return np.ones(n) / n
+        return np.ones(n) / n, True
     if mode == 'random':
         from src.backtest.simulation import get_random_weights
-        return get_random_weights(list(tickers))
+        return get_random_weights(list(tickers)), True
 
     beta_vec = None
     if betas is not None and min_beta is not None:
@@ -277,14 +282,16 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
             selected_tickers=tickers if gc else None,
             asset_betas=beta_vec, min_beta=min_beta,
         )
-        return np.asarray(res.x)
+        return np.asarray(res.x), bool(res.success)
 
     if mode == 'copulae':
         from src.returns import calculate_log_returns, calculate_expected_returns
         from src.covariance import estimate_corr_using_copulas
         log_returns = calculate_log_returns(prices[tickers])
         er = calculate_expected_returns(log_returns).values
-        corr = estimate_corr_using_copulas(log_returns)
+        # strict: the production book is *labelled* cc_copulae — a copula
+        # failure must stop the run, not silently ship sample correlation.
+        corr = estimate_corr_using_copulas(log_returns, strict=True)
         std = log_returns.std().values * math.sqrt(config.TRADING_DAYS_PER_YEAR)
         D = np.diag(std)
         cov = D @ corr @ D
@@ -295,7 +302,7 @@ def compute_weights(mode, prices, tickers, gc, gm, min_weight, max_weight,
             selected_tickers=tickers if gc else None,
             asset_betas=beta_vec, min_beta=min_beta,
         )
-        return np.asarray(res.x)
+        return np.asarray(res.x), bool(res.success)
 
     raise ValueError(f"Unknown weight mode: {mode}")
 
@@ -365,15 +372,19 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
     cols = set(prices.columns)
     cap = max_etfs or len(cols)
     best_compliant = best_any = None
+    n_scanned = n_errors = n_compliant = 0
     for sol in (ga_result or {}).get('top_solutions') or []:
         cand = [t for t in (sol.get('tickers') or []) if t in cols]
         tk = canonical(prices, force_must_haves(cand, must_haves, cap))
         if len(tk) < 2:
             continue
+        n_scanned += 1
         try:
-            w = compute_weights('optimal', prices, tk, gc, gm, min_w, max_w,
-                                min_return, betas, min_beta)
+            w, slsqp_ok = compute_weights('optimal', prices, tk, gc, gm,
+                                          min_w, max_w, min_return, betas,
+                                          min_beta)
         except Exception:  # noqa: BLE001
+            n_errors += 1
             continue
         ret, _, sh = portfolio_metrics(prices, tk, w)
         if best_any is None or sh > best_any[0]:
@@ -384,13 +395,26 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
         if min_beta is not None and betas is not None:
             beta_p = float(np.dot(betas.reindex(list(tk)).fillna(0.0).values, w))
             beta_ok = beta_p >= min_beta - 1e-3
-        if (caps_ok and ret_ok and beta_ok
-                and (best_compliant is None or sh > best_compliant[0])):
-            best_compliant = (sh, tk)
-    chosen = best_compliant or best_any
-    if chosen:
-        return chosen[1]
+        # A candidate whose weighting fell back to 1/N is not genuinely
+        # compliant even if the fallback weights happen to pass the checks.
+        if slsqp_ok and caps_ok and ret_ok and beta_ok:
+            n_compliant += 1
+            if best_compliant is None or sh > best_compliant[0]:
+                best_compliant = (sh, tk)
+    logger.info("cc selection scan: %d candidates weighted, %d compliant, "
+                "%d weighting errors.", n_scanned, n_compliant, n_errors)
+    if best_compliant:
+        return best_compliant[1]
+    if best_any:
+        logger.warning("cc selection: NO cap/floor-compliant candidate in the "
+                       "GA top-%d — returning the best NON-COMPLIANT pick; "
+                       "expect violation notes downstream.", n_scanned)
+        return best_any[1]
     raw = (ga_result or {}).get('selected_tickers')
+    if raw:
+        logger.warning("cc selection: all %d top-K candidates failed weighting "
+                       "(%d errors) — degrading to the GA's raw selection.",
+                       n_scanned, n_errors)
     return canonical(prices, raw) if raw else None
 
 
@@ -538,19 +562,24 @@ def main():
     elapsed_by_source = {'cc': ga_elapsed if ga_result else None, 'mc': mc_elapsed}
 
     # ── Build each method's portfolio ────────────────────────────────────────
-    portfolios = []  # (label, tickers, weights, ret, vol, sharpe, violations, source)
+    # (label, tickers, weights, ret, vol, sharpe, violations, source, beta_p,
+    #  slsqp_ok)
+    portfolios = []
     for label, source, mode in METHODS:
         tickers = selections.get(source)
         if not tickers:
             logger.warning("Skipping %s (no %s selection).", label, source)
             continue
         try:
-            weights = compute_weights(mode, prices, tickers, gc, gm,
-                                      args.min_weight, args.max_weight,
-                                      min_return_py, betas, min_beta)
+            weights, slsqp_ok = compute_weights(mode, prices, tickers, gc, gm,
+                                                args.min_weight, args.max_weight,
+                                                min_return_py, betas, min_beta)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Weighting failed for %s: %s", label, exc)
             continue
+        if not slsqp_ok:
+            logger.warning("%s: SLSQP did not converge — weights are the 1/N "
+                           "fallback, flagged in the report.", label)
         ret, vol, sharpe = portfolio_metrics(prices, tickers, weights)
         violations = []
         if gc and gm:
@@ -560,7 +589,7 @@ def main():
             beta_p = float(np.dot(
                 betas.reindex(list(tickers)).fillna(0.0).values, weights))
         portfolios.append((label, tickers, weights, ret, vol, sharpe,
-                           violations, source, beta_p))
+                           violations, source, beta_p, slsqp_ok))
 
     if not portfolios:
         logger.error("No portfolios produced. Aborting.")
@@ -581,10 +610,13 @@ def main():
     print(f"{'Method':<18}{'Holds':>6}{'IS Sharpe':>11}{'Return':>9}"
           f"{'Vol':>8}{'Beta':>6}{'OOS est':>9}  Notes")
     print("-" * 78)
-    for label, tickers, weights, ret, vol, sharpe, violations, _, beta_p in portfolios:
+    for (label, tickers, weights, ret, vol, sharpe, violations, _, beta_p,
+         slsqp_ok) in portfolios:
         # OOS estimate: 50% haircut, then Harvey-Liu multiple-testing correction.
         oos = 0.5 * sharpe * hl_factor
         notes = []
+        if not slsqp_ok:
+            notes.append("SLSQP FALLBACK (1/N)")
         if sharpe > 1.5:
             notes.append("IS>1.5 suspect")
         if min_return_py is not None and ret < min_return_py - 1e-3:
@@ -604,11 +636,13 @@ def main():
 
     # Per-method holdings + dollar allocations.
     pv = args.portfolio_value
-    for label, tickers, weights, ret, vol, sharpe, violations, _, beta_p in portfolios:
+    for (label, tickers, weights, ret, vol, sharpe, violations, _, beta_p,
+         slsqp_ok) in portfolios:
         print()
         beta_txt = f", beta {beta_p:.2f}" if beta_p is not None else ""
+        fallback_txt = "" if slsqp_ok else "  [SLSQP FALLBACK — 1/N weights]"
         print(f"── {label}  (IS Sharpe {sharpe:.3f}{beta_txt}, "
-              f"{len(tickers)} holdings) ──")
+              f"{len(tickers)} holdings) ──{fallback_txt}")
         print(f"{'Ticker':<10}{'Weight':>9}{f'  ${pv:,.0f}':>16}")
         for t, w in sorted(zip(tickers, weights), key=lambda x: -x[1]):
             if w > 1e-4:
@@ -630,11 +664,31 @@ def main():
         logger.warning("--sleeve-alpha set but --sleeve-etfs is empty; "
                        "reporting the equity book only.")
     rec = next((p for p in portfolios if p[0] == DEPLOYABLE_RECOMMENDATION), None)
+    substituted = rec is None
     if rec is None:
         logger.warning("Recommended method %s unavailable; deployable book uses %s.",
                        DEPLOYABLE_RECOMMENDATION, portfolios[0][0])
         rec = portfolios[0]
     rec_label, rec_tickers, rec_weights = rec[0], rec[1], rec[2]
+    rec_ret, rec_violations, rec_beta, rec_slsqp_ok = rec[3], rec[6], rec[8], rec[9]
+
+    # Everything wrong with the recommended book, restated AT the point of
+    # decision — the July 2026 incident shipped a fallback book because the
+    # only signals were a logger.warning and a note one screen up.
+    problems = []
+    if substituted:
+        problems.append(f"recommended method {DEPLOYABLE_RECOMMENDATION} "
+                        f"unavailable — substituted {rec_label}")
+    if not rec_slsqp_ok:
+        problems.append("SLSQP did not converge — weights are the 1/N fallback")
+    for v in rec_violations:
+        problems.append(f"category-cap breach: {v}")
+    if min_return_py is not None and rec_ret < min_return_py - 1e-3:
+        problems.append(f"expected return {rec_ret:.1%} misses the "
+                        f"{min_return_py:.0%} floor")
+    if min_beta is not None and rec_beta is not None and rec_beta < min_beta - 1e-3:
+        problems.append(f"beta {rec_beta:.2f} misses the {min_beta:.2f} floor")
+
     eq = 1.0 - alpha
     print()
     print("=" * 78)
@@ -643,6 +697,11 @@ def main():
         header += f" + {alpha:.0%} managed futures ({'/'.join(sleeve_etfs)})"
     print(header)
     print("=" * 78)
+    if problems:
+        print("!! DO NOT TRADE AS-IS — issues with this book:")
+        for p in problems:
+            print(f"!!   - {p}")
+        print("-" * 78)
     print(f"{'Ticker':<10}{'Weight':>9}{f'  ${pv:,.0f}':>16}")
     for t, w in sorted(zip(rec_tickers, rec_weights), key=lambda x: -x[1]):
         if w * eq > 1e-4:
@@ -666,7 +725,8 @@ def main():
     # ── Persist ──────────────────────────────────────────────────────────────
     if not args.no_save:
         from src.portfolio_utils import save_optimisation_result
-        for label, tickers, weights, ret, vol, sharpe, _, source, _beta in portfolios:
+        for (label, tickers, weights, ret, vol, sharpe, _, source, _beta,
+             _slsqp_ok) in portfolios:
             run_id = save_optimisation_result(
                 conn, tickers, np.asarray(weights), prices,
                 script_name=f'rebalance_{label}',

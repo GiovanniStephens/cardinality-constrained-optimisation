@@ -117,7 +117,8 @@ def _fit_garch_residuals_cached(values: np.ndarray, name: str,
 
 def estimate_corr_using_copulas(data: pd.DataFrame,
                                 diagnostics: bool = False,
-                                copula_type: str | None = None) -> np.ndarray:
+                                copula_type: str | None = None,
+                                strict: bool = False) -> np.ndarray:
     """Estimate the correlation matrix using the copula method.
 
     Fits AR(1)-GARCH(1,1) with skew-t innovations to each series, then
@@ -137,6 +138,11 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
         copula model comparison (t-copula vs Gaussian).
     :param copula_type: ``'gaussian'`` (closed-form, O(N²)) or ``'t'``
         (iterative, super-cubic). Defaults to :data:`config.COPULA_TYPE`.
+    :param strict: if True, re-raise on fitting failure instead of degrading
+        to sample correlation. The production rebalance passes True so a
+        broken copulae/scipy ABI stops the run rather than silently shipping
+        a sample-correlation book labelled cc_copulae; long backtest/CPCV
+        runs keep the default (crashing mid-run is worse there).
     :return: numpy array correlation matrix.
     """
     if copula_type is None:
@@ -189,6 +195,12 @@ def estimate_corr_using_copulas(data: pd.DataFrame,
 
         return cop.sigma
     except (ValueError, RuntimeError, TypeError, ImportError, np.linalg.LinAlgError) as e:
+        if strict:
+            _cov_logger.error(
+                "Copula estimation failed (%s: %s) and strict=True — "
+                "refusing to degrade to sample correlation.",
+                type(e).__name__, e)
+            raise
         _cov_logger.warning(
             "Copula estimation failed (%s: %s); falling back to sample "
             "correlation.", type(e).__name__, e)

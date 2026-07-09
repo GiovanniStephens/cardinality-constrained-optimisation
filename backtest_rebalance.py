@@ -120,8 +120,11 @@ def optimise_window(train, conn, args, must_haves):
                               args.max_weight, min_return_py, mh, args.max_etfs)
     if not cc:
         return None, None, train
-    weights = rb.compute_weights('copulae', train, cc, gc, gm,
-                                 args.min_weight, args.max_weight, min_return_py)
+    weights, slsqp_ok = rb.compute_weights('copulae', train, cc, gc, gm,
+                                           args.min_weight, args.max_weight,
+                                           min_return_py)
+    if not slsqp_ok:
+        logger.warning("SLSQP fell back to 1/N for this quarter's book.")
     return cc, np.asarray(weights), train
 
 

@@ -5,7 +5,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.group_constraints import build_slsqp_constraints, check_constraints
+from src.group_constraints import (build_slsqp_constraints, check_constraints,
+                                   check_floor_feasibility)
 
 
 class TestBuildConstraints(unittest.TestCase):
@@ -120,6 +121,49 @@ class TestCheckConstraints(unittest.TestCase):
         valid, violations = check_constraints(
             self.tickers, weights, membership, constraints)
         self.assertTrue(valid)
+
+
+class TestCheckFloorFeasibility(unittest.TestCase):
+    """The July 2026 incident detector: a capped group with k selected members
+    needs at least k * min_weight of the book, so k * floor > cap means SLSQP
+    can never converge (it fell back to 1/N silently)."""
+
+    def setUp(self):
+        # The incident shape: 4 unnamed holdings all landing in 'Unknown'.
+        self.tickers = ['AAAA', 'BBBB', 'CCCC', 'DDDD', 'SPY']
+        self.membership = {t: {'asset_class': 'Unknown'} for t in
+                           ('AAAA', 'BBBB', 'CCCC', 'DDDD')}
+        self.membership['SPY'] = {'asset_class': 'Equity'}
+
+    def test_incident_shape_detected(self):
+        # 4 members x 5% floor = 20% > 15% cap -> infeasible, named.
+        constraints = {'asset_class': {'Unknown': (0.0, 0.15)}}
+        problems = check_floor_feasibility(
+            self.tickers, self.membership, constraints, min_weight=0.05)
+        self.assertEqual(len(problems), 1)
+        self.assertIn('asset_class/Unknown', problems[0])
+        self.assertIn('4 members', problems[0])
+
+    def test_feasible_configuration_is_silent(self):
+        # 4 members x 3% floor = 12% <= 15% cap -> fine.
+        constraints = {'asset_class': {'Unknown': (0.0, 0.15)}}
+        problems = check_floor_feasibility(
+            self.tickers, self.membership, constraints, min_weight=0.03)
+        self.assertEqual(problems, [])
+
+    def test_no_floor_is_always_feasible(self):
+        constraints = {'asset_class': {'Unknown': (0.0, 0.01)}}
+        self.assertEqual(check_floor_feasibility(
+            self.tickers, self.membership, constraints, min_weight=0.0), [])
+        self.assertEqual(check_floor_feasibility(
+            self.tickers, self.membership, constraints, min_weight=None), [])
+
+    def test_uncapped_group_ignored(self):
+        # max_frac >= 1.0 can never be floor-infeasible.
+        constraints = {'asset_class': {'Unknown': (0.0, 1.0)}}
+        problems = check_floor_feasibility(
+            self.tickers, self.membership, constraints, min_weight=0.5)
+        self.assertEqual(problems, [])
 
 
 class TestSLSQPIntegration(unittest.TestCase):

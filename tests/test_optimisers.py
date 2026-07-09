@@ -417,6 +417,20 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
         off_diag = corr[0, 1] if isinstance(corr, np.ndarray) else corr.iloc[0, 1]
         self.assertGreater(off_diag, 0.0)
 
+    def test_strict_copula_raises_instead_of_falling_back(self):
+        """strict=True (the production rebalance path) must re-raise on copula
+        failure instead of silently shipping sample correlation as cc_copulae;
+        the default keeps the silent degrade for long backtest/CPCV runs."""
+        from unittest.mock import patch
+        from src.covariance import estimate_corr_using_copulas
+        data = self._make_correlated_returns(n=100, rho=0.5, seed=3)
+        with patch('src.covariance._fit_garch_residuals_cached',
+                   side_effect=RuntimeError('forced GARCH failure')):
+            corr = estimate_corr_using_copulas(data)   # default: falls back
+            self.assertEqual(corr.shape, (2, 2))
+            with self.assertRaises(RuntimeError):
+                estimate_corr_using_copulas(data, strict=True)
+
     def test_garch_cache_avoids_refit_on_repeat(self):
         """Per-ticker GARCH residuals are cached; repeat calls with the same
         data must not refit. Two-stage check: first call populates the cache,
