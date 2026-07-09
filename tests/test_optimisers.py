@@ -420,7 +420,13 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
     def test_strict_copula_raises_instead_of_falling_back(self):
         """strict=True (the production rebalance path) must re-raise on copula
         failure instead of silently shipping sample correlation as cc_copulae;
-        the default keeps the silent degrade for long backtest/CPCV runs."""
+        the default keeps the silent degrade for long backtest/CPCV runs.
+
+        On a healthy env the mocked GARCH fit raises RuntimeError; on an env
+        with a broken copulae/scipy ABI (CI: the btdtr ImportError) the import
+        inside the try fails first — strict re-raising THAT is equally the
+        behaviour under test, so both exception types are accepted.
+        """
         from unittest.mock import patch
         from src.covariance import estimate_corr_using_copulas
         data = self._make_correlated_returns(n=100, rho=0.5, seed=3)
@@ -428,7 +434,7 @@ class TestCopulaTemporalIntegrity(unittest.TestCase):
                    side_effect=RuntimeError('forced GARCH failure')):
             corr = estimate_corr_using_copulas(data)   # default: falls back
             self.assertEqual(corr.shape, (2, 2))
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises((RuntimeError, ImportError)):
                 estimate_corr_using_copulas(data, strict=True)
 
     def test_garch_cache_avoids_refit_on_repeat(self):
