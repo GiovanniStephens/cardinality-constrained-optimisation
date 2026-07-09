@@ -314,6 +314,31 @@ class TestGetStatistics(unittest.TestCase):
         for key in backtest.METRIC_NAMES:
             self.assertIn(key, stats)
 
+    def test_sortino_and_dd_are_annualised(self):
+        """downside_deviation and Sortino must be on the annualised scale.
+
+        Pre-July-2026 the daily dd was fed to sortino_ratio against an
+        annualised return (a ~sqrt(252) = 16x inflation) and stored daily.
+        """
+        np.random.seed(1)
+        dates = pd.bdate_range('2020-01-01', periods=252, freq='B')
+        tickers = ['A', 'B']
+        oos = pd.DataFrame(
+            np.random.randn(252, 2) * 0.015 + 0.0004,
+            index=dates, columns=tickers,
+        )
+        weights = np.array([0.6, 0.4])
+
+        stats = backtest.get_statistics(tickers, weights, oos)
+        port_returns = backtest.run_portfolio(tickers, weights, oos)
+
+        daily_dd = downside_deviation(port_returns)
+        ann_dd = daily_dd * np.sqrt(252)
+        ann_r = np.mean(port_returns) * 252
+
+        self.assertAlmostEqual(stats['downside_deviation'], ann_dd, places=10)
+        self.assertAlmostEqual(stats['sortino_ratio'], ann_r / ann_dd, places=8)
+
 
 class TestPairedTTest(unittest.TestCase):
     """Tests for the paired t-test across windows."""
@@ -466,7 +491,11 @@ class TestBacktestValidation(unittest.TestCase):
     # ── Test 4: OOS returns match manual computation ──────────────────────
 
     def test_portfolio_returns_match_manual(self):
-        """Run_portfolio output must match hand-computed weighted returns."""
+        """Run_portfolio output must match hand-computed portfolio log returns.
+
+        The day's true log return is log(sum w_i * exp(r_i)) — each asset's
+        value scales by exp(r_log) — and weights drift by w*exp(r)/growth.
+        """
         dates = pd.bdate_range('2020-01-01', periods=3, freq='B')
         # Known log returns for 2 tickers over 3 days
         oos = pd.DataFrame({
@@ -477,13 +506,35 @@ class TestBacktestValidation(unittest.TestCase):
 
         returns = backtest.run_portfolio(['A', 'B'], weights, oos)
 
-        # Day 0: 0.6*0.01 + 0.4*0.02 = 0.014
-        self.assertAlmostEqual(returns[0], 0.014, places=10)
+        # Day 0: log(0.6*exp(0.01) + 0.4*exp(0.02))
+        growth_0 = float(np.sum(weights * np.exp([0.01, 0.02])))
+        self.assertAlmostEqual(returns[0], np.log(growth_0), places=10)
 
-        # Day 1: weights drift after day 0
-        w_after_0 = weights * np.exp([0.01, 0.02]) / (1 + 0.014)
-        expected_day1 = float(np.sum(w_after_0 * np.array([-0.02, 0.01])))
-        self.assertAlmostEqual(returns[1], expected_day1, places=10)
+        # Day 1: weights drift after day 0, then same identity
+        w_after_0 = weights * np.exp([0.01, 0.02]) / growth_0
+        growth_1 = float(np.sum(w_after_0 * np.exp([-0.02, 0.01])))
+        self.assertAlmostEqual(returns[1], np.log(growth_1), places=10)
+
+    def test_buy_and_hold_wealth_identity(self):
+        """exp(sum of portfolio log returns) must equal terminal wealth computed
+        directly from asset growth: sum_i w0_i * exp(sum_t r_it).
+
+        This is the exact buy-and-hold invariant; the pre-July-2026 drift
+        formula (dividing by 1 + sum(w*r_log)) violated it, compounding ~6-10%
+        of phantom leverage over a 5-year window.
+        """
+        rng = np.random.default_rng(7)
+        n_days, tickers = 1260, ['A', 'B', 'C', 'D']
+        dates = pd.bdate_range('2020-01-01', periods=n_days, freq='B')
+        oos = pd.DataFrame(rng.normal(0.0003, 0.02, (n_days, 4)),
+                           index=dates, columns=tickers)
+        w0 = np.array([0.4, 0.3, 0.2, 0.1])
+
+        returns = backtest.run_portfolio(tickers, w0, oos)
+
+        wealth_from_returns = np.exp(np.sum(returns))
+        wealth_direct = float(np.sum(w0 * np.exp(oos.values.sum(axis=0))))
+        self.assertAlmostEqual(wealth_from_returns, wealth_direct, places=8)
 
     # ── Test 5: Portfolio returns are bounded ─────────────────────────────
 
@@ -509,11 +560,11 @@ class TestBacktestValidation(unittest.TestCase):
     # ── Test 6: Weights remain valid throughout simulation ────────────────
 
     def test_weights_stay_valid(self):
-        """Weights must remain non-negative throughout simulation.
+        """Weights must remain non-negative and exactly normalised throughout.
 
-        Note: the update formula w * exp(r) / (1 + sum(w*r)) is a first-order
-        approximation and doesn't perfectly preserve sum(w)=1. We check
-        non-negativity strictly and sum within 5% over 50 days.
+        The update w * exp(r) / sum(w * exp(r)) preserves sum(w)=1 by
+        construction (the pre-July-2026 formula divided by 1 + sum(w*r_log)
+        and drifted ~6-10% over 5y — this test pins the fix).
         """
         np.random.seed(42)
         dates = pd.bdate_range('2020-01-01', periods=50, freq='B')
@@ -529,15 +580,15 @@ class TestBacktestValidation(unittest.TestCase):
         w = weights.copy()
         for i in range(len(subset)):
             step = subset.iloc[i].values
-            ret = float(np.sum(step * w))
-            w = w * np.exp(step) / (1 + ret)
+            growth = float(np.sum(w * np.exp(step)))
+            w = w * np.exp(step) / growth
             self.assertTrue(
                 np.all(w >= -1e-10),
                 f"Day {i}: negative weight detected: {w}",
             )
-        # After full simulation, weights should still be approximately normalised
-        self.assertAlmostEqual(w.sum(), 1.0, delta=0.05,
-                               msg=f"Final weights deviate too far from 1: {w.sum()}")
+            self.assertAlmostEqual(
+                w.sum(), 1.0, places=12,
+                msg=f"Day {i}: weights de-normalised: {w.sum()}")
 
     # ── Test 7: Sharpe ratio consistency ──────────────────────────────────
 

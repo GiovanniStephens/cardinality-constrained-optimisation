@@ -312,9 +312,14 @@ def run_portfolio(portfolio, weights, oos_log_returns):
     w = weights.copy()
     for i in range(len(subset)):
         step_returns = subset.iloc[i].values
-        weighted_return = float(np.sum(step_returns * w))
-        portfolio_returns.append(weighted_return)
-        w = w * np.exp(step_returns) / (1 + weighted_return)
+        # Portfolio growth factor: each asset's value scales by exp(r_log),
+        # so the day's true portfolio log return is log(sum w_i * exp(r_i)).
+        # (Pre-July-2026 this divided by 1 + sum(w*r_log) — a log/simple mix
+        # that de-normalised the weights into ~6-10% phantom leverage over a
+        # 5y window and biased every stored backtest Sharpe slightly upward.)
+        growth = float(np.sum(w * np.exp(step_returns)))
+        portfolio_returns.append(float(np.log(growth)))
+        w = w * np.exp(step_returns) / growth
     return portfolio_returns
 
 
@@ -329,7 +334,10 @@ def get_statistics(portfolio, weights, oos_log_returns):
     """
     portfolio_returns = run_portfolio(portfolio, weights, oos_log_returns)
     max_dd = maximum_drawdown(portfolio_returns)
-    dd = downside_deviation(portfolio_returns)
+    # Annualise the downside deviation so it lives on the same scale as r/std
+    # (pre-July-2026 the daily value was stored and fed to Sortino against an
+    # annualised return — a ~sqrt(252) = 16x scale error in stored Sortinos).
+    dd = downside_deviation(portfolio_returns) * np.sqrt(TRADING_DAYS_PER_YEAR)
     r = np.mean(portfolio_returns) * TRADING_DAYS_PER_YEAR
     std = np.std(portfolio_returns) * np.sqrt(TRADING_DAYS_PER_YEAR)
     sharpe = r / std if std != 0 else 0.0
@@ -364,7 +372,8 @@ def get_statistics_with_sleeve(portfolio, weights, oos_log_returns,
     combined = ((1.0 - alpha) * np.asarray(book, dtype=float)
                 + alpha * sleeve).tolist()
     max_dd = maximum_drawdown(combined)
-    dd = downside_deviation(combined)
+    # Annualised, matching get_statistics (see the note there).
+    dd = downside_deviation(combined) * np.sqrt(TRADING_DAYS_PER_YEAR)
     r = np.mean(combined) * TRADING_DAYS_PER_YEAR
     std = np.std(combined) * np.sqrt(TRADING_DAYS_PER_YEAR)
     sharpe = r / std if std != 0 else 0.0
