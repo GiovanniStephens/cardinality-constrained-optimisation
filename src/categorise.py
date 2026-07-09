@@ -134,8 +134,9 @@ _RULES = [
                       # July 2026: defined-outcome / overlay / hedge families
                       'buywrite', 'buy-write', 'structured outcome',
                       'defined outcome', 'target outcome', 'defined risk',
-                      'collared', 'tail risk', 'swan sos', 'barrier',
-                      'interest rate hedge', 'inflation expectations')),
+                      'defined protection', 'collared', 'tail risk',
+                      'swan sos', 'barrier', 'interest rate hedge',
+                      'inflation expectations')),
     ('Equity', ('equity', 'stock', 's&p', 'sp 500', 'nasdaq', 'msci', 'ftse',
                 'russell', 'stoxx', 'dax', 'nikkei', 'topix', 'kospi',
                 'dividend', 'index', 'large cap', 'large-cap', 'mid cap',

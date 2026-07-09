@@ -52,6 +52,11 @@ class TestNewAlternativesFamilies(unittest.TestCase):
     def test_defined_outcome_family(self):
         self.assertEqual(classify_etf('TrueShares Structured Outcome (October) ETF'),
                          'Alternatives')
+        # "Defined Protection" = fully-buffered defined-outcome (July 2026: this
+        # family gamed the Equity category minimum before being classified).
+        self.assertEqual(
+            classify_etf('Innovator Equity Defined Protection ETF - 6mo Jan/Jul'),
+            'Alternatives')
         self.assertEqual(classify_etf('Aptus Defined Risk ETF'), 'Alternatives')
         self.assertEqual(classify_etf('Aptus Collared Income Opportunity ETF'),
                          'Alternatives')
