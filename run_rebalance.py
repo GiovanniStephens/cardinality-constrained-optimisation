@@ -300,7 +300,9 @@ def build_category_caps(prices, conn):
                 for t in prices.columns}
     excluded = [t for t in prices.columns
                 if label[t] in config.REBALANCE_EXCLUDE_CATEGORIES]
-    caps = {g: (0.0, c) for g, c in config.REBALANCE_CATEGORY_CAPS.items()}
+    mins = getattr(config, 'REBALANCE_CATEGORY_MINS', {})
+    caps = {g: (mins.get(g, 0.0), c)
+            for g, c in config.REBALANCE_CATEGORY_CAPS.items()}
     return group_of, caps, excluded
 
 

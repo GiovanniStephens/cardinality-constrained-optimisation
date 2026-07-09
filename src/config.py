@@ -176,6 +176,15 @@ REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-g
                                        # legs at the ~4.7% relaxed floor now that the
                                        # classifier hardening shrank this bucket)
 }
+# Category minimums (same dimension as the caps; enforced as SLSQP lower bounds
+# and in the candidate compliance scan). July 2026: without cheap leverage the
+# max-Sharpe objective under-allocates growth — on the 2y window it held only
+# ~25% plain equity, beta 0.07 to SPY. The Equity floor keeps the book a growth
+# vehicle with hedges at the margin (the 25% MF sleeve is the diversifier).
+# The SMH must-have guarantees the Equity group is always non-empty.
+REBALANCE_CATEGORY_MINS = {
+    'Equity': 0.50,
+}
 # Conviction "must-have" holdings — forced into every rebalance portfolio at the
 # selection stage (held at >= the per-position floor, still counted toward the
 # category caps). Override per-run with `run_rebalance.py --must-have SMH,VOO`.
