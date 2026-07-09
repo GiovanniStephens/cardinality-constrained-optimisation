@@ -376,36 +376,51 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
     cap = max_etfs or len(cols)
     best_compliant = best_any = None
     n_scanned = n_errors = n_compliant = 0
-    for sol in (ga_result or {}).get('top_solutions') or []:
-        cand = [t for t in (sol.get('tickers') or []) if t in cols]
-        tk = canonical(prices, force_must_haves(cand, must_haves, cap))
-        if len(tk) < 2:
-            continue
-        n_scanned += 1
-        try:
-            w, slsqp_ok = compute_weights('optimal', prices, tk, gc, gm,
-                                          min_w, max_w, min_return, betas,
-                                          min_beta)
-        except Exception:  # noqa: BLE001
-            n_errors += 1
-            continue
-        ret, _, sh = portfolio_metrics(prices, tk, w)
-        if best_any is None or sh > best_any[0]:
-            best_any = (sh, tk)
-        caps_ok = check_constraints(tk, w, gm, gc)[0] if (gc and gm) else True
-        ret_ok = (min_return is None) or (ret >= min_return - 1e-3)
-        beta_ok = True
-        if min_beta is not None and betas is not None:
-            beta_p = float(np.dot(betas.reindex(list(tk)).fillna(0.0).values, w))
-            beta_ok = beta_p >= min_beta - 1e-3
-        # A candidate whose weighting fell back to 1/N is not genuinely
-        # compliant even if the fallback weights happen to pass the checks.
-        if slsqp_ok and caps_ok and ret_ok and beta_ok:
-            n_compliant += 1
-            if best_compliant is None or sh > best_compliant[0]:
-                best_compliant = (sh, tk)
+    # The scan is exploratory: silence src.weights' per-candidate diagnostics
+    # (feasibility ERRORs, fallback WARNINGs) — 200 candidates can emit
+    # hundreds of identical lines and drown the log. Everything they said is
+    # folded into the summary line below, and the FINAL weighting in main()
+    # keeps full loudness.
+    n_fallback = 0
+    _w_logger = logging.getLogger('src.weights')
+    _prev_level = _w_logger.level
+    _w_logger.setLevel(logging.CRITICAL)
+    try:
+        for sol in (ga_result or {}).get('top_solutions') or []:
+            cand = [t for t in (sol.get('tickers') or []) if t in cols]
+            tk = canonical(prices, force_must_haves(cand, must_haves, cap))
+            if len(tk) < 2:
+                continue
+            n_scanned += 1
+            try:
+                w, slsqp_ok = compute_weights('optimal', prices, tk, gc, gm,
+                                              min_w, max_w, min_return, betas,
+                                              min_beta)
+            except Exception:  # noqa: BLE001
+                n_errors += 1
+                continue
+            if not slsqp_ok:
+                n_fallback += 1
+            ret, _, sh = portfolio_metrics(prices, tk, w)
+            if best_any is None or sh > best_any[0]:
+                best_any = (sh, tk)
+            caps_ok = check_constraints(tk, w, gm, gc)[0] if (gc and gm) else True
+            ret_ok = (min_return is None) or (ret >= min_return - 1e-3)
+            beta_ok = True
+            if min_beta is not None and betas is not None:
+                beta_p = float(np.dot(betas.reindex(list(tk)).fillna(0.0).values, w))
+                beta_ok = beta_p >= min_beta - 1e-3
+            # A candidate whose weighting fell back to 1/N is not genuinely
+            # compliant even if the fallback weights happen to pass the checks.
+            if slsqp_ok and caps_ok and ret_ok and beta_ok:
+                n_compliant += 1
+                if best_compliant is None or sh > best_compliant[0]:
+                    best_compliant = (sh, tk)
+    finally:
+        _w_logger.setLevel(_prev_level)
     logger.info("cc selection scan: %d candidates weighted, %d compliant, "
-                "%d weighting errors.", n_scanned, n_compliant, n_errors)
+                "%d SLSQP fallbacks (infeasible/non-converged), %d errors.",
+                n_scanned, n_compliant, n_fallback, n_errors)
     if best_compliant:
         return best_compliant[1]
     if best_any:
