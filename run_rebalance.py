@@ -422,8 +422,19 @@ def pick_cc_selection(ga_result, prices, gc, gm, min_w, max_w, min_return=None,
 
 def main():
     args = parse_args()
-    if args.seed >= 0:
-        np.random.seed(args.seed)
+    # Resolve 'random' (-1) to a concrete, recorded seed so every run is
+    # auditable and re-runnable from its DB params. A user-supplied seed also
+    # switches Monte Carlo to the serial deterministic path; an auto-resolved
+    # seed keeps MC parallel (fast) — the GA and numpy are seeded either way.
+    # NB the time-budgeted multi-threaded GA is not bit-identical under a
+    # fixed seed; the seed makes runs re-runnable, not bit-reproducible.
+    user_seed = args.seed >= 0
+    if not user_seed:
+        args.seed = int.from_bytes(os.urandom(4), 'big') % (2**31 - 1)
+        logger.info("No --seed given — resolved random seed %d (recorded in "
+                    "the run params; pass --seed %d to re-run).",
+                    args.seed, args.seed)
+    np.random.seed(args.seed)
 
     if not os.path.isfile(BINARY_PATH):
         logger.error("C++ binary not found at %s — run 'make build-cpp'", BINARY_PATH)
@@ -543,7 +554,7 @@ def main():
     # Monte Carlo selection
     logger.info("Running Monte Carlo selection (%d trials)...", config.MC_NUM_TRIALS)
     mc_start = time.time()
-    if args.seed >= 0:
+    if user_seed:
         mc_sol, _ = monte_carlo_search(prices, config.MC_NUM_TRIALS,
                                        args.min_etfs, args.max_etfs)
     else:
@@ -723,27 +734,93 @@ def main():
         print("Equity book only (--no-sleeve); managed-futures sleeve omitted.")
 
     # ── Persist ──────────────────────────────────────────────────────────────
+    # Full reproducibility record (July 2026): the deployed run 118 could not
+    # be reconstructed because only 8 param keys were saved — no weight cap,
+    # floors, caps snapshot, sleeve settings, git commit, or resolved seed.
+    # save_optimisation_run spills unknown keys into params_json, so recording
+    # everything costs one dict merge.
     if not args.no_save:
+        import hashlib
         from src.portfolio_utils import save_optimisation_result
-        for (label, tickers, weights, ret, vol, sharpe, _, source, _beta,
-             _slsqp_ok) in portfolios:
+
+        try:
+            git_commit = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'], capture_output=True, text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__)), timeout=5,
+            ).stdout.strip() or None
+        except Exception:  # noqa: BLE001
+            git_commit = None
+        universe = ','.join(sorted(prices.columns))
+        run_record = {
+            'data_source': 'us_db',
+            **vars(args),
+            'git_commit': git_commit,
+            'numpy_version': np.__version__,
+            'pandas_version': pd.__version__,
+            'mc_deterministic': user_seed,
+            'beta_benchmark': config.REBALANCE_BETA_BENCHMARK,
+            'category_caps': {g: [lo, hi] for g, (lo, hi) in cat_caps.items()},
+            'universe_size': int(prices.shape[1]),
+            'universe_sha1': hashlib.sha1(universe.encode()).hexdigest(),
+            'window_start': str(prices.index[0].date()),
+            'window_end': str(prices.index[-1].date()),
+        }
+
+        for (label, tickers, weights, ret, vol, sharpe, violations_, source,
+             _beta, slsqp_ok) in portfolios:
             run_id = save_optimisation_result(
                 conn, tickers, np.asarray(weights), prices,
                 script_name=f'rebalance_{label}',
                 params={
-                    'data_source': 'us_db',
+                    **run_record,
                     'method': label,
                     'selection': source,
-                    'min_etfs': args.min_etfs,
-                    'max_etfs': args.max_etfs,
-                    'window_start': str(prices.index[0].date()),
-                    'window_end': str(prices.index[-1].date()),
-                    'seed': args.seed,
+                    'slsqp_fallback': not slsqp_ok,
+                    'cap_violations': violations_,
                 },
                 exchange='US',
                 elapsed_seconds=elapsed_by_source.get(source),
             )
             logger.info("Saved %s to DB (run_id=%d)", label, run_id)
+
+        # The deployable blend — the book actually traded — as its own row
+        # (previously print-only). Equity legs scaled by (1 - alpha) plus the
+        # sleeve ETFs at alpha/n; stats computed only when every blend ticker
+        # has prices in the training frame (young sleeve funds may not).
+        from src import db as _db
+        blend = {t: float(w) * eq for t, w in zip(rec_tickers, rec_weights)
+                 if float(w) * eq > 1e-6}
+        if alpha:
+            each = alpha / len(sleeve_etfs)
+            for etf in sleeve_etfs:
+                blend[etf] = blend.get(etf, 0.0) + each
+        blend_stats = {}
+        if all(t in prices.columns for t in blend):
+            bt = list(blend)
+            bret, bvol, bsh = portfolio_metrics(
+                prices, bt, np.array([blend[t] for t in bt]))
+            blend_stats = {'best_sharpe': bsh, 'portfolio_return': bret,
+                           'portfolio_volatility': bvol}
+        dep_id = _db.save_optimisation_run(
+            conn,
+            params={
+                **run_record,
+                'script': 'rebalance_deployable',
+                'method': f'deployable_{rec_label}',
+                'base_method': rec_label,
+                'problems': problems,
+            },
+            results={
+                **blend_stats,
+                'num_selected': len(blend),
+                'notes': ('; '.join(problems) if problems
+                          else 'clean — tradeable as printed'),
+            },
+            holdings=sorted(blend.items(), key=lambda kv: -kv[1]),
+            exchange='US',
+        )
+        logger.info("Saved deployable blend to DB (run_id=%d%s)", dep_id,
+                    '' if not problems else '; DO-NOT-TRADE problems recorded')
 
     conn.close()
     print()
