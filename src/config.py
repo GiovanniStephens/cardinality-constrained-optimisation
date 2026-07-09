@@ -195,6 +195,11 @@ REBALANCE_CATEGORY_MINS = {}
 # CLI: run_rebalance.py --min-beta; <= 0 disables.
 REBALANCE_MIN_BETA = 0.50
 REBALANCE_BETA_BENCHMARK = 'SPY'
+# Per-holding weight ceiling for the production rebalance (July 2026, standing
+# policy from the deployed run 118): at 0.25 the beta floor was satisfied by a
+# 2-leg barbell (SMH ~21% + GSIB ~17%); 0.12 forces the beta across ~6 real
+# equity legs. CLI: run_rebalance.py --max-weight.
+REBALANCE_MAX_WEIGHT = 0.12
 # Conviction "must-have" holdings — forced into every rebalance portfolio at the
 # selection stage (held at >= the per-position floor, still counted toward the
 # category caps). Override per-run with `run_rebalance.py --must-have SMH,VOO`.

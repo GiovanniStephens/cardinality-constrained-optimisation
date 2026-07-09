@@ -12,7 +12,7 @@ This is the honest OOS gate: re-optimise → hold a quarter → rebalance → re
 
 Usage:
     python backtest_rebalance.py [--min-return 0.12] [--must-have SMH]
-        [--max-etfs 30] [--max-weight 0.25] [--ga-time-budget 60] [--max-windows N]
+        [--max-etfs 30] [--max-weight 0.12] [--ga-time-budget 60] [--max-windows N]
 """
 
 import argparse
@@ -47,7 +47,8 @@ def parse_args():
     p.add_argument('--min-etfs', type=int, default=10)
     p.add_argument('--max-etfs', type=int, default=30)
     p.add_argument('--min-weight', type=float, default=config.GA_MIN_WEIGHT)
-    p.add_argument('--max-weight', type=float, default=0.25)
+    p.add_argument('--max-weight', type=float,
+                   default=config.REBALANCE_MAX_WEIGHT)
     p.add_argument('--ga-time-budget', type=float, default=60.0,
                    help='GA seconds per quarter (lower than a single run; many windows)')
     p.add_argument('--train-years', type=int, default=5)

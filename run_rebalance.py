@@ -2,8 +2,11 @@
 
 Runs GA selection once (C++ island GA) and Monte-Carlo selection once on the
 latest training window, then weights each candidate method — applying the
-country/sector group constraints to every SLSQP path — and prints a
-side-by-side comparison with dollar allocations.
+name-based category caps to every SLSQP path — and prints a side-by-side
+comparison with dollar allocations. (The country/sector GROUP_CONSTRAINTS are
+also passed through but are INERT on ETF-only books: ETF tickers carry no
+country/sector metadata, so they generate zero constraints — the run logs
+this per dimension. The category caps are the operative control.)
 
 Methods compared (see CLAUDE.md "Strategy Taxonomy & Empirical Verdicts"):
     cc_copulae         GA selection + Gaussian copula     (deployable pick — tightest OOS)
@@ -115,7 +118,8 @@ def parse_args():
                         "stocks) or 'all' to include equities.")
     p.add_argument('--min-weight', type=float, default=config.GA_MIN_WEIGHT,
                    help='Minimum weight per holding (default: %(default)s)')
-    p.add_argument('--max-weight', type=float, default=0.25,
+    p.add_argument('--max-weight', type=float,
+                   default=config.REBALANCE_MAX_WEIGHT,
                    help='Maximum weight per holding (default: %(default)s)')
     p.add_argument('--must-have', default=','.join(config.REBALANCE_MUST_HAVE),
                    help="Comma-separated tickers forced into every portfolio "
@@ -508,6 +512,18 @@ def main():
         gm.setdefault(t, {})['asset_class'] = group_of[t]
     logger.info("Category caps active: %s",
                 {g: hi for g, (lo, hi) in cat_caps.items()})
+
+    # Honesty check (July 2026 review): the country/sector GROUP_CONSTRAINTS
+    # generate zero SLSQP constraints on an ETF-only universe because ETF
+    # tickers carry no country/sector metadata — a control that looks
+    # protective while doing nothing. Say so, per dimension, once per run.
+    for dim in config.GROUP_CONSTRAINTS:
+        n_tagged = sum(1 for t in prices.columns if gm.get(t, {}).get(dim))
+        if n_tagged == 0:
+            logger.warning("'%s' caps INERT — 0 of %d universe tickers carry "
+                           "%s metadata; the name-based category caps are the "
+                           "operative control on this book.",
+                           dim, prices.shape[1], dim)
 
     # ── Selection: GA (cc_*) and Monte Carlo (mc_*) ──────────────────────────
     from src.returns import calculate_log_returns
