@@ -150,10 +150,9 @@ def parse_args():
 def run_cpp_ga(binary_data_path, args, min_return_cpp):
     """Invoke the C++ island GA and return its parsed JSON result.
 
-    Parameterised on cardinality / min-return (unlike run_optimisation.py which
-    bakes these into module constants), so the GA respects the 10-15 holding
-    constraint for the rebalance. *min_return_cpp* must already be normalised
-    (negative = no floor; see normalise_min_return).
+    Fully parameterised on cardinality / min-return so the GA respects the
+    10-15 holding constraint for the rebalance. *min_return_cpp* must already
+    be normalised (negative = no floor; see normalise_min_return).
     """
     cmd = [
         BINARY_PATH, '--binary', '--data', binary_data_path,
