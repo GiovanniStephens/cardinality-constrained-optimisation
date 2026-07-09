@@ -165,7 +165,10 @@ REBALANCE_CATEGORY_CAPS = {            # max fraction of the portfolio per cap-g
     'Commodity': 0.25,
     'Real Estate': 0.20,
     'Alternatives': 0.30,              # managed futures / CTA — crisis alpha
-    'Inverse': 0.15,                   # short/inverse hedges (incl 2x/3x short) — kept for crisis vol reduction; some decay accepted
+    'Inverse': 0.10,                   # short/inverse hedges (incl 2x/3x short) — tightened
+                                       # 0.15→0.10 July 2026: the 25% managed-futures sleeve
+                                       # is the designated crisis-alpha allocation; paying
+                                       # inverse-fund decay on top of it is double-hedging
     'Leveraged': 0.05,                 # long-amplifying — reduced; get leverage from account margin instead
     'Crypto': 0.15,
     'Unknown': 0.15,                   # backstop for unclassified names (raised
