@@ -96,9 +96,13 @@ def optimise_window(train, conn, args, must_haves):
 
     mh = [t for t in must_haves if t in train.columns]
 
+    # The two backends spell "floor off" differently (C++ negative sentinel,
+    # Python None) — route both through the same normaliser as run_rebalance.
+    min_return_cpp, min_return_py = rb.normalise_min_return(args.min_return)
+
     ga_args = types.SimpleNamespace(
         pop_size=10000, generations=10000, min_etfs=args.min_etfs,
-        max_etfs=args.max_etfs, min_return=args.min_return,
+        max_etfs=args.max_etfs,
         time_budget=args.ga_time_budget, seed=-1, no_gpu=args.no_gpu)
 
     lr = calculate_log_returns(train)
@@ -106,18 +110,18 @@ def optimise_window(train, conn, args, must_haves):
     tmp.close()
     try:
         write_binary_data(lr, tmp.name)
-        ga_result, _ = rb.run_cpp_ga(tmp.name, ga_args)
+        ga_result, _ = rb.run_cpp_ga(tmp.name, ga_args, min_return_cpp)
     finally:
         os.unlink(tmp.name)
     if ga_result is None:
         return None, None, train
 
     cc = rb.pick_cc_selection(ga_result, train, gc, gm, args.min_weight,
-                              args.max_weight, args.min_return, mh, args.max_etfs)
+                              args.max_weight, min_return_py, mh, args.max_etfs)
     if not cc:
         return None, None, train
     weights = rb.compute_weights('copulae', train, cc, gc, gm,
-                                 args.min_weight, args.max_weight, args.min_return)
+                                 args.min_weight, args.max_weight, min_return_py)
     return cc, np.asarray(weights), train
 
 
