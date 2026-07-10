@@ -50,6 +50,23 @@ def calculate_variances(log_returns, annualise=True):
     return var
 
 
+def calculate_asset_betas(log_returns, benchmark_log_returns):
+    """Per-asset OLS beta to a benchmark: beta_i = cov(r_i, r_b) / var(r_b).
+
+    Pure computation — callers align the two inputs (pandas pairwise ``cov``
+    handles residual NaN overlap). Shared by the production rebalance's beta
+    floor and the backtest's beta-1 experiment arm.
+
+    :param log_returns: DataFrame of daily log returns (dates x tickers).
+    :param benchmark_log_returns: Series of benchmark daily log returns.
+    :return: Series of betas aligned to log_returns.columns; NaN-safe
+        (no overlap / zero benchmark variance -> beta 0).
+    """
+    var_b = benchmark_log_returns.var()
+    betas = log_returns.apply(lambda col: col.cov(benchmark_log_returns)) / var_b
+    return betas.fillna(0.0)
+
+
 def prepare_portfolio_inputs(prices):
     """Compute standard portfolio inputs from a price DataFrame.
 

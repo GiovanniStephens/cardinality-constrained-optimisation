@@ -319,7 +319,7 @@ def compute_asset_betas(prices, conn):
     Series aligned to prices.columns; NaN-safe (missing overlap -> beta 0).
     """
     from src import db
-    from src.returns import calculate_log_returns
+    from src.returns import calculate_log_returns, calculate_asset_betas
     bench = config.REBALANCE_BETA_BENCHMARK
     if bench in prices.columns:
         bench_px = prices[bench]
@@ -330,9 +330,7 @@ def compute_asset_betas(prices, conn):
         bench_px = bdf[bench].reindex(prices.index).ffill().bfill()
     rets = calculate_log_returns(prices)
     bench_ret = np.log(bench_px / bench_px.shift(1)).reindex(rets.index)
-    var_b = bench_ret.var()
-    betas = rets.apply(lambda col: col.cov(bench_ret)) / var_b
-    return betas.fillna(0.0)
+    return calculate_asset_betas(rets, bench_ret)
 
 
 # ── Category caps (asset-class limits via the crude name classifier) ─────────

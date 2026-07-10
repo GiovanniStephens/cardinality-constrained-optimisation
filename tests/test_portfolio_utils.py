@@ -15,6 +15,7 @@ from src.returns import (
     calculate_log_returns,
     calculate_expected_returns,
     calculate_variances,
+    calculate_asset_betas,
     prepare_portfolio_inputs,
 )
 from src.covariance import (
@@ -160,6 +161,50 @@ class TestVariances(unittest.TestCase):
         ann = calculate_variances(returns, annualise=True)
         raw = calculate_variances(returns, annualise=False)
         np.testing.assert_array_almost_equal(ann.values, raw.values * 252)
+
+
+class TestCalculateAssetBetas(unittest.TestCase):
+    """Shared OLS beta: cov(r_i, r_b) / var(r_b)."""
+
+    def test_exact_scaled_beta(self):
+        rng = np.random.default_rng(42)
+        bench = pd.Series(rng.normal(0, 0.01, 500))
+        rets = pd.DataFrame({
+            'DOUBLE': 2.0 * bench,      # beta exactly 2
+            'SELF': bench,              # beta exactly 1
+            'INVERSE': -bench,          # beta exactly -1
+        })
+        betas = calculate_asset_betas(rets, bench)
+        self.assertAlmostEqual(betas['DOUBLE'], 2.0, places=10)
+        self.assertAlmostEqual(betas['SELF'], 1.0, places=10)
+        self.assertAlmostEqual(betas['INVERSE'], -1.0, places=10)
+
+    def test_uncorrelated_near_zero(self):
+        rng = np.random.default_rng(0)
+        bench = pd.Series(rng.normal(0, 0.01, 5000))
+        rets = pd.DataFrame({'NOISE': rng.normal(0, 0.01, 5000)})
+        betas = calculate_asset_betas(rets, bench)
+        self.assertLess(abs(betas['NOISE']), 0.1)
+
+    def test_nan_beta_becomes_zero(self):
+        # A constant column has zero covariance with anything; pandas cov of a
+        # length-mismatched all-NaN overlap yields NaN -> fillna(0.0).
+        bench = pd.Series([0.01, -0.02, 0.005, 0.0], index=range(4))
+        rets = pd.DataFrame({'GHOST': [np.nan] * 4}, index=range(4))
+        betas = calculate_asset_betas(rets, bench)
+        self.assertEqual(betas['GHOST'], 0.0)
+
+    def test_matches_rebalance_formula(self):
+        # Behaviour-identity check for the run_rebalance delegation: same
+        # cov/var arithmetic as the pre-refactor inline version.
+        rng = np.random.default_rng(7)
+        bench = pd.Series(rng.normal(0, 0.01, 300))
+        rets = pd.DataFrame(rng.normal(0, 0.02, (300, 4)),
+                            columns=list('ABCD'))
+        expected = (rets.apply(lambda col: col.cov(bench))
+                    / bench.var()).fillna(0.0)
+        got = calculate_asset_betas(rets, bench)
+        pd.testing.assert_series_equal(got, expected)
 
 
 class TestSharpeRatio(unittest.TestCase):
