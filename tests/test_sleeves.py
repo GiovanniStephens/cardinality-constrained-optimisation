@@ -143,12 +143,15 @@ class TestSleeveBlend(unittest.TestCase):
         weights = [np.array([.4, .3, .3]), np.array([.5, .25, .25])]
         rng = np.random.RandomState(11)
         sleeve = pd.Series(rng.randn(len(self.oos)) * 0.01, index=self.oos.index)
+        # Benchmark for the information ratio: the contract must hold for it
+        # too (NaN-vs-NaN would vacuously fail np.isclose without it).
+        bench = self.oos['S5']
 
         base = evaluate_portfolios(portfolios, weights, self.oos, self.oos,
-                                   'cc_x')
+                                   'cc_x', benchmark_returns=bench)
         sl0 = evaluate_portfolios_with_sleeve(portfolios, weights, self.oos,
                                               self.oos, 'cc_x_trend0', sleeve,
-                                              0.0)
+                                              0.0, benchmark_returns=bench)
         for pb, ps in zip(base.portfolios, sl0.portfolios):
             for k in pb.metrics:
                 self.assertTrue(np.isclose(pb.metrics[k], ps.metrics[k]),

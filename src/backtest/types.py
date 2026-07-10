@@ -40,6 +40,23 @@ class MethodResults:
     def mean_sharpe(self) -> float:
         return float(self.sharpe_ratios.mean())
 
+    @property
+    def information_ratios(self) -> np.ndarray:
+        """Per-portfolio OOS information ratio vs the benchmark; NaN where the
+        metric predates schema v5 or the benchmark was missing that window."""
+        return np.array(
+            [p.metrics.get('information_ratio', np.nan)
+             for p in self.portfolios],
+            dtype=float,
+        )
+
+    @property
+    def mean_ir(self) -> float:
+        """Finite-filtered mean IR (avoids the all-NaN nanmean warning)."""
+        vals = self.information_ratios
+        finite = vals[np.isfinite(vals)]
+        return float(finite.mean()) if finite.size else float('nan')
+
 
 @dataclass
 class WindowResult:

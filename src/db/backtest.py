@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 from typing import Any, Optional
 
@@ -68,7 +69,7 @@ def save_backtest_result(conn: sqlite3.Connection, session_id: int,
 
     metrics: dict with keys 'annualised_return', 'annualised_volatility',
              'sharpe_ratio', 'downside_deviation', 'max_drawdown',
-             'calmar_ratio', 'sortino_ratio'
+             'calmar_ratio', 'sortino_ratio', 'information_ratio'
     holdings: optional list of (ticker_symbol, weight) tuples
     exchange: exchange code for resolving ticker symbols (default 'US').
     """
@@ -77,14 +78,20 @@ def save_backtest_result(conn: sqlite3.Connection, session_id: int,
         holdings_json = json.dumps(
             [{'ticker': t, 'weight': float(w)} for t, w in holdings]
         )
+    # NaN means "benchmark unavailable for this window" — store as NULL so
+    # SQL aggregates skip it (sqlite would coerce NaN to NULL anyway; be
+    # explicit).
+    ir = metrics.get('information_ratio')
+    if ir is not None and math.isnan(ir):
+        ir = None
     with conn:
         cur = conn.execute(
             """INSERT INTO backtest_results (
                 session_id, category, portfolio_index,
                 annualised_return, annualised_volatility, sharpe_ratio,
                 downside_deviation, max_drawdown, calmar_ratio, sortino_ratio,
-                holdings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                information_ratio, holdings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id, category, index,
                 metrics.get('annualised_return'),
@@ -94,6 +101,7 @@ def save_backtest_result(conn: sqlite3.Connection, session_id: int,
                 metrics.get('max_drawdown'),
                 metrics.get('calmar_ratio'),
                 metrics.get('sortino_ratio'),
+                ir,
                 holdings_json,
             ),
         )

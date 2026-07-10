@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 METRIC_NAMES = [
     'annualised_return', 'annualised_volatility', 'sharpe_ratio',
     'downside_deviation', 'max_drawdown', 'calmar_ratio', 'sortino_ratio',
+    'information_ratio',
 ]
 
 # Module-level state set before spawning worker pools.
@@ -323,13 +324,33 @@ def run_portfolio(portfolio, weights, oos_log_returns):
     return portfolio_returns
 
 
-def get_statistics(portfolio, weights, oos_log_returns):
+def _information_ratio(portfolio_returns, benchmark_arr):
+    """Annualised information ratio of a daily return series vs a benchmark.
+
+    IR = mean(active) * 252 / (std(active) * sqrt(252)) where
+    active = portfolio - benchmark, both daily log returns. The epsilon guard
+    makes a benchmark measured against itself exactly 0.0 (float noise from
+    run_portfolio's exp/log round-trip would otherwise produce a huge ratio
+    on a near-zero tracking error).
+    """
+    active = np.asarray(portfolio_returns, dtype=float) - benchmark_arr
+    te = np.std(active) * np.sqrt(TRADING_DAYS_PER_YEAR)
+    if te < 1e-12:
+        return 0.0
+    return float(np.mean(active) * TRADING_DAYS_PER_YEAR / te)
+
+
+def get_statistics(portfolio, weights, oos_log_returns, benchmark_returns=None):
     """
     Compute all performance metrics for one portfolio on an OOS window.
 
     :param portfolio: list of ticker strings.
     :param weights: weight allocations.
     :param oos_log_returns: OOS log returns DataFrame (dates x tickers).
+    :param benchmark_returns: optional benchmark daily log-return Series
+        (reindexed onto the OOS index, missing days flat). When provided the
+        information ratio vs this benchmark is computed; otherwise the
+        'information_ratio' metric is NaN.
     :return: dict keyed by metric name.
     """
     portfolio_returns = run_portfolio(portfolio, weights, oos_log_returns)
@@ -341,15 +362,22 @@ def get_statistics(portfolio, weights, oos_log_returns):
     r = np.mean(portfolio_returns) * TRADING_DAYS_PER_YEAR
     std = np.std(portfolio_returns) * np.sqrt(TRADING_DAYS_PER_YEAR)
     sharpe = r / std if std != 0 else 0.0
+    if benchmark_returns is not None:
+        bench = (benchmark_returns.reindex(oos_log_returns.index)
+                 .fillna(0.0).to_numpy())
+        ir = _information_ratio(portfolio_returns, bench)
+    else:
+        ir = float('nan')
     return dict(zip(METRIC_NAMES, [
         r, std, sharpe, dd, max_dd,
         calmar_ratio(r, max_dd),
         sortino_ratio(r, dd),
+        ir,
     ]))
 
 
 def get_statistics_with_sleeve(portfolio, weights, oos_log_returns,
-                               sleeve_returns, alpha):
+                               sleeve_returns, alpha, benchmark_returns=None):
     """Like :func:`get_statistics`, but blends a managed-futures sleeve return
     series into the book at the portfolio level::
 
@@ -365,6 +393,9 @@ def get_statistics_with_sleeve(portfolio, weights, oos_log_returns,
     :param oos_log_returns: OOS log returns DataFrame (dates x tickers).
     :param sleeve_returns: daily sleeve log-return Series (datetime index).
     :param alpha: fraction of the book allocated to the sleeve (0..1).
+    :param benchmark_returns: optional benchmark daily log-return Series; the
+        information ratio is computed on the *combined* series (that is what
+        the sleeved arm actually trades). NaN when omitted.
     :return: dict keyed by metric name (same shape as get_statistics).
     """
     book = run_portfolio(portfolio, weights, oos_log_returns)
@@ -377,16 +408,24 @@ def get_statistics_with_sleeve(portfolio, weights, oos_log_returns,
     r = np.mean(combined) * TRADING_DAYS_PER_YEAR
     std = np.std(combined) * np.sqrt(TRADING_DAYS_PER_YEAR)
     sharpe = r / std if std != 0 else 0.0
+    if benchmark_returns is not None:
+        bench = (benchmark_returns.reindex(oos_log_returns.index)
+                 .fillna(0.0).to_numpy())
+        ir = _information_ratio(combined, bench)
+    else:
+        ir = float('nan')
     return dict(zip(METRIC_NAMES, [
         r, std, sharpe, dd, max_dd,
         calmar_ratio(r, max_dd),
         sortino_ratio(r, dd),
+        ir,
     ]))
 
 
 def evaluate_portfolios_with_sleeve(portfolios, weights_list, oos_log_returns,
                                     train_log_returns, category,
-                                    sleeve_returns, alpha):
+                                    sleeve_returns, alpha,
+                                    benchmark_returns=None):
     """:func:`evaluate_portfolios` variant that blends the sleeve into both the
     OOS metrics and the in-sample Sharpe, so DSR / IS-OOS degradation / PBO stay
     consistent with what the sleeved arm actually traded.
@@ -398,12 +437,15 @@ def evaluate_portfolios_with_sleeve(portfolios, weights_list, oos_log_returns,
     :param sleeve_returns: full-history sleeve log-return Series; reindexed
         internally onto both the OOS and the training index.
     :param alpha: fraction of the book allocated to the sleeve (0..1).
+    :param benchmark_returns: optional benchmark daily log-return Series for
+        the OOS information ratio (train-side stats stay benchmark-less).
     :return: MethodResults object.
     """
     prs = []
     for p, w in zip(portfolios, weights_list):
         metrics = get_statistics_with_sleeve(
-            p, w, oos_log_returns, sleeve_returns, alpha)
+            p, w, oos_log_returns, sleeve_returns, alpha,
+            benchmark_returns=benchmark_returns)
         try:
             is_stats = get_statistics_with_sleeve(
                 p, w, train_log_returns, sleeve_returns, alpha)
@@ -454,7 +496,7 @@ def create_random_portfolios(columns, num_portfolios, min_securities=None,
 
 
 def evaluate_portfolios(portfolios, weights_list, oos_log_returns,
-                        train_log_returns, category):
+                        train_log_returns, category, benchmark_returns=None):
     """
     Evaluate a set of portfolios and return a MethodResults object.
 
@@ -463,11 +505,14 @@ def evaluate_portfolios(portfolios, weights_list, oos_log_returns,
     :param oos_log_returns: OOS log returns DataFrame (dates x tickers).
     :param train_log_returns: training-period log returns for IS Sharpe.
     :param category: category name for the MethodResults.
+    :param benchmark_returns: optional benchmark daily log-return Series for
+        the OOS information ratio (train-side stats stay benchmark-less).
     :return: MethodResults object.
     """
     prs = []
     for p, w in zip(portfolios, weights_list):
-        metrics = get_statistics(p, w, oos_log_returns)
+        metrics = get_statistics(p, w, oos_log_returns,
+                                 benchmark_returns=benchmark_returns)
         try:
             is_stats = get_statistics(p, w, train_log_returns)
             is_sr = is_stats['sharpe_ratio']

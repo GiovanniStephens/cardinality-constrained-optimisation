@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     max_drawdown          REAL,
     calmar_ratio          REAL,
     sortino_ratio         REAL,
+    information_ratio     REAL,  -- nullable: legacy rows predate the IR metric (schema v5)
     holdings_json         TEXT,
     UNIQUE(session_id, category, portfolio_index)
 );
@@ -197,7 +198,7 @@ DEFAULT_EXCHANGES = [
     ('ASX', 'Australian Securities Exchange', 'AU'),
 ]
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _migrate_to_1(conn: sqlite3.Connection) -> None:
@@ -233,11 +234,23 @@ def _migrate_to_4(conn: sqlite3.Connection) -> None:
         pass  # column already exists
 
 
+def _migrate_to_5(conn: sqlite3.Connection) -> None:
+    """Add a (nullable) information_ratio column to backtest_results — the
+    annualised OOS information ratio vs SPY (beta-1/IR experiment, July 2026).
+    Legacy rows stay NULL; new backtest runs populate it for every method."""
+    try:
+        conn.execute(
+            "ALTER TABLE backtest_results ADD COLUMN information_ratio REAL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 MIGRATIONS = {
     1: _migrate_to_1,
     2: _migrate_to_2,
     3: _migrate_to_3,
     4: _migrate_to_4,
+    5: _migrate_to_5,
 }
 
 

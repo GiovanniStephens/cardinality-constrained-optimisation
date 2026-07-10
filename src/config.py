@@ -346,6 +346,19 @@ BACKTEST_SLEEVE_BASE_METHODS = (
     'cc_copulae', 'cc_equal_weight', 'cc_inverse_vol', 'mc_optimised',
 )
 
+# ─── Beta-1 / information-ratio experiment (July 2026, research) ─────────────
+# "Can we beat the market at the market's own risk level?" (Crack, Scientific
+# Investments — factor tilting at beta 1). Registers a cc_beta1 arm: max-Sharpe
+# SLSQP on the GA baskets subject to an exact portfolio-beta equality vs the
+# benchmark, with betas measured on the TRAIN slice only. The information
+# ratio (annualised mean/std of portfolio − benchmark daily log returns, OOS)
+# is computed for ALL arms unconditionally — bench_spy's IR ≈ 0 is the
+# built-in sanity check. Only the cc_beta1 ARM is gated: default runs are
+# behaviour-identical apart from the extra information_ratio metric column.
+BACKTEST_RUN_BETA1_STRATEGY = False
+BACKTEST_BETA1_TARGET = 1.0     # exact beta pin (clamped per-basket if unreachable)
+BACKTEST_IR_BENCHMARK = 'SPY'   # benchmark for the IR metric AND the beta pin
+
 # ─── Combinatorially Purged CV (López de Prado 2018) ────────────────────────
 # Used by `python -m src.backtest --mode cpcv`. With 12 years of data and
 # n_groups=12, k=2 → C(12,2)=66 splits. Smaller n_groups = fewer splits but

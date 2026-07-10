@@ -84,11 +84,14 @@ def friedman_test(all_results: List[WindowResult], categories):
     return friedmanchisquare(*arrays)
 
 
-def aggregate_cross_window(all_results: List[WindowResult]):
+def aggregate_cross_window(all_results: List[WindowResult],
+                           metric_attr: str = 'mean_sharpe'):
     """
-    Build a summary table of mean Sharpe per method per window.
+    Build a summary table of a per-method metric per window.
 
     :param all_results: list of WindowResult objects.
+    :param metric_attr: MethodResults property to aggregate
+        ('mean_sharpe' default; 'mean_ir' for the information ratio).
     :return: DataFrame with methods as rows, windows + mean + std as columns.
     """
     data = {}
@@ -102,7 +105,7 @@ def aggregate_cross_window(all_results: List[WindowResult]):
         values = []
         for wr in all_results:
             if cat in wr.method_results:
-                val = wr.method_results[cat].mean_sharpe
+                val = getattr(wr.method_results[cat], metric_attr)
                 row[wr.window.label] = val
                 values.append(val)
             else:

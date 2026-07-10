@@ -340,6 +340,73 @@ class TestGetStatistics(unittest.TestCase):
         self.assertAlmostEqual(stats['sortino_ratio'], ann_r / ann_dd, places=8)
 
 
+class TestInformationRatio(unittest.TestCase):
+    """OOS information ratio vs a benchmark (beta-1/IR experiment)."""
+
+    def _frame(self, n=252, seed=3):
+        rng = np.random.default_rng(seed)
+        dates = pd.bdate_range('2020-01-01', periods=n, freq='B')
+        return pd.DataFrame({
+            'A': rng.normal(0.0006, 0.012, n),
+            'B': rng.normal(0.0002, 0.008, n),
+            'SPY': rng.normal(0.0004, 0.010, n),
+        }, index=dates)
+
+    def test_ir_matches_manual_computation(self):
+        oos = self._frame()
+        tickers, weights = ['A', 'B'], np.array([0.6, 0.4])
+        stats = backtest.get_statistics(tickers, weights, oos,
+                                        benchmark_returns=oos['SPY'])
+        port = np.asarray(backtest.run_portfolio(tickers, weights, oos))
+        active = port - oos['SPY'].to_numpy()
+        expected = (np.mean(active) * 252) / (np.std(active) * np.sqrt(252))
+        self.assertAlmostEqual(stats['information_ratio'], expected, places=10)
+
+    def test_ir_nan_without_benchmark(self):
+        oos = self._frame()
+        stats = backtest.get_statistics(['A', 'B'], np.array([0.5, 0.5]), oos)
+        self.assertTrue(np.isnan(stats['information_ratio']))
+
+    def test_benchmark_vs_itself_is_zero(self):
+        # bench_spy's IR must be exactly 0.0 — the epsilon guard absorbs the
+        # float noise from run_portfolio's exp/log round-trip.
+        oos = self._frame()
+        stats = backtest.get_statistics(['SPY'], np.array([1.0]), oos,
+                                        benchmark_returns=oos['SPY'])
+        self.assertEqual(stats['information_ratio'], 0.0)
+
+    def test_sleeve_ir_computed_on_combined_series(self):
+        oos = self._frame()
+        tickers, weights = ['A', 'B'], np.array([0.6, 0.4])
+        sleeve = pd.Series(0.0005, index=oos.index)
+        stats = _sim.get_statistics_with_sleeve(
+            tickers, weights, oos, sleeve, 0.25,
+            benchmark_returns=oos['SPY'])
+        book = np.asarray(backtest.run_portfolio(tickers, weights, oos))
+        combined = 0.75 * book + 0.25 * sleeve.to_numpy()
+        active = combined - oos['SPY'].to_numpy()
+        expected = (np.mean(active) * 252) / (np.std(active) * np.sqrt(252))
+        self.assertAlmostEqual(stats['information_ratio'], expected, places=10)
+
+    def test_mean_ir_nan_safety(self):
+        from src.backtest.types import MethodResults, PortfolioResult
+
+        def _pr(ir):
+            return PortfolioResult(portfolio=['A'], weights=np.array([1.0]),
+                                   metrics={'sharpe_ratio': 1.0,
+                                            'information_ratio': ir})
+
+        mixed = MethodResults('m', [_pr(0.5), _pr(float('nan')), _pr(0.7)])
+        self.assertAlmostEqual(mixed.mean_ir, 0.6, places=10)
+        all_nan = MethodResults('m', [_pr(float('nan'))])
+        self.assertTrue(np.isnan(all_nan.mean_ir))
+        # Legacy portfolios without the key at all -> NaN, no KeyError.
+        legacy = MethodResults('m', [PortfolioResult(
+            portfolio=['A'], weights=np.array([1.0]),
+            metrics={'sharpe_ratio': 1.0})])
+        self.assertTrue(np.isnan(legacy.mean_ir))
+
+
 class TestPairedTTest(unittest.TestCase):
     """Tests for the paired t-test across windows."""
 

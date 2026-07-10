@@ -1,6 +1,8 @@
 """Unit tests for the database module (db.py)."""
 
 import json
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -709,6 +711,61 @@ class TestMigrateTo2(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row['sector'], 'Technology')
         self.assertEqual(row['category_group'], 'Equity')
+        conn.close()
+
+
+class TestMigrateTo5(unittest.TestCase):
+    """Test schema migration v5: information_ratio on backtest_results."""
+
+    def test_column_exists_on_fresh_db(self):
+        conn = db.get_connection(':memory:')
+        cols = [row[1] for row in
+                conn.execute("PRAGMA table_info(backtest_results)").fetchall()]
+        self.assertIn('information_ratio', cols)
+        conn.close()
+
+    def test_legacy_db_gains_column_on_connect(self):
+        # Manufacture a pre-v5 DB: create the schema, drop the column by
+        # rebuilding the table without it, and stamp the version back to 4.
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'legacy.db')
+            conn = db.get_connection(path)
+            conn.execute("ALTER TABLE backtest_results "
+                         "DROP COLUMN information_ratio")
+            conn.execute("DELETE FROM schema_version WHERE version = 5")
+            conn.commit()
+            conn.close()
+            conn = db.get_connection(path)   # migration re-applies
+            cols = [row[1] for row in conn.execute(
+                "PRAGMA table_info(backtest_results)").fetchall()]
+            self.assertIn('information_ratio', cols)
+            conn.close()
+
+    def test_ir_round_trip_and_nan_becomes_null(self):
+        conn = db.get_connection(':memory:')
+        session_id = db.save_backtest_session(conn, {
+            'data_source': 'test', 'num_portfolios': 1, 'num_days_oos': 10,
+        })
+        base = {'annualised_return': 0.1, 'annualised_volatility': 0.2,
+                'sharpe_ratio': 0.5}
+        db.save_backtest_result(
+            conn, session_id, 'cc_beta1', 0,
+            metrics={**base, 'information_ratio': 0.42})
+        db.save_backtest_result(
+            conn, session_id, 'cc_beta1', 1,
+            metrics={**base, 'information_ratio': float('nan')})
+        db.save_backtest_result(
+            conn, session_id, 'legacy_method', 0, metrics=base)
+        rows = conn.execute(
+            "SELECT category, portfolio_index, information_ratio "
+            "FROM backtest_results ORDER BY category, portfolio_index"
+        ).fetchall()
+        by_key = {(r['category'], r['portfolio_index']):
+                  r['information_ratio'] for r in rows}
+        self.assertAlmostEqual(by_key[('cc_beta1', 0)], 0.42, places=10)
+        self.assertIsNone(by_key[('cc_beta1', 1)])
+        self.assertIsNone(by_key[('legacy_method', 0)])
         conn.close()
 
 

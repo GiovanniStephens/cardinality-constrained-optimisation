@@ -17,7 +17,11 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.data_loading import load_data
-from src.returns import calculate_log_returns, calculate_expected_returns
+from src.returns import (
+    calculate_log_returns,
+    calculate_expected_returns,
+    calculate_asset_betas,
+)
 from src.metrics import (
     compute_method_dsr,
     effective_trials_for_method,
@@ -35,6 +39,10 @@ from src.config import (
     BACKTEST_RUN_FORECAST_COPULA_STRATEGIES,
     BACKTEST_RUN_SLEEVE_STRATEGIES,
     BACKTEST_SLEEVE_BASE_METHODS,
+    BACKTEST_RUN_BETA1_STRATEGY,
+    BACKTEST_BETA1_TARGET,
+    BACKTEST_IR_BENCHMARK,
+    BACKTEST_MAX_WEIGHT_FLOOR,
     TSMOM_ALPHAS,
     ISLAND_GA_NUM_GENERATIONS,
     TRADING_DAYS_PER_YEAR,
@@ -229,6 +237,16 @@ def evaluate_split(
     simulation._backtest_expected_returns = calculate_expected_returns(
         log_returns_train)
 
+    # OOS benchmark returns for the information-ratio metric. Same guard
+    # pattern as the bench_spy arm: skip (IR = NaN) when the benchmark is
+    # missing from the window's data.
+    if BACKTEST_IR_BENCHMARK in oos_log_returns.columns:
+        spy_oos = oos_log_returns[BACKTEST_IR_BENCHMARK]
+    else:
+        logger.info("  %s missing from OOS data — information ratio skipped "
+                    "for this window", BACKTEST_IR_BENCHMARK)
+        spy_oos = None
+
     # -- Create GA portfolios --------------------------------------------------
     logger.info("  Creating %d GA portfolios...", num_portfolios)
     start = time.time()
@@ -401,7 +419,8 @@ def evaluate_split(
     for cat_name, portfolios, mode in categories:
         result.method_results[cat_name] = evaluate_portfolios(
             category_portfolios[cat_name], category_weights[cat_name],
-            oos_log_returns, train_log_returns, cat_name)
+            oos_log_returns, train_log_returns, cat_name,
+            benchmark_returns=spy_oos)
 
     # -- Managed-futures sleeve overlay arms (research experiment) -------------
     # Blend a precomputed, full-history TSMOM sleeve into the best-travelling
@@ -428,7 +447,8 @@ def evaluate_split(
                     arm = f"{base_cat}_trend{int(round(a * 100))}"
                     result.method_results[arm] = evaluate_portfolios_with_sleeve(
                         category_portfolios[base_cat], category_weights[base_cat],
-                        oos_log_returns, train_log_returns, arm, sleeve_series, a)
+                        oos_log_returns, train_log_returns, arm, sleeve_series, a,
+                        benchmark_returns=spy_oos)
 
     # -- Market-benchmark strategies -------------------------------------------
     # Fixed-allocation portfolios that bypass the GA + SLSQP pipeline. Skipped
@@ -443,7 +463,8 @@ def evaluate_split(
             continue
         result.method_results[bench_cat] = evaluate_portfolios(
             [bench_tickers], [bench_weights],
-            oos_log_returns, train_log_returns, bench_cat)
+            oos_log_returns, train_log_returns, bench_cat,
+            benchmark_returns=spy_oos)
 
     result.elapsed_seconds = time.time() - window_start
 
@@ -469,22 +490,24 @@ def evaluate_split(
                 dsr_info = None
             if dsr_info is None:
                 logger.info(
-                    "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  degradation=%.0f%%",
-                    cat, mean_is, mean_oos, degradation)
+                    "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  "
+                    "degradation=%.0f%%  IR=%+.3f",
+                    cat, mean_is, mean_oos, degradation, mr.mean_ir)
             else:
                 result.dsr_per_method[cat] = dsr_info
                 gate = ('PASS' if dsr_info['dsr'] >= 0.95 else
                         'WEAK' if dsr_info['dsr'] >= 0.5 else 'FAIL')
                 logger.info(
                     "    %-25s  IS_sharpe=%.4f  OOS_sharpe=%.4f  "
-                    "degradation=%.0f%%  DSR=%.3f [%s] (M=%.1e, n=%d)",
-                    cat, mean_is, mean_oos, degradation,
+                    "degradation=%.0f%%  IR=%+.3f  DSR=%.3f [%s] (M=%.1e, n=%d)",
+                    cat, mean_is, mean_oos, degradation, mr.mean_ir,
                     dsr_info['dsr'], gate,
                     dsr_info['num_trials'], dsr_info['num_obs'])
             warn_if_sharpe_suspicious(mean_is, f"Window {label} {cat} IS", logger)
         else:
-            logger.info("    %-25s  OOS_sharpe=%.4f  std=%.4f",
-                         cat, mr.mean_sharpe, mr.sharpe_ratios.std())
+            logger.info("    %-25s  OOS_sharpe=%.4f  std=%.4f  IR=%+.3f",
+                         cat, mr.mean_sharpe, mr.sharpe_ratios.std(),
+                         mr.mean_ir)
 
     return result
 
@@ -573,6 +596,12 @@ def _report_results(all_results: List[WindowResult]) -> None:
     logger.info("CROSS-WINDOW SUMMARY")
     summary_df = aggregate_cross_window(all_results)
     logger.info("\n%s", summary_df.to_string())
+
+    logger.info("=" * 60)
+    logger.info("CROSS-WINDOW INFORMATION RATIO SUMMARY (vs %s; "
+                "bench_spy ~ 0 is the sanity check)", BACKTEST_IR_BENCHMARK)
+    ir_df = aggregate_cross_window(all_results, metric_attr='mean_ir')
+    logger.info("\n%s", ir_df.to_string())
 
     comparisons = [
         ('CC optimised vs Random random',  'cc_optimised', 'random_random'),
@@ -781,6 +810,7 @@ def _report_cpcv_results(all_results: List[WindowResult]) -> None:
 
     per_method_is = {m: [] for m in methods}
     per_method_oos = {m: [] for m in methods}
+    per_method_ir = {m: [] for m in methods}
 
     for i, wr in enumerate(all_results):
         for j, m in enumerate(methods):
@@ -799,6 +829,8 @@ def _report_cpcv_results(all_results: List[WindowResult]) -> None:
                 oos_at_is_best[i, j] = oos_sharpes[best_idx]
             per_method_is[m].append(is_sharpes[best_idx])
             per_method_oos[m].append(mr.mean_sharpe)
+            if np.isfinite(mr.mean_ir):
+                per_method_ir[m].append(mr.mean_ir)
 
     # Method-level PBO.
     logger.info("=" * 60)
@@ -843,3 +875,19 @@ def _report_cpcv_results(all_results: List[WindowResult]) -> None:
             "(n=%d)",
             m, s.mean_oos, s.std_oos,
             s.ci95_oos_low, s.ci95_oos_high, len(per_method_oos[m]))
+
+    # Per-method OOS information-ratio distributions (vs the IR benchmark;
+    # bench_spy ~ 0 is the sanity check). Splits where the benchmark was
+    # missing contribute nothing (finite-filtered at collection).
+    logger.info("Per-method OOS information ratio vs %s (across %d splits):",
+                BACKTEST_IR_BENCHMARK, n_splits)
+    for m in methods:
+        vals = per_method_ir[m]
+        if not vals:
+            continue
+        mean_ir = float(np.mean(vals))
+        std_ir = float(np.std(vals))
+        half = 1.96 * std_ir / np.sqrt(len(vals)) if len(vals) > 1 else 0.0
+        logger.info(
+            "  %-25s  IR_mean=%+.4f  std=%.4f  95%%CI=[%+.4f, %+.4f]  (n=%d)",
+            m, mean_ir, std_ir, mean_ir - half, mean_ir + half, len(vals))
