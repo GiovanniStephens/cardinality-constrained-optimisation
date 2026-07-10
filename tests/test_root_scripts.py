@@ -21,6 +21,8 @@ ROOT_SCRIPTS = [
     'run_leverage_analysis',
     'run_sleeve_experiment',
     'sleeve_reality_check',
+    'run_beta1_experiment',
+    'beta1_reality_check',
     'curate_universe',
     'build_dedup_map',
 ]
