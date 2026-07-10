@@ -232,5 +232,66 @@ class TestEvaluateWindow(unittest.TestCase):
                               f"Portfolio in {cat} missing sharpe_ratio")
 
 
+class TestCleanUsPriceFrame(unittest.TestCase):
+    """Phantom non-NYSE dates must not distort the backtest frame.
+
+    July 2026 incident: foreign dot-suffix listings trade on European
+    calendars, and a cohort of ordinary US ETFs carries junk Sunday/holiday
+    rows — together they inflated the union date index enough to push SPY
+    itself below the 95%% coverage cut.
+    """
+
+    def _frame(self):
+        # 100 NYSE business days; a foreign listing carrying 8 Saturdays; a
+        # junk-data US ETF carrying 6 Sundays and a mid-week holiday row that
+        # SPY (correctly) lacks. SPY covers all business days except that
+        # holiday; the junk columns have better raw coverage — the trap.
+        bdays = pd.bdate_range('2020-01-06', periods=100, freq='B')
+        holiday = pd.Timestamp('2020-04-10')          # Good Friday
+        bdays_open = bdays.drop(holiday)
+        saturdays = pd.date_range('2020-01-11', periods=8, freq='7D')
+        sundays = pd.date_range('2020-01-12', periods=6, freq='7D')
+        full = bdays.union(saturdays).union(sundays)
+        rng = np.random.default_rng(1)
+        df = pd.DataFrame(index=full)
+        df['SPY'] = pd.Series(100 + rng.normal(0, 1, len(bdays_open)).cumsum(),
+                              index=bdays_open)
+        df['US1'] = pd.Series(50 + rng.normal(0, 1, len(bdays_open)).cumsum(),
+                              index=bdays_open)
+        junk_idx = bdays.union(sundays)               # trades "every day"
+        df['JUNK'] = pd.Series(30 + rng.normal(0, 1, len(junk_idx)).cumsum(),
+                               index=junk_idx)
+        df['AGEB.PA'] = 20 + rng.normal(0, 1, len(full)).cumsum()
+        return df, holiday
+
+    def test_foreign_columns_and_phantom_dates_dropped(self):
+        from src.backtest.runner import clean_us_price_frame
+        df, holiday = self._frame()
+        cleaned = clean_us_price_frame(df)
+        self.assertNotIn('AGEB.PA', cleaned.columns)
+        self.assertIn('SPY', cleaned.columns)   # survives the coverage cut
+        self.assertIn('US1', cleaned.columns)
+        # Weekend rows gone, and the holiday row (junk-only) gone via the
+        # SPY calendar anchor.
+        self.assertTrue(cleaned.index.dayofweek.max() <= 4)
+        self.assertNotIn(holiday, cleaned.index)
+
+    def test_anchor_absent_still_cleans_weekends(self):
+        from src.backtest.runner import clean_us_price_frame
+        df, holiday = self._frame()
+        cleaned = clean_us_price_frame(df.drop(columns=['SPY']))
+        self.assertTrue(cleaned.index.dayofweek.max() <= 4)
+        # Without the anchor the holiday row survives — documented limit.
+        self.assertIn(holiday, cleaned.index)
+
+    def test_spy_dropped_without_cleaning_sanity(self):
+        # The incident shape: on the raw union index SPY's coverage is
+        # 99/114 < 95%, so the plain coverage filter would drop it.
+        df, _ = self._frame()
+        thresh = int(0.95 * len(df))
+        survivors = df.dropna(axis=1, thresh=thresh).columns
+        self.assertNotIn('SPY', survivors)
+
+
 if __name__ == '__main__':
     unittest.main()

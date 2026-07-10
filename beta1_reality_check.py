@@ -32,8 +32,6 @@ from src.config import (
     BACKTEST_IR_BENCHMARK,
     BACKTEST_MAX_WEIGHT_FLOOR,
     CPP_BINARY_PATH,
-    DATA_FFILL_LIMIT,
-    DATA_MIN_COVERAGE,
     ISLAND_GA_MIGRATION_INTERVAL,
     ISLAND_GA_MIGRATION_RATE,
     ISLAND_GA_MIN_SECURITIES,
@@ -61,17 +59,15 @@ GENERATIONS = 200   # not a search-quality benchmark
 
 def _load_prices():
     """Full-history US prices, cleaned the way the backtest runner cleans."""
+    from src.backtest.runner import load_backtest_frame
     conn = db.get_connection()
     try:
-        data = db.load_prices(conn, exchange='US')
+        data = load_backtest_frame(conn)
     finally:
         conn.close()
     if data.empty:
         raise SystemExit("No price data in the DB — run `make refresh` first.")
-    data.index = pd.to_datetime(data.index)
-    data = data.sort_index()
-    data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-    return data.ffill(limit=DATA_FFILL_LIMIT)
+    return data
 
 
 def _run_ga_top_k(log_returns, top_k=TOP_K):

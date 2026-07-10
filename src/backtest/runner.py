@@ -559,6 +559,72 @@ def evaluate_split(
 # ---- Main --------------------------------------------------------------------
 
 
+def clean_us_price_frame(data, calendar_anchor='SPY'):
+    """Clean a wide US price frame for backtesting.
+
+    Discovered July 2026 (by the beta-1 experiment's Stage-0 check): the DB
+    carries phantom non-NYSE dates — foreign dot-suffix listings trade on
+    European calendars, and a large cohort of ordinary US ETFs has junk
+    Sunday/US-holiday rows from a bad download path. On the polluted union
+    index SPY itself fell to 88% coverage and was silently dropped by the
+    95% cut (losing the bench_spy arm and the IR benchmark), every US ticker
+    picked up a zero log return on ~8% of days after ffill (vol damped,
+    Sharpe inflated), and the coverage filter was biased TOWARD the European
+    listings causing the problem. Cleaning order, all before coverage is
+    measured:
+
+    1. Drop foreign dot-suffix columns (production liquidity-filter rule:
+       Yahoo US symbols never contain '.').
+    2. Drop weekend rows — never a US session.
+    3. Anchor the calendar on ``calendar_anchor`` (SPY, the protected core
+       watchlist ticker): within its own first/last valid range, a date it
+       lacks is not a real NYSE session (catches holiday junk rows). Dates
+       outside its range are kept, so a stale anchor only stops policing the
+       tail, never truncates the frame.
+    """
+    data = data.sort_index()
+    us_cols = [c for c in data.columns if '.' not in c]
+    n_foreign = data.shape[1] - len(us_cols)
+    data = data[us_cols]
+    n_rows = len(data)
+    data = data.dropna(axis=0, how='all')
+    data = data[data.index.dayofweek < 5]
+    if calendar_anchor in data.columns:
+        anchor = data[calendar_anchor]
+        lo, hi = anchor.first_valid_index(), anchor.last_valid_index()
+        in_range = (data.index >= lo) & (data.index <= hi)
+        data = data[~in_range | anchor.notna().values]
+    n_phantom = n_rows - len(data)
+    if n_foreign or n_phantom:
+        logger.info(
+            "Dropped %d foreign dot-suffix listings and %d phantom "
+            "non-NYSE dates (weekend/holiday junk rows)",
+            n_foreign, n_phantom)
+    data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
+    return data.ffill(limit=DATA_FFILL_LIMIT)
+
+
+def load_backtest_frame(conn):
+    """Load + clean the US price frame for backtesting (CSV fallback).
+
+    The loader's own coverage pre-filter runs at a RELAXED 0.80, not the
+    0.95 research standard: it measures coverage against the raw union date
+    index, which still contains the phantom non-NYSE dates that
+    :func:`clean_us_price_frame` removes (~12% of dates in the July 2026
+    DB) — at 0.95 the polluted denominator silently dropped SPY itself
+    inside the loader. The relaxed pass just culls the dead mass of the
+    universe cheaply; the true DATA_MIN_COVERAGE gate runs inside
+    clean_us_price_frame on the cleaned NYSE calendar.
+    """
+    from src import db
+    data = db.load_prices(conn, exchange='US', min_coverage=0.80)
+    if data.empty:
+        logger.info("No data in DB, falling back to CSV")
+        return load_data(NZ_ETF_PRICES_CSV)
+    data.index = pd.to_datetime(data.index)
+    return clean_us_price_frame(data)
+
+
 def main():
     from src import db
 
@@ -566,15 +632,7 @@ def main():
 
     # -- Load prices from DB (CSV fallback) ------------------------------------
     conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_data(NZ_ETF_PRICES_CSV)
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
+    data = load_backtest_frame(conn)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 
     # -- Generate rolling windows ----------------------------------------------
@@ -744,15 +802,7 @@ def main_cpcv(n_groups: Optional[int] = None,
 
     # Load and clean (mirror main()).
     conn = db.get_connection()
-    data = db.load_prices(conn, exchange='US')
-    if data.empty:
-        logger.info("No data in DB, falling back to CSV")
-        data = load_data(NZ_ETF_PRICES_CSV)
-    else:
-        data.index = pd.to_datetime(data.index)
-        data = data.sort_index()
-        data = data.dropna(axis=1, thresh=int(DATA_MIN_COVERAGE * len(data)))
-        data = data.ffill(limit=DATA_FFILL_LIMIT)
+    data = load_backtest_frame(conn)
     logger.info("Loaded price data: %d rows x %d columns", *data.shape)
 
     splits = generate_cpcv_splits(
