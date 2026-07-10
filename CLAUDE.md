@@ -264,6 +264,7 @@ The `--gpu` flag enables Metal compute shader fitness evaluation on Apple Silico
 1. **Trust the health check, not the summary.** A refresh isn't done until `make health-check` shows `✅ all core tickers current`. The "Totals: X saved" line can be green while `SPY` silently never refreshed.
 2. **The bad-ticker cache can blacklist good tickers.** `known_bad_tickers` skips failed tickers on every run. Now mitigated: `core_etfs.csv` is protected (never skipped), entries expire after 30 days (`PIPELINE_BAD_TICKER_TTL_DAYS`), and it takes 3 failures (`PIPELINE_BAD_CACHE_MIN_FAILURES`) to skip. Inspect with `sqlite3 data/portfolio.db "SELECT * FROM known_bad_tickers WHERE symbol='SPY'"`; bypass with `--ignore-bad-cache`.
 3. **A full refresh takes hours** (Yahoo throttles the proxy; the ~36k universe is mostly dead/foreign tickers). More workers won't help — capped at 24 and throttle-bound. Incremental refresh now promotes correctly (min_history skipped on staging; prod re-validated post-promotion).
+4. **The DB contains phantom non-NYSE dates — never measure coverage against the raw union date index.** Foreign dot-suffix listings trade on European calendars, and a large cohort of ordinary US ETFs carries junk Sunday/US-holiday rows (~330 tickers, ~27 dates/yr) from a bad download path. Found July 2026: on the polluted index SPY read 88% coverage and was silently dropped by BOTH 95% filters (inside `db.load_prices` and the backtest runner's), losing the bench_spy arm; US tickers also picked up zero log returns on ~8% of days after ffill (vol damped, Sharpe inflated). The backtest path now cleans this via `runner.load_backtest_frame` → `clean_us_price_frame` (drop dot-suffix columns, weekend rows, non-sessions via a SPY calendar anchor) — but the junk rows are still IN the DB; any new consumer of `db.load_prices` must either reuse that helper or reckon with the polluted index. Root-cause cleanup (delete the junk rows / fix the download path) is still open.
 
 ## Conventions
 
@@ -594,6 +595,15 @@ pin-binding + in-sample pinned-vs-free contrast; a plumbing gate, NOT the verdic
 walk-forward IR is regime-inflated). **Verdict: pending the CPCV run.** Priors to test
 against: the long-only OOS ceiling ~1.0–1.2 Sharpe, and DeMiguel/Crack-style expectations
 that a beta-1 tilt earns IR ~0.2–0.5 gross if selection adds anything at all.
+
+**Stage-0 result (2026-07-10): PASS.** On 30 reduced-fidelity GA baskets over full
+history: beta 1.0 exactly reachable on 27/30 (clamps: 0.99, 0.99, 0.81); SLSQP bound the
+equality on 30/30; unpinned max-Sharpe books sat at mean beta **+0.26** (the low-beta
+drift the pin corrects); in-sample the pin cost ~nothing (median IS Sharpe 1.12 pinned vs
+1.09 free) and *raised* IS IR (+1.04 vs +0.89 — beta alignment removes benchmark-mismatch
+tracking error). In-sample levels are inflated as always; the pinned-vs-free contrast is
+the informative part. Side discovery: the first Stage-0 run exposed the phantom
+non-NYSE-dates data bug (see Data-refresh gotcha 4).
 
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
