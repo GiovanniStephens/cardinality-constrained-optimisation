@@ -366,9 +366,38 @@ def evaluate_split(
                  'optimal_arima_garch_copula'),
             ])
 
+    # -- Beta-1 / information-ratio experiment arm (research, default off) -----
+    # Max-Sharpe on the GA baskets with the portfolio beta pinned to
+    # BACKTEST_BETA1_TARGET vs the IR benchmark. Betas come from the TRAIN
+    # slice only (no look-ahead). GA selection is beta-unaware and drifts
+    # low-beta, so per basket the reachable beta interval is computed
+    # analytically and the target clamped to it — the clamp count in the
+    # summary log line is itself a result.
+    beta1_betas = None
+    beta1_clamped = []      # bool per cc_beta1 task, in task order
+    beta1_task_betas = []   # per-basket beta vector, in task order
+    if BACKTEST_RUN_BETA1_STRATEGY:
+        if BACKTEST_IR_BENCHMARK in log_returns_train.columns:
+            beta1_betas = calculate_asset_betas(
+                log_returns_train, log_returns_train[BACKTEST_IR_BENCHMARK])
+            categories.append(('cc_beta1', ga_portfolios, 'optimal_beta1'))
+        else:
+            logger.info("  Skipping cc_beta1 — %s missing from training data",
+                        BACKTEST_IR_BENCHMARK)
+
     def _kwargs_for(mode, portfolio):
         """Build the per-task kwargs dict for the given mode + portfolio."""
         portfolio = list(portfolio)
+        if mode == 'optimal_beta1':
+            from src.weights import reachable_beta_interval
+            b = beta1_betas.loc[portfolio].values.astype(float)
+            # Mirror the per-portfolio cap in simulation._resolve_subset_and_er.
+            max_w = max(1 / (len(portfolio) - 1), BACKTEST_MAX_WEIGHT_FLOOR)
+            reach_lo, reach_hi = reachable_beta_interval(b, max_w)
+            target = float(np.clip(BACKTEST_BETA1_TARGET, reach_lo, reach_hi))
+            beta1_clamped.append(target != BACKTEST_BETA1_TARGET)
+            beta1_task_betas.append(b)
+            return {'betas': b, 'target_beta': target}
         if mode == 'optimal_ccc':
             return {'var': hist_var_series.loc[portfolio]}
         if mode == 'optimal_arima_er':
@@ -415,6 +444,21 @@ def evaluate_split(
 
     for (cat_name, idx), w in zip(task_metadata, all_weights):
         category_weights[cat_name].append(w)
+
+    # cc_beta1 feasibility summary: how often the target was reachable and
+    # where the optimised books actually landed. pool.map preserves task
+    # order, so category_weights['cc_beta1'][i] aligns with
+    # beta1_task_betas[i]. An achieved beta far from the (clamped) target
+    # means SLSQP fell back to 1/N — visible here by construction.
+    if 'cc_beta1' in category_weights and beta1_task_betas:
+        achieved = [float(np.dot(b, w)) for b, w in
+                    zip(beta1_task_betas, category_weights['cc_beta1'])]
+        logger.info(
+            "  cc_beta1 feasibility: %d baskets, %d clamped (target %.2f "
+            "unreachable), achieved beta mean=%.3f min=%.3f max=%.3f",
+            len(achieved), sum(beta1_clamped), BACKTEST_BETA1_TARGET,
+            float(np.mean(achieved)), float(np.min(achieved)),
+            float(np.max(achieved)))
 
     for cat_name, portfolios, mode in categories:
         result.method_results[cat_name] = evaluate_portfolios(
@@ -613,6 +657,9 @@ def _report_results(all_results: List[WindowResult]) -> None:
         ('CC ccc-baseline vs CC optimised', 'cc_optimised', 'cc_ccc_baseline'),
         ('CC optimised vs SPY',            'cc_optimised', 'bench_spy'),
         ('CC optimised vs 60/40',          'cc_optimised', 'bench_6040'),
+        # Beta-1/IR experiment arm (only fires when cc_beta1 was run).
+        ('CC beta1 vs SPY',                'bench_spy',    'cc_beta1'),
+        ('CC beta1 vs CC optimised',       'cc_optimised', 'cc_beta1'),
     ]
     # Base vs +trend25 sleeve overlay (only fire when the sleeve arms exist).
     for base in BACKTEST_SLEEVE_BASE_METHODS:

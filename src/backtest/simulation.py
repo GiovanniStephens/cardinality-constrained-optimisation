@@ -140,6 +140,40 @@ def _max_sharpe_weights(portfolio, *, use_copulae=False,
     return result['x']
 
 
+def _beta1_weights(portfolio, *, asset_betas, target_beta):
+    """SLSQP max-Sharpe weights with the portfolio beta pinned exactly.
+
+    Beta-1/IR experiment arm: same objective and covariance as
+    :func:`_max_sharpe_weights` (Ledoit-Wolf), plus the linear equality
+    ``sum(w * beta) == target_beta``. Starts from the vertex-blend point on
+    the target hyperplane (see :func:`src.weights.beta_target_start`) —
+    starting SLSQP infeasible on an equality is the main
+    non-convergence→1/N-fallback risk. The caller is expected to have clamped
+    ``target_beta`` into the reachable interval for these bounds.
+
+    :param portfolio: list of ticker strings.
+    :param asset_betas: per-asset betas vs the IR benchmark, aligned with
+        ``portfolio`` order (train-slice, no look-ahead).
+    :param target_beta: the (possibly clamped) beta pin.
+    """
+    subset, er, max_weight = _resolve_subset_and_er(portfolio)
+    cov = _resolve_cov_matrix(subset)
+
+    from src.weights import optimise_weights, beta_target_start
+    betas = np.asarray(asset_betas, dtype=float)
+    x0 = beta_target_start(betas, target_beta, max_weight)
+    result = optimise_weights(
+        expected_returns=er, cov_matrix=cov,
+        max_weight=max_weight,
+        initial_weights=x0,
+        asset_betas=betas, target_beta=target_beta,
+    )
+    if not result.success:
+        logger.warning("Beta-pinned weight optimisation did not converge: %s",
+                       result.message)
+    return result['x']
+
+
 def _min_variance_weights(portfolio, *, use_copulae=False,
                           forecast_variances=None):
     """SLSQP min-variance weights (objective = wᵀΣw, ER ignored)."""
@@ -583,6 +617,10 @@ def _compute_weights_for_portfolio(args):
         return _risk_parity_weights(portfolio)
     if mode == 'max_diversification':
         return _max_diversification_weights(portfolio)
+    if mode == 'optimal_beta1':
+        return _beta1_weights(
+            portfolio, asset_betas=kwargs['betas'],
+            target_beta=kwargs['target_beta'])
     if mode == 'optimal_arima_er':
         return _max_sharpe_weights(
             portfolio, expected_returns_override=kwargs['er'])

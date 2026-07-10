@@ -111,6 +111,23 @@ class TestDispatchRoutesModes(unittest.TestCase):
     def test_optimal_ccc_mode(self):
         self._check('optimal_ccc', {'var': self.var_series})
 
+    def test_optimal_beta1_mode(self):
+        """Beta-pinned mode: dispatch works AND the pin binds exactly."""
+        from src.weights import reachable_beta_interval
+        lr = simulation._backtest_log_returns.transpose()
+        betas_all = (lr.apply(lambda col: col.cov(lr[self.portfolio[0]]))
+                     / lr[self.portfolio[0]].var()).fillna(0.0)
+        b = betas_all.loc[self.portfolio].values.astype(float)
+        max_w = max(1 / (len(self.portfolio) - 1), 0.3)
+        lo, hi = reachable_beta_interval(b, max_w)
+        target = float(np.clip(1.0, lo, hi))  # clamp as the runner does
+        w = _compute_weights_for_portfolio(
+            (self.portfolio, 'optimal_beta1',
+             {'betas': b, 'target_beta': target}))
+        self.assertEqual(len(w), len(self.portfolio))
+        self.assertAlmostEqual(float(np.sum(w)), 1.0, places=3)
+        self.assertAlmostEqual(float(np.dot(b, w)), target, places=4)
+
     def test_min_variance_mode(self):
         self._check('min_variance', {})
 
