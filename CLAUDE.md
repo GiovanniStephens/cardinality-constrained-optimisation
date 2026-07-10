@@ -82,12 +82,12 @@ tests/                       # Unit and integration tests
 ├── __init__.py
 ├── helpers.py               # Shared test utilities + base classes (BaseDBTest, BaseTmpDirTest, OptimiserTestMixin)
 ├── test_optimisers.py       # Tests for optimisation algorithms (+ copula strict/fallback)
-├── test_backtest.py         # Tests for backtest module (simulation invariants, statistics)
+├── test_backtest.py         # Tests for backtest module (simulation invariants, statistics, IR metric)
 ├── test_backtest_runner.py  # Tests for src/backtest/runner.py
-├── test_backtest_simulation_modes.py # Tests for the weight-mode dispatch in simulation
+├── test_backtest_simulation_modes.py # Tests for the weight-mode dispatch in simulation (incl. optimal_beta1)
 ├── test_cpcv.py             # Tests for CPCV splits, purging, PBO
-├── test_db.py               # Tests for database module
-├── test_portfolio_utils.py  # Tests for portfolio utilities (+ beta-floor constraint)
+├── test_db.py               # Tests for database module (incl. v5 information_ratio migration)
+├── test_portfolio_utils.py  # Tests for portfolio utilities (+ beta floor/pin constraints, reachable-beta interval)
 ├── test_securities.py       # Tests for security universe/download
 ├── test_forecast.py         # Tests for ARIMA/GARCH forecasting
 ├── test_forecast_cache.py   # Tests for the full-history sleeve/forecast cache
@@ -147,6 +147,8 @@ run_throughput_benchmark.py  # research: CLI entry point for throughput benchmar
 run_leverage_analysis.py     # research: margin-leverage sizing (July 2026 verdict: don't lever)
 run_sleeve_experiment.py     # research: trend-sleeve A/B arms over the backtest runner
 sleeve_reality_check.py      # research: synthetic sleeve vs real CTA ETFs (DBMF corr check)
+run_beta1_experiment.py      # research: beta-1/IR arm over the backtest runner (July 2026, IN PROGRESS)
+beta1_reality_check.py       # research: Stage-0 beta-pin feasibility + IS IR diagnostic
 curate_universe.py           # SHELVED experiment: curated universe (tested June 2026, backfired)
 build_dedup_map.py           # SHELVED experiment: ETF dedup map for curation
 Makefile                     # Build automation (install, test, build-cpp, clean)
@@ -555,6 +557,44 @@ fantasy it replaced; OOS estimate ~1.19). Every rebalance run now persists its f
 config + git-commit record and the deployable blend, so this book is auditable next
 quarter.
 
+### Beta-1 / information-ratio experiment (July 2026, IN PROGRESS — verdict pending)
+
+**The question** (Crack, *Scientific Investments* — factor tilting at beta 1): pin the
+portfolio to **beta = 1.0 vs SPY** and measure the **information ratio** OOS — can
+selection add alpha while holding exactly the market's risk level? This reframes the
+book: instead of the absolute-return profile the Sharpe objective drifts toward (see
+Lesson 13 — unconstrained books sit at beta ~0.07), the beta-1 book is SPY plus a
+long-only active tilt, and IR = annualised mean/std of (book − SPY) daily log returns
+scores only the tilt.
+
+**Machinery** (all default-off; default runs are behaviour-identical apart from the new
+`information_ratio` metric column):
+- `cc_beta1` arm: max-Sharpe SLSQP on the GA baskets with the pin enforced via the
+  `target_beta` equality in `weights.optimise_weights` (beta is linear in weights — one
+  more linear equality beside the budget constraint, same currency-of-the-objective
+  principle as the beta floor in Lesson 13). Betas come from the **train slice only**.
+- Feasibility first: GA selection is beta-unaware and drifts low-beta, so the runner
+  computes each basket's analytically reachable beta interval
+  (`weights.reachable_beta_interval`, greedy LP vertices) and clamps the target into it;
+  SLSQP starts from the vertex-blend point exactly on the target hyperplane
+  (`weights.beta_target_start`) so the equality never starts infeasible. The per-window
+  `cc_beta1 feasibility:` log line (clamp count + achieved-beta distribution) is itself
+  a result — a high clamp rate means beta-1 books are outside the GA's natural habitat.
+- The IR metric is computed for **every** arm (schema v5 `information_ratio` column,
+  NaN→NULL), so cc_beta1 is judged against the whole family's same-window IR;
+  `bench_spy` printing IR = 0.000 exactly is the built-in sanity check. Sharpe remains
+  the ranking/PBO metric.
+- Config: `BACKTEST_RUN_BETA1_STRATEGY` (gate), `BACKTEST_BETA1_TARGET = 1.0`,
+  `BACKTEST_IR_BENCHMARK = 'SPY'`.
+
+**How to run**: `python beta1_reality_check.py` first (Stage-0, minutes — feasibility +
+pin-binding + in-sample pinned-vs-free contrast; a plumbing gate, NOT the verdict), then
+`python run_beta1_experiment.py` (walk-forward pre-check) and
+`python run_beta1_experiment.py --mode cpcv` for the trusted verdict (Lesson 5:
+walk-forward IR is regime-inflated). **Verdict: pending the CPCV run.** Priors to test
+against: the long-only OOS ceiling ~1.0–1.2 Sharpe, and DeMiguel/Crack-style expectations
+that a beta-1 tilt earns IR ~0.2–0.5 gross if selection adds anything at all.
+
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
 The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):
@@ -598,21 +638,24 @@ python -m src.backtest --mode cpcv \
     --purge-days 10 --embargo-days 10           # Tighter purge/embargo for stronger leakage guards
 ```
 
-Per-window log format includes DSR gating:
+Per-window log format includes DSR gating and (since July 2026) the information
+ratio vs SPY:
 ```
 Window 2014-2018/2018 results (294s):
-  cc_optimised   IS_sharpe=+2.41  OOS_sharpe=+2.41  degradation=0%  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
-  cc_copulae     IS_sharpe=+2.39  OOS_sharpe=+3.04  degradation=-27%  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
+  cc_optimised   IS_sharpe=+2.41  OOS_sharpe=+2.41  degradation=0%  IR=+0.312  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
+  cc_copulae     IS_sharpe=+2.39  OOS_sharpe=+3.04  degradation=-27%  IR=+0.451  DSR=1.000 [PASS] (M=3.6e+07, n=1260)
   ...
 ```
+(`bench_spy` printing `IR=+0.000` is the built-in sanity check for the metric.)
 
-CPCV `_report_cpcv_results` prints: per-method OOS mean + 95% CI across splits, plus method-level PBO.
+CPCV `_report_cpcv_results` prints: per-method OOS mean + 95% CI across splits, a
+matching per-method IR mean + 95% CI block, plus method-level PBO (Sharpe-based).
 
 ## Database
 
 All optimisation results, backtest metrics, and data provenance are stored in `data/portfolio.db` (SQLite). CSVs remain for backward compatibility.
 
-### Schema (13 tables, `SCHEMA_VERSION = 4`)
+### Schema (13 tables, `SCHEMA_VERSION = 5`)
 
 | Table | Purpose |
 |-------|---------|
@@ -626,7 +669,7 @@ All optimisation results, backtest metrics, and data provenance are stored in `d
 | `optimisation_runs` | GA/MIP/Monte Carlo run parameters and results |
 | `portfolio_holdings` | ETF selections + weights per optimisation run |
 | `backtest_sessions` | One row per backtest execution |
-| `backtest_results` | Per-portfolio metrics within a backtest session |
+| `backtest_results` | Per-portfolio metrics within a backtest session (v5 added nullable `information_ratio`; pre-v5 rows are NULL) |
 | `backtest_holdings` | Per-portfolio holdings within a backtest session |
 | `known_bad_tickers` | Failed-download cache (TTL'd; core watchlist protected) |
 
