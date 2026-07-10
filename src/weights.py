@@ -83,7 +83,7 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
                      minimize_variance=False,
                      group_constraints=None, group_membership=None,
                      selected_tickers=None,
-                     asset_betas=None, min_beta=None):
+                     asset_betas=None, min_beta=None, target_beta=None):
     """SLSQP weight optimisation for a portfolio.
 
     Can be called in two modes:
@@ -129,6 +129,13 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         a market-participation floor the Sharpe objective cannot satisfy with
         low-covariance look-alikes (unlike name-based category minimums).
     :param min_beta: if set (with ``asset_betas``), minimum portfolio beta.
+    :param target_beta: if set (with ``asset_betas``), pins the portfolio beta
+        exactly: equality constraint ``sum(w * beta) == target_beta``. Since
+        beta is linear in weights this is just a second linear equality
+        alongside the budget constraint. Callers should verify the target is
+        reachable (see :func:`reachable_beta_interval`) and start from a
+        feasible point on the hyperplane, or SLSQP may fail into the
+        equal-weight fallback.
     :return: scipy.optimize.OptimizeResult with optimised weights in .x
     """
     from scipy.optimize import minimize
@@ -187,6 +194,12 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
             'fun': lambda x, _b=np.asarray(asset_betas, dtype=float):
                 np.dot(_b, x) - min_beta,
         })
+    if target_beta is not None and asset_betas is not None:
+        constraints.append({
+            'type': 'eq',
+            'fun': lambda x, _b=np.asarray(asset_betas, dtype=float):
+                np.dot(_b, x) - target_beta,
+        })
     if target_return is not None and target_risk is None:
         constraints.append({
             'type': 'eq',
@@ -242,3 +255,73 @@ def optimise_weights(selection_vector=None, data=None, min_weight=0.0,
         result.x = np.ones(n) / n
         result.fun = objective(result.x)
     return result
+
+
+def greedy_beta_vertex(asset_betas, max_weight, min_weight=0.0, maximise=True):
+    """Extreme point of portfolio beta over the box + simplex.
+
+    Portfolio beta ``b·w`` is linear in the weights, so its maximum (minimum)
+    over ``{w : min_weight <= w_i <= max_weight, sum(w) = 1}`` sits at an LP
+    vertex: give every asset the floor, then pour the remaining budget into
+    assets in descending (ascending) beta order up to the cap.
+
+    :param asset_betas: per-asset betas (array-like, aligned with the weights).
+    :param max_weight: per-asset weight cap.
+    :param min_weight: per-asset weight floor (0 on the backtest path).
+    :param maximise: True for the highest reachable beta, False for the lowest.
+    :return: tuple ``(portfolio_beta, weights)`` at the vertex.
+    """
+    b = np.asarray(asset_betas, dtype=float)
+    n = b.size
+    if n * max_weight < 1.0 - 1e-12:
+        raise ValueError(
+            f"Infeasible bounds: {n} assets * max_weight {max_weight} < 1.")
+    w = np.full(n, min_weight, dtype=float)
+    budget = 1.0 - n * min_weight
+    if budget < -1e-12:
+        raise ValueError(
+            f"Infeasible bounds: {n} assets * min_weight {min_weight} > 1.")
+    order = np.argsort(b)
+    if maximise:
+        order = order[::-1]
+    headroom = max_weight - min_weight
+    for i in order:
+        add = min(headroom, budget)
+        w[i] += add
+        budget -= add
+        if budget <= 1e-15:
+            break
+    return float(np.dot(b, w)), w
+
+
+def reachable_beta_interval(asset_betas, max_weight, min_weight=0.0):
+    """Range of portfolio betas achievable under the box + simplex constraints.
+
+    :return: tuple ``(lowest, highest)`` reachable portfolio beta.
+    """
+    lo, _ = greedy_beta_vertex(asset_betas, max_weight, min_weight,
+                               maximise=False)
+    hi, _ = greedy_beta_vertex(asset_betas, max_weight, min_weight,
+                               maximise=True)
+    return lo, hi
+
+
+def beta_target_start(asset_betas, target_beta, max_weight, min_weight=0.0):
+    """Feasible SLSQP starting point exactly on the ``b·w = target`` hyperplane.
+
+    Blends the two beta-extreme vertices: beta is linear in w, so the convex
+    combination ``(1-λ)·w_lo + λ·w_hi`` stays inside the box + simplex and hits
+    any target inside the reachable interval exactly. Targets outside the
+    interval land on the nearest vertex (callers should clamp the target
+    first — an unreachable equality cannot converge).
+
+    :return: weight vector on (or nearest to) the target hyperplane.
+    """
+    b_lo, w_lo = greedy_beta_vertex(asset_betas, max_weight, min_weight,
+                                    maximise=False)
+    b_hi, w_hi = greedy_beta_vertex(asset_betas, max_weight, min_weight,
+                                    maximise=True)
+    if b_hi - b_lo <= 1e-12:
+        return w_lo
+    lam = float(np.clip((target_beta - b_lo) / (b_hi - b_lo), 0.0, 1.0))
+    return (1.0 - lam) * w_lo + lam * w_hi

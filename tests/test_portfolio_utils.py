@@ -39,6 +39,9 @@ from src.weights import (
     calculate_portfolio_return,
     calculate_risk_contribution,
     risk_budget_objective,
+    greedy_beta_vertex,
+    reachable_beta_interval,
+    beta_target_start,
 )
 
 
@@ -748,6 +751,92 @@ class TestOptimiseWeightsBetaFloor(unittest.TestCase):
                                asset_betas=betas, min_beta=0.5)
         self.assertTrue(res.success)
         self.assertGreaterEqual(float(betas @ res.x), 0.5 - 1e-6)
+
+
+class TestOptimiseWeightsBetaPin(unittest.TestCase):
+    """target_beta/asset_betas: exact beta equality (beta-1/IR experiment)."""
+
+    def test_pin_binds_from_below(self):
+        # Sharpe prefers the near-zero-vol beta-0 asset; the pin drags the
+        # book up to beta 1 exactly.
+        er = np.array([0.10, 0.10])
+        cov = np.array([[0.04, 0.0], [0.0, 0.0001]])
+        betas = np.array([2.0, 0.0])
+        x0 = beta_target_start(betas, 1.0, max_weight=1.0)
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               initial_weights=x0,
+                               asset_betas=betas, target_beta=1.0)
+        self.assertTrue(res.success)
+        self.assertAlmostEqual(float(betas @ res.x), 1.0, places=5)
+
+    def test_pin_binds_from_above(self):
+        # Sharpe prefers the high-beta asset (higher ER, same vol); the pin
+        # drags the book down to beta 1 exactly.
+        er = np.array([0.20, 0.02])
+        cov = np.array([[0.04, 0.0], [0.0, 0.04]])
+        betas = np.array([1.5, 0.5])
+        x0 = beta_target_start(betas, 1.0, max_weight=1.0)
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               initial_weights=x0,
+                               asset_betas=betas, target_beta=1.0)
+        self.assertTrue(res.success)
+        self.assertAlmostEqual(float(betas @ res.x), 1.0, places=5)
+
+    def test_target_beta_without_betas_is_ignored(self):
+        er = np.array([0.10, 0.10])
+        cov = np.array([[0.04, 0.0], [0.0, 0.0001]])
+        res = optimise_weights(expected_returns=er, cov_matrix=cov,
+                               target_beta=1.0)
+        self.assertTrue(res.success)
+        self.assertLess(res.x[0], 0.05)
+
+
+class TestReachableBetaInterval(unittest.TestCase):
+    """Greedy LP vertices for the reachable portfolio-beta range."""
+
+    def test_exact_interval(self):
+        # max_weight 0.3: highest = 0.3*1.2 + 0.3*1.0 + 0.3*0.4 + 0.1*0.2 = 0.80
+        #                 lowest  = 0.3*0.2 + 0.3*0.4 + 0.3*1.0 + 0.1*1.2 = 0.60
+        betas = np.array([1.2, 1.0, 0.4, 0.2])
+        lo, hi = reachable_beta_interval(betas, max_weight=0.3)
+        self.assertAlmostEqual(lo, 0.60, places=10)
+        self.assertAlmostEqual(hi, 0.80, places=10)
+
+    def test_vertex_weights_valid(self):
+        betas = np.array([1.5, 0.9, 0.3, -0.2, 0.7])
+        for maximise in (True, False):
+            _, w = greedy_beta_vertex(betas, max_weight=0.3,
+                                      maximise=maximise)
+            self.assertAlmostEqual(float(w.sum()), 1.0, places=10)
+            self.assertTrue(np.all(w >= -1e-12))
+            self.assertTrue(np.all(w <= 0.3 + 1e-12))
+
+    def test_min_weight_floor_respected(self):
+        betas = np.array([1.0, 0.5, 0.0])
+        beta, w = greedy_beta_vertex(betas, max_weight=0.5, min_weight=0.1,
+                                     maximise=True)
+        self.assertTrue(np.all(w >= 0.1 - 1e-12))
+        self.assertAlmostEqual(float(w.sum()), 1.0, places=10)
+        # 0.5 on beta-1.0, 0.4 on beta-0.5, 0.1 on beta-0.0 = 0.70
+        self.assertAlmostEqual(beta, 0.70, places=10)
+
+    def test_infeasible_bounds_raise(self):
+        with self.assertRaises(ValueError):
+            greedy_beta_vertex(np.array([1.0, 0.5]), max_weight=0.4)
+
+    def test_start_hits_target_exactly(self):
+        betas = np.array([1.2, 1.0, 0.4, 0.2])
+        for target in (0.62, 0.70, 0.79):
+            w = beta_target_start(betas, target, max_weight=0.3)
+            self.assertAlmostEqual(float(betas @ w), target, places=10)
+            self.assertAlmostEqual(float(w.sum()), 1.0, places=10)
+            self.assertTrue(np.all(w >= -1e-12))
+            self.assertTrue(np.all(w <= 0.3 + 1e-12))
+
+    def test_start_clamps_unreachable_target(self):
+        betas = np.array([1.2, 1.0, 0.4, 0.2])
+        w = beta_target_start(betas, 1.5, max_weight=0.3)
+        self.assertAlmostEqual(float(betas @ w), 0.80, places=10)
 
 
 class TestOptimiseWeightsEdgeCases(unittest.TestCase):
