@@ -147,7 +147,7 @@ run_throughput_benchmark.py  # research: CLI entry point for throughput benchmar
 run_leverage_analysis.py     # research: margin-leverage sizing (July 2026 verdict: don't lever)
 run_sleeve_experiment.py     # research: trend-sleeve A/B arms over the backtest runner
 sleeve_reality_check.py      # research: synthetic sleeve vs real CTA ETFs (DBMF corr check)
-run_beta1_experiment.py      # research: beta-1/IR arm over the backtest runner (July 2026, IN PROGRESS)
+run_beta1_experiment.py      # research: beta-1/IR arm (July 2026 verdict: no edge at market risk — Lesson 14)
 beta1_reality_check.py       # research: Stage-0 beta-pin feasibility + IS IR diagnostic
 curate_universe.py           # SHELVED experiment: curated universe (tested June 2026, backfired)
 build_dedup_map.py           # SHELVED experiment: ETF dedup map for curation
@@ -559,7 +559,7 @@ fantasy it replaced; OOS estimate ~1.19). Every rebalance run now persists its f
 config + git-commit record and the deployable blend, so this book is auditable next
 quarter.
 
-### Beta-1 / information-ratio experiment (July 2026, IN PROGRESS — verdict pending)
+### Beta-1 / information-ratio experiment (July 2026, CONCLUDED — no edge at market risk)
 
 **The question** (Crack, *Scientific Investments* — factor tilting at beta 1): pin the
 portfolio to **beta = 1.0 vs SPY** and measure the **information ratio** OOS — can
@@ -591,11 +591,11 @@ scores only the tilt.
 
 **How to run**: `python beta1_reality_check.py` first (Stage-0, minutes — feasibility +
 pin-binding + in-sample pinned-vs-free contrast; a plumbing gate, NOT the verdict), then
-`python run_beta1_experiment.py` (walk-forward pre-check) and
-`python run_beta1_experiment.py --mode cpcv` for the trusted verdict (Lesson 5:
-walk-forward IR is regime-inflated). **Verdict: pending the CPCV run.** Priors to test
-against: the long-only OOS ceiling ~1.0–1.2 Sharpe, and DeMiguel/Crack-style expectations
-that a beta-1 tilt earns IR ~0.2–0.5 gross if selection adds anything at all.
+`python run_beta1_experiment.py` (walk-forward) and
+`python run_beta1_experiment.py --mode cpcv` if a tighter CI is ever wanted (Lesson 5:
+walk-forward IR is regime-inflated). Priors tested against: the long-only OOS ceiling
+~1.0–1.2 Sharpe, and DeMiguel/Crack-style expectations that a beta-1 tilt earns IR
+~0.2–0.5 gross if selection adds anything at all.
 
 **Stage-0 result (2026-07-10): PASS.** On 30 reduced-fidelity GA baskets over full
 history: beta 1.0 exactly reachable on 27/30 (clamps: 0.99, 0.99, 0.81); SLSQP bound the
@@ -618,12 +618,33 @@ concentrated in narrow mega-cap-led windows (H2-2021 −1.60, H1-2023 −1.91) �
 diversified-tilt-vs-cap-weighted-benchmark signature, in the most cap-concentrated OOS
 period on record. Feasibility held throughout (clamp rate 0–12/30, achieved beta
 0.976–1.000). Fidelity note: 8000-pop GA, 30 portfolios/method, forecast arms off;
-per-window results in DB sessions of 2026-07-10. **CPCV deliberately NOT run**: it
-exists to deflate apparent edges, and there is no edge to deflate — run it only if a
-tight CI on "zero" is ever worth ~10h. Consistent with Crack/DeMiguel: a data-mined
-(non-factor) tilt with ~1 bet/window of breadth earns nothing vs the market; the
-Crack-style follow-up, if ever wanted, is a beta-1 book built from deliberate factor
-exposures, not GA selection.
+per-window results in DB sessions of 2026-07-10. **Power caveat (be honest when
+quoting this):** with 14 windows and per-window std ≈ 1.0, the 95% CI on the mean IR is
+roughly **[−0.6, +0.5]** — the test convincingly rules out a LARGE edge and puts the
+point estimate at zero, but cannot distinguish zero from a modest Crack-sized IR of
+±0.3. The claim is "no detectable edge, and the optimistic estimator found none", not
+"alpha is exactly zero". **CPCV deliberately NOT run**: it exists to deflate apparent
+edges, and there is no edge to deflate — run it only if tightening that CI is ever
+worth ~10h. Consistent with Crack/DeMiguel: a data-mined (non-factor) tilt with ~1
+bet/window of breadth earns nothing vs the market; the Crack-style follow-up, if ever
+wanted, is a beta-1 book built from deliberate factor exposures (value/momentum/
+quality/low-vol ETFs), not GA selection — the pin + IR machinery here is the ready-made
+harness for that test.
+
+**14. Pin beta before comparing anything to a benchmark — and expect zero from
+data-mined selection at market risk.** The two durable lessons from this experiment:
+(a) an IR (or any "vs SPY") comparison without matching beta mostly measures the beta
+bet, not selection — the unpinned methods' IRs (−0.55 to −1.06) were ~90% beta-mismatch
+drag from the Sharpe objective's low-beta drift (Lesson 13's mechanism, quantified),
+and even *random selection* out-IR'd the optimised books because random baskets carry
+more beta. (b) Once beta is matched, GA selection added nothing — exactly what the
+fundamental law of active management predicts (IR = IC × √breadth; one selection bet
+per window on 10–15 correlated ETFs is almost no breadth). Corollary for the production
+book: its lag vs SPY is beta (deliberately, floor 0.50 + MF sleeve), not bad selection,
+and its yardstick is Sharpe/diversification — never quote its IR vs SPY as a failure.
+An IR of ~0 also isn't harmless: it means tracking risk taken without compensation; for
+any beta-1 slice of a risk budget, the index is the honest holding unless a tilt has a
+priced-factor reason to exist.
 
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
