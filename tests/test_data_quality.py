@@ -193,6 +193,15 @@ class TestValidateUniverse(_BaseQualityTest):
 class TestPhantomDateDetection(_BaseQualityTest):
     """Report-only phantom-date check inside validate_universe (July 2026)."""
 
+    def _save_clean(self, symbol='CLEAN', n=25):
+        """Seed prices on NYSE-closure-free business days (plain freq='B'
+        would include New Year / MLK / Presidents Day — real phantom dates
+        the check must count, so the 'clean' fixture avoids them)."""
+        dates = pd.bdate_range('2020-03-02', periods=n)  # pre-Good-Friday
+        df = pd.DataFrame({symbol: [100.0 + i for i in range(n)]},
+                          index=dates)
+        db.save_prices(self.conn, df, exchange='US', asset_type='stock')
+
     def _pollute(self, symbol='CLEAN'):
         """Insert a junk Sunday row directly (bypassing the save guard, as
         the pre-fix promotion path did)."""
@@ -204,13 +213,13 @@ class TestPhantomDateDetection(_BaseQualityTest):
         self.conn.commit()
 
     def test_clean_db_reports_zero(self):
-        self._save('CLEAN', [100.0 + i for i in range(50)])
+        self._save_clean()
         summary = dq.validate_universe(self.conn, exchange='US', dry_run=True)
         self.assertEqual(summary['phantom_weekend_rows'], 0)
         self.assertEqual(summary['phantom_holiday_rows'], 0)
 
     def test_polluted_db_reports_but_never_excludes(self):
-        self._save('CLEAN', [100.0 + i for i in range(50)])
+        self._save_clean()
         self._pollute()
         with self.assertLogs('src.data_quality', level='WARNING') as cm:
             summary = dq.validate_universe(self.conn, exchange='US',

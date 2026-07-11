@@ -795,6 +795,8 @@ class TestPhantomDates(unittest.TestCase):
         self.assertIn('2025-01-09', closures)   # Carter closure
         self.assertIn('2014-12-25', closures)
         self.assertIn('2022-06-20', closures)   # Juneteenth observed (Mon)
+        self.assertIn('2021-12-24', closures)   # Christmas 2021 obs. Friday
+        self.assertNotIn('2021-12-31', closures)  # Sat Jan 1: NYSE stays OPEN
         self.assertNotIn('2021-06-18', closures)  # pre-2022: NYSE open
         self.assertNotIn('2019-10-14', closures)  # Columbus Day: NYSE open
         self.assertNotIn('2019-11-11', closures)  # Veterans Day: NYSE open
@@ -852,7 +854,11 @@ class TestPhantomDates(unittest.TestCase):
         self.assertEqual(n, 1)
         conn.close()
 
-    def test_purge_without_anchor_still_purges_weekends(self):
+    def test_purge_without_anchor_still_purges_everything(self):
+        # The closure calendar is authoritative; a missing anchor only
+        # disables the suspect-gap report (the anchor could not veto holiday
+        # deletions anyway — on the real DB SPY itself carried ffilled rows
+        # on 86 closure dates).
         conn = db.get_connection(':memory:')
         self._seed_polluted(conn)
         conn.execute(
@@ -861,7 +867,26 @@ class TestPhantomDates(unittest.TestCase):
         conn.commit()
         report = db.purge_phantom_rows(conn)
         self.assertEqual(report['weekend_rows'], 2)
-        self.assertEqual(report['holiday_rows'], 0)  # no anchor -> skipped
+        self.assertEqual(report['holiday_rows'], 1)
+        self.assertEqual(report['suspect_gaps'], [])
+        conn.close()
+
+    def test_purge_deletes_anchor_own_holiday_rows(self):
+        # SPY's own ffilled Christmas row must go too.
+        conn = db.get_connection(':memory:')
+        self._seed_polluted(conn)
+        spy_id = conn.execute(
+            "SELECT id FROM tickers WHERE symbol='SPY'").fetchone()[0]
+        conn.execute(
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close) "
+            "VALUES (?, '2019-12-25', 99.0)", (spy_id,))
+        conn.commit()
+        report = db.purge_phantom_rows(conn)
+        self.assertEqual(report['holiday_rows'], 2)  # ARKW + SPY Christmas
+        n = conn.execute(
+            "SELECT COUNT(*) FROM prices WHERE date='2019-12-25'"
+        ).fetchone()[0]
+        self.assertEqual(n, 0)
         conn.close()
 
 

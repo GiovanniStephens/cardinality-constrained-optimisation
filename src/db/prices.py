@@ -370,11 +370,13 @@ def _nyse_closure_dates(start: str, end: str) -> set[str]:
     """NYSE full-closure weekday dates between start and end (YYYY-MM-DD).
 
     Built from pandas' holiday primitives (no extra dependency): the
-    recurring NYSE holiday rules plus the special closures above. Known
-    approximation: ``nearest_workday`` observes a Saturday Jan 1 on the
-    preceding Dec 31, which the NYSE does not — callers must therefore treat
-    membership as necessary-but-not-sufficient and cross-check against an
-    anchor ticker before deleting anything (purge_phantom_rows does).
+    recurring NYSE holiday rules plus the special closures above. New Year
+    deliberately uses ``sunday_to_monday``, not ``nearest_workday``: when
+    Jan 1 falls on a Saturday the NYSE does NOT close the preceding Dec 31
+    (nearest_workday would wrongly claim e.g. 2021-12-31 closed); the
+    Saturday itself is a weekend date, which the weekend purge already
+    covers. Christmas / July 4 / Juneteenth keep ``nearest_workday`` — the
+    NYSE does observe those on the adjacent Friday/Monday.
     """
     from pandas.tseries.holiday import (
         AbstractHolidayCalendar,
@@ -386,11 +388,12 @@ def _nyse_closure_dates(start: str, end: str) -> set[str]:
         USPresidentsDay,
         USThanksgivingDay,
         nearest_workday,
+        sunday_to_monday,
     )
 
     class _NYSEClosures(AbstractHolidayCalendar):
         rules = [
-            Holiday('New Year', month=1, day=1, observance=nearest_workday),
+            Holiday('New Year', month=1, day=1, observance=sunday_to_monday),
             USMartinLutherKingJr,
             USPresidentsDay,
             GoodFriday,
@@ -427,12 +430,14 @@ def purge_phantom_rows(conn: sqlite3.Connection, exchange: str = 'US',
     listings keep their legitimate weekend/holiday sessions.
 
     * Weekend rows are deleted unconditionally (never a US session).
-    * NYSE-holiday weekday rows are deleted only when the date is BOTH in the
-      computed closure calendar AND absent from the ``anchor`` ticker's dates
-      (SPY trades every real session) — either signal alone is not trusted.
-    * Computed closures where the anchor HAS a row are reported as calendar
-      discrepancies; anchor-missing weekdays NOT in the calendar are reported
-      as suspect anchor gaps. Neither is deleted.
+    * Rows on computed NYSE-closure weekdays are deleted unconditionally too:
+      the calendar is authoritative for recurring holidays, and the anchor
+      cannot veto it — SPY itself carried ffilled rows on 86 of the closure
+      dates (its presence there IS the pollution). The one known calendar
+      false-positive (Saturday Jan 1) is handled by the sunday_to_monday
+      observance, and every closure-date deletion is listed in the report.
+    * Anchor-missing weekdays NOT in the calendar are reported as suspect
+      anchor gaps, never deleted.
 
     :param dry_run: report what would be deleted without touching the DB.
     :return: dict with counts and the report lists.
@@ -449,46 +454,52 @@ def purge_phantom_rows(conn: sqlite3.Connection, exchange: str = 'US',
         (exchange_id,)).fetchone()[0]
 
     # -- Category B: NYSE-closure weekday rows ------------------------------
+    date_range = conn.execute(
+        f"SELECT MIN(date), MAX(date) FROM prices "
+        f"WHERE ticker_id IN ({dotless})", (exchange_id,)).fetchone()
     anchor_dates = {r[0] for r in conn.execute(
         "SELECT DISTINCT p.date FROM prices p JOIN tickers t "
         "ON p.ticker_id = t.id WHERE t.symbol = ? AND t.exchange_id = ?",
         (anchor, exchange_id)).fetchall()}
     holiday_dates: list[str] = []
-    discrepancies: list[str] = []
     suspect_gaps: list[str] = []
     n_holiday = 0
-    if anchor_dates:
-        lo, hi = min(anchor_dates), max(anchor_dates)
+    if date_range and date_range[0]:
+        lo, hi = date_range
         closures = _nyse_closure_dates(lo, hi)
-        holiday_dates = sorted(closures - anchor_dates)
-        discrepancies = sorted(closures & anchor_dates)
-        # Weekday dates carried by dot-less tickers that the anchor lacks and
-        # the calendar cannot explain: suspect anchor data gaps. Report only.
-        candidate_rows = conn.execute(
-            f"SELECT DISTINCT date FROM prices WHERE ticker_id IN ({dotless}) "
-            "AND strftime('%w', date) NOT IN ('0','6') "
-            "AND date BETWEEN ? AND ?",
-            (exchange_id, lo, hi)).fetchall()
-        suspect_gaps = sorted(
-            d[0] for d in candidate_rows
-            if d[0] not in anchor_dates and d[0] not in closures)
-        if holiday_dates:
-            ph = ','.join('?' for _ in holiday_dates)
-            n_holiday = conn.execute(
-                f"SELECT COUNT(*) FROM prices WHERE ticker_id IN ({dotless}) "
-                f"AND date IN ({ph})",
-                (exchange_id, *holiday_dates)).fetchone()[0]
-    else:
-        logger.warning(
-            "purge_phantom_rows: anchor %s has no rows on %s — holiday "
-            "purge skipped, weekend purge still applies", anchor, exchange)
+        if closures:
+            ph = ','.join('?' for _ in closures)
+            hit_rows = conn.execute(
+                f"SELECT date, COUNT(*) FROM prices "
+                f"WHERE ticker_id IN ({dotless}) AND date IN ({ph}) "
+                "GROUP BY date",
+                (exchange_id, *sorted(closures))).fetchall()
+            holiday_dates = sorted(r[0] for r in hit_rows)
+            n_holiday = sum(r[1] for r in hit_rows)
+        # Weekday dates the anchor lacks that the calendar cannot explain:
+        # suspect anchor data gaps. Report only.
+        if anchor_dates:
+            a_lo, a_hi = min(anchor_dates), max(anchor_dates)
+            candidate_rows = conn.execute(
+                f"SELECT DISTINCT date FROM prices "
+                f"WHERE ticker_id IN ({dotless}) "
+                "AND strftime('%w', date) NOT IN ('0','6') "
+                "AND date BETWEEN ? AND ?",
+                (exchange_id, a_lo, a_hi)).fetchall()
+            suspect_gaps = sorted(
+                d[0] for d in candidate_rows
+                if d[0] not in anchor_dates and d[0] not in closures)
+        else:
+            logger.warning(
+                "purge_phantom_rows: anchor %s has no rows on %s — "
+                "anchor-gap report skipped", anchor, exchange)
 
     logger.info(
         "purge_phantom_rows%s: %d weekend rows; %d rows on %d NYSE-closure "
-        "dates; %d calendar discrepancies%s; %d suspect anchor-gap dates%s",
+        "dates%s; %d suspect anchor-gap dates%s",
         " (dry run)" if dry_run else "", n_weekend, n_holiday,
-        len(holiday_dates), len(discrepancies),
-        f" {discrepancies[:5]}" if discrepancies else "",
+        len(holiday_dates),
+        f" {holiday_dates[:5]}..." if holiday_dates else "",
         len(suspect_gaps), f" {suspect_gaps[:5]}" if suspect_gaps else "")
 
     if not dry_run:
@@ -508,7 +519,6 @@ def purge_phantom_rows(conn: sqlite3.Connection, exchange: str = 'US',
         'weekend_rows': n_weekend,
         'holiday_rows': n_holiday,
         'holiday_dates': holiday_dates,
-        'calendar_discrepancies': discrepancies,
         'suspect_gaps': suspect_gaps,
         'deleted': not dry_run,
     }
