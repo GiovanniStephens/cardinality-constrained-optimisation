@@ -123,6 +123,25 @@ the pipeline backs off (circuit breaker, 300s cooldowns, up to 600s inter-batch)
 More workers (`WORKERS=32`) is capped at `PIPELINE_MAX_WORKERS` (24) and rarely
 helps — throttling, not worker count, is the wall.
 
+**Validation warns about "phantom dates".** The July 2026 incident: for years,
+`promote_staging` asked `load_prices` for no forward-fill via `ffill_limit=None`,
+but pandas reads `limit=None` as *unlimited* fill — so every promotion stamped
+each US ticker's previous close onto its 200-ticker chunk-mates' trading days
+(Tel Aviv Sundays, Asian/European sessions on NYSE holidays). ~921k junk rows
+(all verified previous-close duplicates) accumulated; on the polluted union
+date index SPY itself read 88% coverage and silently fell out of the backtest
+frame. Fixed at the root (`load_prices` now treats falsy `ffill_limit` as no
+fill), guarded at write time (`save_prices` drops weekend-dated rows for
+US-listed symbols), detected on every validation run, and purged 2026-07-10.
+If the warning ever fires again:
+```bash
+python -m src.db purge-phantom-rows --dry-run   # inspect counts first
+python -m src.db purge-phantom-rows             # backs up, then deletes
+```
+And investigate what wrote the rows — the write guard means a recurrence
+implies a NEW writer path bypassing `save_prices`' weekend check (holiday rows
+especially: those are only caught by detection/purge, not at write time).
+
 ## Key config (`src/config.py`)
 
 | Constant | Default | Meaning |
