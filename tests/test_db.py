@@ -742,7 +742,6 @@ class TestPhantomDates(unittest.TestCase):
     def test_ffill_limit_none_does_not_fill(self):
         conn = db.get_connection(':memory:')
         self._seed(conn)
-        df = conn.execute("SELECT 1").fetchone()  # keep linters calm
         loaded = db.load_prices(conn, exchange='US', min_coverage=0,
                                 ffill_limit=None)
         # The union index contains the Sunday (Tel Aviv session); ARKW/SPY
