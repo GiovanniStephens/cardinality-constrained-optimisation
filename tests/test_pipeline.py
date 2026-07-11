@@ -243,6 +243,38 @@ class TestPromoteStaging(BaseTmpDirTest):
         self.assertEqual(promoted, 0)
         conn_prod.close()
 
+    def test_promote_is_verbatim_across_mixed_calendars(self):
+        """Promotion must not materialise fill rows onto other tickers'
+        trading days (July 2026 incident: ffill_limit=None reached pandas as
+        UNLIMITED fill, stamping US tickers' Friday closes onto chunk-mates'
+        Sunday/holiday sessions)."""
+        conn_staging = db.get_connection(self.staging_path)
+        weekdays = pd.to_datetime(['2024-01-08', '2024-01-09', '2024-01-10',
+                                   '2024-01-11', '2024-01-12'])
+        us = pd.DataFrame({'SPY': [100.0, 101, 102, 103, 104]},
+                          index=weekdays)
+        db.save_prices(conn_staging, us, exchange='US', asset_type='etf')
+        # A Tel Aviv listing trading Sunday 2024-01-14 in the same exchange
+        # table — the union index carries that date.
+        il = pd.DataFrame({'TEVA.TA': [30.0]},
+                          index=[pd.Timestamp('2024-01-14')])
+        db.save_prices(conn_staging, il, exchange='US', asset_type='etf')
+        conn_staging.close()
+
+        conn_prod = db.get_connection(self.prod_path)
+        promote_staging(self.staging_path, conn_prod, exchange='US')
+        spy_dates = sorted(r[0] for r in conn_prod.execute(
+            "SELECT date FROM prices p JOIN tickers t ON p.ticker_id=t.id "
+            "WHERE t.symbol='SPY'"))
+        self.assertEqual(spy_dates, [d.strftime('%Y-%m-%d')
+                                     for d in weekdays])
+        # The foreign listing's own Sunday session promotes intact.
+        teva_dates = [r[0] for r in conn_prod.execute(
+            "SELECT date FROM prices p JOIN tickers t ON p.ticker_id=t.id "
+            "WHERE t.symbol='TEVA.TA'")]
+        self.assertEqual(teva_dates, ['2024-01-14'])
+        conn_prod.close()
+
 
 class TestManifest(BaseTmpDirTest):
     """Test manifest writing."""

@@ -52,6 +52,31 @@ elif len(sys.argv) > 1 and sys.argv[1] == 'backfill-volume':
     backfill_volume(conn, asset_type=a.asset_type, period=a.period,
                     batch_size=a.batch_size, sleep=a.sleep)
     conn.close()
+elif len(sys.argv) > 1 and sys.argv[1] == 'purge-phantom-rows':
+    import argparse
+    from datetime import datetime as dt
+    from src.db.prices import purge_phantom_rows
+    p = argparse.ArgumentParser(
+        prog='python -m src.db purge-phantom-rows',
+        description='Delete phantom weekend/NYSE-holiday price rows for '
+                    'US-listed (dot-less) symbols. July 2026 incident: '
+                    'promotion materialised unlimited-ffill rows across '
+                    'mixed-calendar chunks.')
+    p.add_argument('--dry-run', action='store_true',
+                   help='report what would be deleted without touching the DB')
+    p.add_argument('--no-backup', action='store_true',
+                   help='skip the pre-purge database backup')
+    p.add_argument('--exchange', default='US')
+    a = p.parse_args(sys.argv[2:])
+    conn = get_connection()
+    if not a.dry_run and not a.no_backup:
+        from src.pipeline import backup_database
+        ts = dt.now().strftime('%Y%m%d_%H%M%S')
+        backup_path = f"{DB_PATH}.backup_{ts}"
+        backup_database(conn, backup_path)
+        logger.info("Pre-purge backup: %s", backup_path)
+    purge_phantom_rows(conn, exchange=a.exchange, dry_run=a.dry_run)
+    conn.close()
 else:
     # Create empty database with schema
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

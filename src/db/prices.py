@@ -74,14 +74,37 @@ def save_prices(conn: sqlite3.Connection, prices_df: pd.DataFrame,
         v = vol.at[date_str, symbol]
         return int(v) if pd.notna(v) else None
 
+    # Phantom-date guard (July 2026): no US listing trades on a weekend, so a
+    # weekend-dated row for a dot-less symbol is always junk (the historical
+    # source was promotion's unlimited ffill across mixed-calendar union
+    # indexes — see purge_phantom_rows). Foreign dot-suffix listings keep
+    # their legitimate weekend sessions (Tel Aviv trades Sundays); other
+    # exchanges are untouched. Holidays are deliberately not guarded here —
+    # data_quality detection covers them without calendar risk at write time.
+    weekend_dates = set()
+    if exchange == 'US':
+        idx_dt = pd.to_datetime(pd.Index(df.index), errors='coerce')
+        weekend_dates = {s for s, d in zip(df.index, idx_dt)
+                         if pd.notna(d) and d.dayofweek >= 5}
+
     # Build rows for bulk insert
     rows = []
+    n_weekend_skipped = 0
     for date_str in df.index:
+        weekend = date_str in weekend_dates
         for symbol in symbols:
+            if weekend and '.' not in symbol:
+                if pd.notna(df.at[date_str, symbol]):
+                    n_weekend_skipped += 1
+                continue
             val = df.at[date_str, symbol]
             if pd.notna(val):
                 rows.append((ticker_map[symbol], date_str, float(val),
                              _volume_at(date_str, symbol)))
+    if n_weekend_skipped:
+        logger.warning(
+            "save_prices: skipped %d weekend-dated rows for US-listed "
+            "symbols (phantom-date guard)", n_weekend_skipped)
 
     with conn:
         conn.executemany(
@@ -114,7 +137,7 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
                 exclude_flagged: bool = True,
                 allow_min_history_flags: bool = False,
                 min_coverage: Optional[float] = 0.95,
-                ffill_limit: int = 5) -> pd.DataFrame:
+                ffill_limit: Optional[int] = 5) -> pd.DataFrame:
     """
     Load prices as a wide-format DataFrame (dates as index, tickers as columns).
     Matches the format returned by existing load_data() functions.
@@ -128,6 +151,12 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
         the production rebalance, whose admission bar is shorter than the 5y
         research standard; the caller's coverage window does the real gating.
     ffill_limit: max consecutive NaN rows to forward-fill (default 5).
+        ``None``/``0`` disables filling entirely — ``promote_staging`` relies
+        on this for verbatim copies. (July 2026: this used to be passed
+        straight to pandas, where ``ffill(limit=None)`` means UNLIMITED fill;
+        on the union date index of a mixed-calendar chunk, promotion
+        materialised ~170k phantom weekend/holiday rows into prod — see the
+        purge_phantom_rows docstring and CLAUDE.md data-refresh gotcha 4.)
     """
     query = """
         SELECT t.symbol, p.date, p.close
@@ -188,8 +217,10 @@ def load_prices(conn: sqlite3.Connection, exchange: Optional[str] = None,
         threshold = int(min_coverage * len(df))
         df = df.dropna(axis=1, thresh=threshold)
 
-    # Forward-fill NaN (capped to avoid propagating stale prices)
-    df = df.ffill(limit=ffill_limit)
+    # Forward-fill NaN (capped to avoid propagating stale prices). Falsy
+    # ffill_limit means NO fill — never hand None to pandas (unlimited fill).
+    if ffill_limit:
+        df = df.ffill(limit=ffill_limit)
 
     logger.info("load_prices: %d rows x %d tickers in %.1fs",
                 len(df), df.shape[1], _time.time() - t0)
@@ -324,3 +355,160 @@ def get_tickers_with_prices(conn: sqlite3.Connection, exchange: Optional[str] = 
         params.append(exchange_id)
     rows = conn.execute(query, params).fetchall()
     return {r[0] for r in rows}
+
+
+# ---- Phantom-date purge (July 2026 incident) ----------------------------------
+
+
+#: NYSE special full-day closures within the data range (not derivable from
+#: recurring holiday rules): national days of mourning for G.H.W. Bush and
+#: Jimmy Carter.
+NYSE_SPECIAL_CLOSURES = ('2018-12-05', '2025-01-09')
+
+
+def _nyse_closure_dates(start: str, end: str) -> set[str]:
+    """NYSE full-closure weekday dates between start and end (YYYY-MM-DD).
+
+    Built from pandas' holiday primitives (no extra dependency): the
+    recurring NYSE holiday rules plus the special closures above. Known
+    approximation: ``nearest_workday`` observes a Saturday Jan 1 on the
+    preceding Dec 31, which the NYSE does not — callers must therefore treat
+    membership as necessary-but-not-sufficient and cross-check against an
+    anchor ticker before deleting anything (purge_phantom_rows does).
+    """
+    from pandas.tseries.holiday import (
+        AbstractHolidayCalendar,
+        GoodFriday,
+        Holiday,
+        USLaborDay,
+        USMartinLutherKingJr,
+        USMemorialDay,
+        USPresidentsDay,
+        USThanksgivingDay,
+        nearest_workday,
+    )
+
+    class _NYSEClosures(AbstractHolidayCalendar):
+        rules = [
+            Holiday('New Year', month=1, day=1, observance=nearest_workday),
+            USMartinLutherKingJr,
+            USPresidentsDay,
+            GoodFriday,
+            USMemorialDay,
+            Holiday('Juneteenth', month=6, day=19,
+                    start_date='2022-01-01', observance=nearest_workday),
+            Holiday('Independence Day', month=7, day=4,
+                    observance=nearest_workday),
+            USLaborDay,
+            USThanksgivingDay,
+            Holiday('Christmas', month=12, day=25,
+                    observance=nearest_workday),
+        ]
+
+    dates = _NYSEClosures().holidays(pd.Timestamp(start), pd.Timestamp(end))
+    closures = {d.strftime('%Y-%m-%d') for d in dates}
+    closures.update(d for d in NYSE_SPECIAL_CLOSURES if start <= d <= end)
+    return closures
+
+
+def purge_phantom_rows(conn: sqlite3.Connection, exchange: str = 'US',
+                       dry_run: bool = False,
+                       anchor: str = 'SPY') -> dict[str, Any]:
+    """Delete phantom non-trading-day price rows for US-listed symbols.
+
+    July 2026 incident: ``promote_staging`` passed ``ffill_limit=None`` to
+    ``load_prices``, which pandas took as UNLIMITED forward fill — every
+    promotion materialised each US ticker's previous close onto the other
+    calendars in its 200-ticker chunk (Tel Aviv Sundays, Asian/European
+    sessions on NYSE holidays): ~170k junk rows. Values were verified to be
+    exact previous-close duplicates, so deletion loses no information.
+
+    Scope: dot-less symbols on the given exchange only — foreign dot-suffix
+    listings keep their legitimate weekend/holiday sessions.
+
+    * Weekend rows are deleted unconditionally (never a US session).
+    * NYSE-holiday weekday rows are deleted only when the date is BOTH in the
+      computed closure calendar AND absent from the ``anchor`` ticker's dates
+      (SPY trades every real session) — either signal alone is not trusted.
+    * Computed closures where the anchor HAS a row are reported as calendar
+      discrepancies; anchor-missing weekdays NOT in the calendar are reported
+      as suspect anchor gaps. Neither is deleted.
+
+    :param dry_run: report what would be deleted without touching the DB.
+    :return: dict with counts and the report lists.
+    """
+    exchange_id = _get_exchange_id(conn, exchange)
+    dotless = ("SELECT id FROM tickers "
+               "WHERE exchange_id = ? AND symbol NOT LIKE '%.%'")
+
+    # -- Category A: weekend rows ------------------------------------------
+    weekend_pred = (f"ticker_id IN ({dotless}) "
+                    "AND strftime('%w', date) IN ('0','6')")
+    n_weekend = conn.execute(
+        f"SELECT COUNT(*) FROM prices WHERE {weekend_pred}",
+        (exchange_id,)).fetchone()[0]
+
+    # -- Category B: NYSE-closure weekday rows ------------------------------
+    anchor_dates = {r[0] for r in conn.execute(
+        "SELECT DISTINCT p.date FROM prices p JOIN tickers t "
+        "ON p.ticker_id = t.id WHERE t.symbol = ? AND t.exchange_id = ?",
+        (anchor, exchange_id)).fetchall()}
+    holiday_dates: list[str] = []
+    discrepancies: list[str] = []
+    suspect_gaps: list[str] = []
+    n_holiday = 0
+    if anchor_dates:
+        lo, hi = min(anchor_dates), max(anchor_dates)
+        closures = _nyse_closure_dates(lo, hi)
+        holiday_dates = sorted(closures - anchor_dates)
+        discrepancies = sorted(closures & anchor_dates)
+        # Weekday dates carried by dot-less tickers that the anchor lacks and
+        # the calendar cannot explain: suspect anchor data gaps. Report only.
+        candidate_rows = conn.execute(
+            f"SELECT DISTINCT date FROM prices WHERE ticker_id IN ({dotless}) "
+            "AND strftime('%w', date) NOT IN ('0','6') "
+            "AND date BETWEEN ? AND ?",
+            (exchange_id, lo, hi)).fetchall()
+        suspect_gaps = sorted(
+            d[0] for d in candidate_rows
+            if d[0] not in anchor_dates and d[0] not in closures)
+        if holiday_dates:
+            ph = ','.join('?' for _ in holiday_dates)
+            n_holiday = conn.execute(
+                f"SELECT COUNT(*) FROM prices WHERE ticker_id IN ({dotless}) "
+                f"AND date IN ({ph})",
+                (exchange_id, *holiday_dates)).fetchone()[0]
+    else:
+        logger.warning(
+            "purge_phantom_rows: anchor %s has no rows on %s — holiday "
+            "purge skipped, weekend purge still applies", anchor, exchange)
+
+    logger.info(
+        "purge_phantom_rows%s: %d weekend rows; %d rows on %d NYSE-closure "
+        "dates; %d calendar discrepancies%s; %d suspect anchor-gap dates%s",
+        " (dry run)" if dry_run else "", n_weekend, n_holiday,
+        len(holiday_dates), len(discrepancies),
+        f" {discrepancies[:5]}" if discrepancies else "",
+        len(suspect_gaps), f" {suspect_gaps[:5]}" if suspect_gaps else "")
+
+    if not dry_run:
+        with conn:
+            conn.execute(
+                f"DELETE FROM prices WHERE {weekend_pred}", (exchange_id,))
+            if n_holiday:
+                ph = ','.join('?' for _ in holiday_dates)
+                conn.execute(
+                    f"DELETE FROM prices WHERE ticker_id IN ({dotless}) "
+                    f"AND date IN ({ph})",
+                    (exchange_id, *holiday_dates))
+        logger.info("purge_phantom_rows: deleted %d rows",
+                    n_weekend + n_holiday)
+
+    return {
+        'weekend_rows': n_weekend,
+        'holiday_rows': n_holiday,
+        'holiday_dates': holiday_dates,
+        'calendar_discrepancies': discrepancies,
+        'suspect_gaps': suspect_gaps,
+        'deleted': not dry_run,
+    }

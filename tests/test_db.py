@@ -714,6 +714,157 @@ class TestMigrateTo2(unittest.TestCase):
         conn.close()
 
 
+class TestPhantomDates(unittest.TestCase):
+    """July 2026 incident: phantom weekend/holiday rows via unlimited ffill.
+
+    Root cause: load_prices took ffill_limit=None straight to pandas
+    (= unlimited fill); promote_staging round-tripped mixed-calendar chunks
+    through it, materialising Friday closes onto Sundays and NYSE holidays.
+    """
+
+    # 2020-01-06 (Mon) ... 2020-01-10 (Fri) + Sunday 2020-01-12 traded only
+    # by the Tel Aviv listing.
+    WEEKDAYS = pd.to_datetime(
+        ['2020-01-06', '2020-01-07', '2020-01-08', '2020-01-09',
+         '2020-01-10'])
+    SUNDAY = pd.Timestamp('2020-01-12')
+
+    def _seed(self, conn):
+        us = pd.DataFrame({'SPY': [100.0, 101, 102, 103, 104],
+                           'ARKW': [50.0, 51, 52, 53, 54]},
+                          index=self.WEEKDAYS)
+        db.save_prices(conn, us, exchange='US', asset_type='etf')
+        # Foreign Sunday session written directly (dot-suffix — the guard
+        # must not touch it).
+        il = pd.DataFrame({'TEVA.TA': [30.0]}, index=[self.SUNDAY])
+        db.save_prices(conn, il, exchange='US', asset_type='etf')
+
+    def test_ffill_limit_none_does_not_fill(self):
+        conn = db.get_connection(':memory:')
+        self._seed(conn)
+        df = conn.execute("SELECT 1").fetchone()  # keep linters calm
+        loaded = db.load_prices(conn, exchange='US', min_coverage=0,
+                                ffill_limit=None)
+        # The union index contains the Sunday (Tel Aviv session); ARKW/SPY
+        # must stay NaN there — pre-fix, ffill(limit=None) filled them.
+        self.assertIn(self.SUNDAY.strftime('%Y-%m-%d'), loaded.index)
+        self.assertTrue(
+            np.isnan(loaded.loc[self.SUNDAY.strftime('%Y-%m-%d'), 'ARKW']))
+        conn.close()
+
+    def test_ffill_limit_still_fills_when_set(self):
+        conn = db.get_connection(':memory:')
+        self._seed(conn)
+        loaded = db.load_prices(conn, exchange='US', min_coverage=0,
+                                ffill_limit=5)
+        self.assertAlmostEqual(
+            loaded.loc[self.SUNDAY.strftime('%Y-%m-%d'), 'ARKW'], 54.0)
+        conn.close()
+
+    def test_save_prices_weekend_guard(self):
+        conn = db.get_connection(':memory:')
+        # A US dot-less symbol with a junk Sunday row: skipped at write time.
+        junk = pd.DataFrame({'ARKW': [50.0, 50.0]},
+                            index=[self.WEEKDAYS[-1], self.SUNDAY])
+        db.save_prices(conn, junk, exchange='US', asset_type='etf')
+        dates = [r[0] for r in conn.execute(
+            "SELECT date FROM prices p JOIN tickers t ON p.ticker_id=t.id "
+            "WHERE t.symbol='ARKW'")]
+        self.assertEqual(dates, ['2020-01-10'])
+        # Dot-suffix foreign symbol keeps its Sunday session.
+        il = pd.DataFrame({'TEVA.TA': [30.0]}, index=[self.SUNDAY])
+        db.save_prices(conn, il, exchange='US', asset_type='etf')
+        n = conn.execute(
+            "SELECT COUNT(*) FROM prices p JOIN tickers t "
+            "ON p.ticker_id=t.id WHERE t.symbol='TEVA.TA'").fetchone()[0]
+        self.assertEqual(n, 1)
+        # Non-US exchanges untouched by the guard.
+        nz = pd.DataFrame({'NZFUND': [1.0]}, index=[self.SUNDAY])
+        db.save_prices(conn, nz, exchange='NZX', asset_type='managed_fund')
+        n = conn.execute(
+            "SELECT COUNT(*) FROM prices p JOIN tickers t "
+            "ON p.ticker_id=t.id WHERE t.symbol='NZFUND'").fetchone()[0]
+        self.assertEqual(n, 1)
+        conn.close()
+
+    def test_nyse_closure_dates_membership(self):
+        from src.db.prices import _nyse_closure_dates
+        closures = _nyse_closure_dates('2014-01-01', '2026-12-31')
+        self.assertIn('2019-04-19', closures)   # Good Friday
+        self.assertIn('2018-12-05', closures)   # Bush closure
+        self.assertIn('2025-01-09', closures)   # Carter closure
+        self.assertIn('2014-12-25', closures)
+        self.assertIn('2022-06-20', closures)   # Juneteenth observed (Mon)
+        self.assertNotIn('2021-06-18', closures)  # pre-2022: NYSE open
+        self.assertNotIn('2019-10-14', closures)  # Columbus Day: NYSE open
+        self.assertNotIn('2019-11-11', closures)  # Veterans Day: NYSE open
+
+    def _seed_polluted(self, conn):
+        """US tickers with junk weekend + Christmas rows, bypassing the
+        save_prices guard (raw INSERT, as legacy promotion did)."""
+        self._seed(conn)
+        rows = conn.execute(
+            "SELECT id, symbol FROM tickers WHERE symbol IN ('SPY','ARKW')"
+        ).fetchall()
+        ids = {r['symbol']: r['id'] for r in rows}
+        junk = [
+            (ids['ARKW'], '2020-01-12', 54.0),   # Sunday
+            (ids['ARKW'], '2020-01-11', 54.0),   # Saturday
+            (ids['ARKW'], '2019-12-25', 49.0),   # Christmas (SPY absent)
+        ]
+        conn.executemany(
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close) "
+            "VALUES (?, ?, ?)", junk)
+        # Give SPY history spanning Christmas so the anchor range covers it.
+        conn.execute(
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close) "
+            "VALUES (?, '2019-12-24', 99.0)", (ids['SPY'],))
+        conn.commit()
+
+    def test_purge_dry_run_deletes_nothing(self):
+        conn = db.get_connection(':memory:')
+        self._seed_polluted(conn)
+        before = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+        report = db.purge_phantom_rows(conn, dry_run=True)
+        after = conn.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+        self.assertEqual(before, after)
+        self.assertEqual(report['weekend_rows'], 2)
+        self.assertEqual(report['holiday_rows'], 1)
+        self.assertFalse(report['deleted'])
+        conn.close()
+
+    def test_purge_deletes_junk_keeps_real(self):
+        conn = db.get_connection(':memory:')
+        self._seed_polluted(conn)
+        report = db.purge_phantom_rows(conn)
+        self.assertEqual(report['weekend_rows'], 2)
+        self.assertEqual(report['holiday_rows'], 1)
+        arkw_dates = sorted(r[0] for r in conn.execute(
+            "SELECT date FROM prices p JOIN tickers t ON p.ticker_id=t.id "
+            "WHERE t.symbol='ARKW'"))
+        self.assertEqual(arkw_dates, ['2020-01-06', '2020-01-07',
+                                      '2020-01-08', '2020-01-09',
+                                      '2020-01-10'])
+        # The foreign listing's Sunday session survives.
+        n = conn.execute(
+            "SELECT COUNT(*) FROM prices p JOIN tickers t "
+            "ON p.ticker_id=t.id WHERE t.symbol='TEVA.TA'").fetchone()[0]
+        self.assertEqual(n, 1)
+        conn.close()
+
+    def test_purge_without_anchor_still_purges_weekends(self):
+        conn = db.get_connection(':memory:')
+        self._seed_polluted(conn)
+        conn.execute(
+            "DELETE FROM prices WHERE ticker_id = "
+            "(SELECT id FROM tickers WHERE symbol='SPY')")
+        conn.commit()
+        report = db.purge_phantom_rows(conn)
+        self.assertEqual(report['weekend_rows'], 2)
+        self.assertEqual(report['holiday_rows'], 0)  # no anchor -> skipped
+        conn.close()
+
+
 class TestMigrateTo5(unittest.TestCase):
     """Test schema migration v5: information_ratio on backtest_results."""
 

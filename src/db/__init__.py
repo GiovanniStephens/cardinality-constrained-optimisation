@@ -21,6 +21,7 @@ from src.db.prices import (
     load_avg_dollar_volume,
     get_latest_prices_date,
     get_tickers_with_prices,
+    purge_phantom_rows,
 )
 from src.db.bad_tickers import save_known_bad_tickers, load_known_bad_tickers, clear_known_bad_tickers
 from src.db.forecasts import (
@@ -57,6 +58,7 @@ __all__ = [
     # prices
     'save_prices', 'load_prices', 'load_avg_dollar_volume',
     'get_latest_prices_date', 'get_tickers_with_prices',
+    'purge_phantom_rows',
     # bad tickers
     'save_known_bad_tickers', 'load_known_bad_tickers', 'clear_known_bad_tickers',
     # forecasts
