@@ -609,15 +609,23 @@ def load_backtest_frame(conn):
 
     The loader's own coverage pre-filter runs at a RELAXED 0.80, not the
     0.95 research standard: it measures coverage against the raw union date
-    index, which still contains the phantom non-NYSE dates that
-    :func:`clean_us_price_frame` removes (~12% of dates in the July 2026
-    DB) — at 0.95 the polluted denominator silently dropped SPY itself
-    inside the loader. The relaxed pass just culls the dead mass of the
-    universe cheaply; the true DATA_MIN_COVERAGE gate runs inside
-    clean_us_price_frame on the cleaned NYSE calendar.
+    index, which still contains foreign-session dates that
+    :func:`clean_us_price_frame` removes (~12% of dates) — at 0.95 that
+    denominator silently dropped SPY itself inside the loader. The relaxed
+    pass just culls the dead mass of the universe cheaply; the true
+    DATA_MIN_COVERAGE gate runs inside clean_us_price_frame on the cleaned
+    NYSE calendar.
+
+    ``ffill_limit=None`` is essential: the loader must NOT fill across the
+    raw union index — foreign listings keep non-NYSE dates alive there, and
+    a pre-cleaning fill re-materialises phantom values onto US tickers in
+    memory (including onto SPY, blinding the cleaner's calendar anchor) even
+    when the DB itself is clean. clean_us_price_frame applies the
+    DATA_FFILL_LIMIT fill as its last step, on the clean calendar.
     """
     from src import db
-    data = db.load_prices(conn, exchange='US', min_coverage=0.80)
+    data = db.load_prices(conn, exchange='US', min_coverage=0.80,
+                          ffill_limit=None)
     if data.empty:
         logger.info("No data in DB, falling back to CSV")
         return load_data(NZ_ETF_PRICES_CSV)
