@@ -606,6 +606,25 @@ tracking error). In-sample levels are inflated as always; the pinned-vs-free con
 the informative part. Side discovery: the first Stage-0 run exposed the phantom
 non-NYSE-dates data bug (see Data-refresh gotcha 4).
 
+**Walk-forward result (2026-07-10, 14 windows, OOS 2019→mid-2026): NO EDGE at market
+risk.** cc_beta1 mean OOS IR = **−0.06 ± 1.00** (t ≈ −0.2 vs zero; paired Sharpe test vs
+bench_spy t=−2.07, p=0.08 — marginally *under*performing). And this is the
+regime-INFLATED estimator. Two genuine findings inside the null: (a) **the pin worked
+mechanically** — every other GA method's IR sat at −0.86 to −1.06 (mc_optimised −0.55,
+bench_6040 −1.19), so beta alignment recovered ~0.9 IR of pure beta-mismatch drag; i.e.
+virtually ALL of the GA books' "underperformance vs the market" was low beta, not
+selection. (b) The residual selection alpha at beta 1 is **zero**, with the losses
+concentrated in narrow mega-cap-led windows (H2-2021 −1.60, H1-2023 −1.91) — the classic
+diversified-tilt-vs-cap-weighted-benchmark signature, in the most cap-concentrated OOS
+period on record. Feasibility held throughout (clamp rate 0–12/30, achieved beta
+0.976–1.000). Fidelity note: 8000-pop GA, 30 portfolios/method, forecast arms off;
+per-window results in DB sessions of 2026-07-10. **CPCV deliberately NOT run**: it
+exists to deflate apparent edges, and there is no edge to deflate — run it only if a
+tight CI on "zero" is ever worth ~10h. Consistent with Crack/DeMiguel: a data-mined
+(non-factor) tilt with ~1 bet/window of breadth earns nothing vs the market; the
+Crack-style follow-up, if ever wanted, is a beta-1 book built from deliberate factor
+exposures, not GA selection.
+
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
 The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):
