@@ -646,6 +646,24 @@ An IR of ~0 also isn't harmless: it means tracking risk taken without compensati
 any beta-1 slice of a risk budget, the index is the honest holding unless a tilt has a
 priced-factor reason to exist.
 
+**Factor-exposure diagnostic of the production book (2026-07-10).** Regression of the
+run-134 book on SPY + ETF factor spreads (VLUE/MTUM/QUAL/USMV/IJR − SPY; 489 common
+days 2024-06→2026-06, R²=0.88 equity-only): the book is **already factor-tilted, and
+NOT in the direction guessed** — equity-book loadings **value +0.11 (t=5.8), momentum
++0.22 (t=12.6), low-vol −0.16 (t=−6.4)**, quality/size ≈ 0. The pre-diagnostic prior
+(accidental defensive/BAB tilt from the Sharpe objective's low-beta drift) was wrong
+for the *constrained* book: the beta floor + 12% cap pushed it into cyclical legs, and
+the loadings exactly mirror which spreads PAID during its 2y training window (value
++17%/yr, momentum +11%/yr, low-vol −9%/yr in-window) — i.e. the tilts are **recency-
+chasing by the optimiser, not deliberate harvesting**, and should be expected to rotate
+with each rebalance's lookback. Two implications: (a) deliberate factor tilting would
+mostly *stabilise* existing exposures, not add missing ones — shelved accordingly
+(revisit only after a second orthogonal sleeve exists); (b) the regression's "alpha"
+line (+12.6%/yr, t=4.7) is **meaningless as skill evidence** — the window ≈ the book's
+own training window, so it is in-sample fit; the OOS selection alpha is zero per this
+experiment. Diagnostic script pattern: regress book returns on factor spreads before
+concluding anything about what the book "is" — composition labels lie, loadings don't.
+
 ## Strategy Taxonomy & Empirical Verdicts (May 2026)
 
 The 16 weighting/selection strategies tested, sorted by CPCV OOS Sharpe (n=66 splits, full run; PBO=0.909):
