@@ -242,6 +242,23 @@ def validate_universe(conn, exchange='US', dry_run=False, skip_min_history=False
     summary['total_excluded'] = len(exclusions)
     summary['total_active'] = total_tickers - len(exclusions)
 
+    # Phantom non-trading-day rows (July 2026 incident) — REPORT-ONLY, the
+    # first date-index check here. This is row-level damage, not a
+    # ticker-level defect (flagging the ~1,900 affected tickers would nuke
+    # the universe), so nothing is excluded; the alarm plus the remediation
+    # command is the point. Runs after every promotion via the auto-validate
+    # hook, so a regression of the promotion-ffill bug gets caught loudly.
+    if exchange == 'US':
+        phantom = db.purge_phantom_rows(conn, exchange=exchange, dry_run=True)
+        summary['phantom_weekend_rows'] = phantom['weekend_rows']
+        summary['phantom_holiday_rows'] = phantom['holiday_rows']
+        if phantom['weekend_rows'] or phantom['holiday_rows']:
+            logger.warning(
+                "  phantom dates: %d weekend rows + %d NYSE-holiday rows on "
+                "US-listed symbols — run `python -m src.db "
+                "purge-phantom-rows` (report-only, nothing excluded)",
+                phantom['weekend_rows'], phantom['holiday_rows'])
+
     if dry_run:
         logger.info("DRY RUN: would exclude %d/%d tickers", len(exclusions), total_tickers)
     else:

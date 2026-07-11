@@ -190,6 +190,41 @@ class TestValidateUniverse(_BaseQualityTest):
         self.assertEqual(len(excluded_after), 0)
 
 
+class TestPhantomDateDetection(_BaseQualityTest):
+    """Report-only phantom-date check inside validate_universe (July 2026)."""
+
+    def _pollute(self, symbol='CLEAN'):
+        """Insert a junk Sunday row directly (bypassing the save guard, as
+        the pre-fix promotion path did)."""
+        tid = self.conn.execute(
+            "SELECT id FROM tickers WHERE symbol=?", (symbol,)).fetchone()[0]
+        self.conn.execute(
+            "INSERT OR REPLACE INTO prices (ticker_id, date, close) "
+            "VALUES (?, '2020-03-08', 123.0)", (tid,))  # a Sunday
+        self.conn.commit()
+
+    def test_clean_db_reports_zero(self):
+        self._save('CLEAN', [100.0 + i for i in range(50)])
+        summary = dq.validate_universe(self.conn, exchange='US', dry_run=True)
+        self.assertEqual(summary['phantom_weekend_rows'], 0)
+        self.assertEqual(summary['phantom_holiday_rows'], 0)
+
+    def test_polluted_db_reports_but_never_excludes(self):
+        self._save('CLEAN', [100.0 + i for i in range(50)])
+        self._pollute()
+        with self.assertLogs('src.data_quality', level='WARNING') as cm:
+            summary = dq.validate_universe(self.conn, exchange='US',
+                                           dry_run=True)
+        self.assertEqual(summary['phantom_weekend_rows'], 1)
+        self.assertTrue(any('phantom dates' in m for m in cm.output))
+        # Report-only: the phantom rows must not flag the ticker.
+        summary = dq.validate_universe(self.conn, exchange='US',
+                                       dry_run=False)
+        excluded = db.get_excluded_tickers(self.conn, exchange='US')
+        reasons = [r['excluded'] for r in excluded]
+        self.assertFalse(any('phantom' in (r or '') for r in reasons))
+
+
 class TestLoadPricesExcludeFlagged(_BaseQualityTest):
 
     def test_excluded_ticker_not_loaded(self):
